@@ -16,6 +16,9 @@ TAIL_LENGTH_S = 0.1
 # (smoke session): the normal evolution of a note (end of attack, beating) reaches 33 % in the soft bass
 # and stays under 10 % in the middle and treble. This guard therefore only targets clear anomalies.
 SPURIOUS_RATIO = 0.5
+# A new note always raises the level. Soft bass notes have such a gentle attack that their normal evolution
+# can exceed the flux ratio (51-55 % measured on G#1 and A#1 in Noire) while the level keeps decaying.
+SPURIOUS_MIN_RISE_DB = 1.0
 EXPECTED_WINDOWS_S = {"note_on": (-0.01, 0.15), "other": (-0.02, 0.30)}  # around MIDI events
 
 
@@ -59,7 +62,18 @@ def spurious_onsets(audio: np.ndarray, fs: int, events) -> list[float]:
     reference = max((flux[i] for i in peaks if expected(times[i])), default=0.0)
     if reference == 0.0:
         return []
-    return [round(float(times[i]), 3) for i in peaks if not expected(times[i]) and flux[i] > SPURIOUS_RATIO * reference]
+
+    def level_rise_db(t: float) -> float:
+        # Frames are dated by their end, so the onset lies within the 21 ms before t.
+        def rms(a: float, b: float) -> float:
+            seg = audio[:, max(0, round(a * fs)): max(0, round(b * fs))].astype(np.float64)
+            return float(np.sqrt(np.mean(seg ** 2))) if seg.size else 0.0
+        before, after = rms(t - 0.08, t - 0.03), rms(t - 0.02, t + 0.03)
+        return db(after) - db(before) if before > 0 and after > 0 else 0.0
+
+    return [round(float(times[i]), 3) for i in peaks
+            if not expected(times[i]) and flux[i] > SPURIOUS_RATIO * reference
+            and level_rise_db(float(times[i])) >= SPURIOUS_MIN_RISE_DB]
 
 
 def decay_time(audio: np.ndarray, fs: int, start: int, drop_db: float = 40.0) -> float | None:
