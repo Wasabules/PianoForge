@@ -18,7 +18,7 @@ from bench.protocol import Session, Take, load_session
 from bench.storage import Corpus
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-FLAC_BYTES_PER_S = 160_000  # 24-bit stereo at 48 kHz after compression (order of magnitude)
+FLAC_BYTES_PER_S = 32_000  # 24-bit stereo at 48 kHz after compression, measured on the Noire reference corpus
 
 # Check thresholds: two renders of the same instrument must be identical up to numerical noise; a stored
 # file may only differ from a fresh render by the 24-bit FLAC rounding (about -144 dBFS).

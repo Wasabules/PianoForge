@@ -418,7 +418,7 @@ séance.toml ──► protocole ──► prises (événements MIDI datés à l
 | Passe | Contenu | Volume estimé |
 |---|---|---|
 | **Découverte des couches** | 6 notes (A0, C2, C3, C4, C6, C8) × les 127 vélocités × 6 s | ≈ 1,3 h d'audio |
-| **Notes isolées** (passe principale) | 88 notes × 16 vélocités. Tenue adaptée au registre (≈ 35 s dans le grave, 20 s dans le médium, 10 s dans l'aigu), plus 3 s après le relâchement | ≈ 1 400 prises, ≈ 10 h d'audio, ≈ 5 à 6 Go en FLAC 24 bits |
+| **Notes isolées** (passe principale) | 88 notes × 16 vélocités. Tenue adaptée au registre (≈ 35 s dans le grave, 20 s dans le médium, 10 s dans l'aigu), plus 3 s après le relâchement | 1 408 prises, ≈ 9 h d'audio. La séance de référence complète (10 h 47) pèse 1,2 Go en FLAC 24 bits (mesuré). |
 | Relâchements | 22 notes (une sur quatre) × 3 vélocités × tenues de 0,1, 0,5 et 2 s | Faible |
 | Pédale forte | Même note pédale enfoncée et pédale relevée (sympathie) ; pédale relâchée pendant la note | Faible |
 | Demi-pédale | Rampes de CC64 sur une note tenue | Faible |

@@ -184,7 +184,7 @@ int runSelfTest(const juce::StringArray& arguments)
         const double seconds = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
         const double factor = 10.0 / seconds;
         r.check(factor > 20.0, "load: " + juce::String(maxVoices) + " simultaneous voices, 10 s rendered in "
-                                   + juce::String(seconds * 1000.0, 1) + " ms, i.e. " + juce::String(factor, 0)
+                                   + juce::String(seconds * 1000.0, 1) + " ms, i.e. " + juce::String(juce::roundToInt(factor))
                                    + " times real time (threshold: 20)");
     }
 
