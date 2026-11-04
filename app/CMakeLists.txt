@@ -11,7 +11,8 @@ target_sources(PianoForgeApp PRIVATE
     src/MainComponent.cpp
     src/VelocityCurveEditor.cpp
     src/SelfTest.cpp
-    src/Diagnostics.cpp)
+    src/Diagnostics.cpp
+    src/OfflineRender.cpp)
 
 target_compile_definitions(PianoForgeApp PRIVATE
     JUCE_WEB_BROWSER=0

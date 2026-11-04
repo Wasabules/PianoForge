@@ -114,8 +114,8 @@ class Session:
 
 
 class _Builder:
-    def __init__(self, pass_name: str, fs: int):
-        self.pass_name, self.fs = pass_name, fs
+    def __init__(self, pass_name: str, fs: int, base_dir: Path):
+        self.pass_name, self.fs, self.base_dir = pass_name, fs, base_dir
 
     def samples(self, seconds: float) -> int:
         return round(seconds * self.fs)
@@ -212,16 +212,37 @@ def _pass_silence(b: _Builder, cfg: dict) -> list[Take]:
     return [b.take(f"silence_{_ms(duration)}ms", duration, [], type="silence")]
 
 
+def _pass_midi_file(b: _Builder, cfg: dict) -> list[Take]:
+    """Whole pieces from standard MIDI files: notes and controllers, moved to channel 1, timed to the sample."""
+    import mido
+
+    takes = []
+    for name in cfg["files"]:
+        path = (b.base_dir / name).resolve()
+        evts, t = [], 0.0
+        for msg in mido.MidiFile(path):  # iterating a MidiFile yields delta times in seconds
+            t += msg.time
+            if msg.type in ("note_on", "note_off", "control_change") and not msg.is_meta:
+                data = msg.bytes()
+                evts.append((t, (data[0] & 0xF0 | CHANNEL, *data[1:])))
+        tail = float(cfg.get("tail", 4.0))
+        notes = sum(1 for _, e in evts if e[0] & 0xF0 == 0x90 and e[2] > 0)
+        takes.append(b.take(path.stem, t + tail, evts, type="midi_file", file=name, notes=notes))
+    return takes
+
+
 _PASSES = {
     "note": _pass_note,
     "repetition": _pass_repetition,
     "pedal_ramp": _pass_pedal_ramp,
     "pedal_only": _pass_pedal_only,
     "silence": _pass_silence,
+    "midi_file": _pass_midi_file,
 }
 
 
-def parse_session(text: str) -> Session:
+def parse_session(text: str, base_dir: str | Path = ".") -> Session:
+    """base_dir: folder against which relative paths in the session (MIDI files) are resolved."""
     data = tomllib.loads(text)
     header = data.get("session", {})
     fs = int(header.get("sample_rate", 48000))
@@ -234,7 +255,7 @@ def parse_session(text: str) -> Session:
         names.add(name)
         if kind not in _PASSES:
             raise ValueError(f"unknown pass type: {kind!r} (expected one of: {', '.join(_PASSES)})")
-        takes += _PASSES[kind](_Builder(name, fs), cfg)
+        takes += _PASSES[kind](_Builder(name, fs, Path(base_dir)), cfg)
     # File names are compared case-insensitively on Windows: two takes must never share one.
     if len({t.id.lower() for t in takes}) != len(takes):
         raise ValueError("two takes share the same id")
@@ -242,4 +263,5 @@ def parse_session(text: str) -> Session:
 
 
 def load_session(path: str | Path) -> Session:
-    return parse_session(Path(path).read_text(encoding="utf-8"))
+    path = Path(path)
+    return parse_session(path.read_text(encoding="utf-8"), path.parent)

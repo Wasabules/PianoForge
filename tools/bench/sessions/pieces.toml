@@ -1,0 +1,11 @@
+# Whole pieces, for listening comparisons between the reference library and PianoForge's players.
+
+[session]
+name = "pieces"
+sample_rate = 48000
+
+[[pass]]
+name = "pieces"
+type = "midi_file"
+files = ["../pieces/study_no1.mid"]
+tail = 4.0

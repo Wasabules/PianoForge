@@ -81,6 +81,15 @@ class Protocol(unittest.TestCase):
                 self.assertTrue(all(0 <= time < t.duration for time, _ in t.events), t.id)
                 self.assertNotIn(".", t.id.split("/")[-1], t.id)  # a dot would look like a file extension
 
+    def test_midi_file_pass(self):
+        s = load_session(SESSIONS / "pieces.toml")
+        t = s.takes[0]
+        self.assertEqual(t.id, "pieces/study_no1")
+        self.assertEqual(t.meta["notes"], 180)
+        self.assertTrue(all(b[0] & 0x0F == 0 for _, b in t.events))  # everything on channel 1
+        self.assertTrue(all(0 <= time < t.duration for time, _ in t.events))
+        self.assertEqual(sum(1 for _, b in t.events if b[0] & 0xF0 == 0xB0), 24)  # pedal events
+
     def test_errors(self):
         with self.assertRaises(ValueError):
             parse_session('[[pass]]\nname="p"\ntype="unknown"')

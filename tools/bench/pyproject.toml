@@ -12,6 +12,7 @@ dependencies = [
     "numpy>=2.0",
     "soundfile>=0.12",
     "python-rtmidi>=1.5",    # MIDI keyboard probe (MIT)
+    "mido>=1.3",             # standard MIDI files for whole pieces (MIT)
 ]
 
 [project.scripts]

@@ -1,5 +1,6 @@
 #include "Diagnostics.h"
 #include "MainComponent.h"
+#include "OfflineRender.h"
 #include "SelfTest.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -22,6 +23,11 @@ public:
         }
         if (arguments.contains("--midi-monitor")) {
             setApplicationReturnValue(runMidiMonitor(arguments));
+            quit();
+            return;
+        }
+        if (arguments.contains("--render")) {
+            setApplicationReturnValue(runOfflineRender(arguments));
             quit();
             return;
         }
