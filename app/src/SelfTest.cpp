@@ -220,6 +220,28 @@ int runSelfTest(const juce::StringArray& arguments)
                     + " note-ons reached the engine, " + juce::String(voices) + " voices sounding (expected 4 and 4)");
     }
 
+    // 7. Re-strike: the previous voice keeps sounding, then fades (-40 dB in 0.8 s, freed at -80 dB, ~1.6 s).
+    {
+        player.prepare(fs, 512);
+        player.playWholeTake = true;
+        player.restrikeFadeSeconds = 0.8f;
+        flush(player, fs);
+        std::vector<float> l(512), rr(512);
+        float* outputs[2] = { l.data(), rr.data() };
+        const pf::Event strike { 0, 0x90, 60, 64 };
+        player.process(outputs, 2, 512, &strike, 1);
+        for (int k = 0; k < (int) (0.5 * fs) / 512; ++k)
+            player.process(outputs, 2, 512, nullptr, 0);
+        player.process(outputs, 2, 512, &strike, 1);
+        const int right_after = player.activeVoices.load();
+        for (int k = 0; k < (int) (2.0 * fs) / 512; ++k)
+            player.process(outputs, 2, 512, nullptr, 0);
+        const int two_seconds_later = player.activeVoices.load();
+        r.check(right_after == 2 && two_seconds_later == 1,
+                "re-strike of C4: " + juce::String(right_after) + " voices right after (expected 2), "
+                    + juce::String(two_seconds_later) + " two seconds later (expected 1)");
+    }
+
     r.line(r.passed ? "RESULT: every check passes" : "RESULT: at least one check fails");
     reportFile.replaceWithText(r.text, false, false, "\n");
     return r.passed ? 0 : 1;

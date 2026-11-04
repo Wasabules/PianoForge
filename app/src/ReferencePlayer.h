@@ -37,6 +37,11 @@ public:
     // Settings, read on every block.
     std::atomic<float> outputGain { 1.0f };
     std::atomic<bool> playWholeTake { false }; // true: the take plays to its end, key releases are ignored
+    // Re-strike: the previous voice of the same note keeps sounding and fades to -40 dB within this time.
+    // 0.8 s fits the reference library best (studies/restrike_fit.py: 3.4 dB mean envelope error, against
+    // 6.0 dB for a 15 ms cut).
+    std::atomic<float> restrikeFadeSeconds { 0.8f };
+    static constexpr int kMaxVoicesPerNote = 4; // beyond this, the oldest voice of the note is cut quickly
 
     // Information for the user interface.
     std::atomic<int> lastNote { -1 }, lastVelocity { 0 }, lastRenderedVelocity { 0 };

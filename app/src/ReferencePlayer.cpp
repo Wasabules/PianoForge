@@ -133,14 +133,25 @@ void ReferencePlayer::noteOn(const SampleBank& b, int note, int velocity) noexce
     if (index < 0)
         return;
 
-    // Re-strike: the previous voice of the same note fades out within a few milliseconds.
+    // Re-strike: the string is still vibrating, so the previous voices of the same note keep sounding and fade
+    // to -40 dB within restrikeFadeSeconds (an existing faster decay, such as the damper's, is kept). Only when
+    // too many voices of the note pile up is the oldest one cut quickly.
+    const double fadeS = juce::jmax((double) restrikeFadeSeconds.load(std::memory_order_relaxed), kFastFadeS);
+    const auto restrike = (float) std::exp(-std::log(100.0) / (fadeS * sampleRate));
     const auto fast = (float) std::exp(-1.0 / (kFastFadeS * sampleRate));
+    Voice* oldest = nullptr;
+    int sameNote = 0;
     for (auto& v : voices)
         if (v.active && v.note == note) {
+            ++sameNote;
             v.keyDown = false;
             v.released = true;
-            v.decay = juce::jmin(v.decay, fast);
+            v.decay = juce::jmin(v.decay, restrike);
+            if (oldest == nullptr || v.age < oldest->age)
+                oldest = &v;
         }
+    if (sameNote >= kMaxVoicesPerNote && oldest != nullptr)
+        oldest->decay = juce::jmin(oldest->decay, fast);
 
     Voice* target = nullptr;
     for (auto& v : voices)

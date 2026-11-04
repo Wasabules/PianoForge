@@ -109,7 +109,17 @@ MainComponent::MainComponent()
     velocity.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
     velocity.onValueChange = [this] { keyboard.setVelocity((float) velocity.getValue() / 127.0f, true); };
     velocity.setValue(settings->getIntValue("velocity", 100));
-    for (auto* c : std::initializer_list<juce::Component*> { &volumeLabel, &volume, &velocityLabel, &velocity })
+    restrikeLabel.setText("Re-strike: previous note fades to -40 dB in", juce::dontSendNotification);
+    restrikeFade.setRange(0.015, 5.0, 0.005);
+    restrikeFade.setSkewFactorFromMidPoint(0.8);
+    restrikeFade.setTextValueSuffix(" s");
+    restrikeFade.setNumDecimalPlacesToDisplay(2);
+    restrikeFade.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
+    restrikeFade.onValueChange = [this] { player.restrikeFadeSeconds = (float) restrikeFade.getValue(); };
+    restrikeFade.setValue(settings->getDoubleValue("restrikeFade", 0.8));
+    restrikeFade.onDragEnd = [this] { saveSettings(); };
+    for (auto* c : std::initializer_list<juce::Component*> { &volumeLabel, &volume, &velocityLabel, &velocity,
+                                                             &restrikeLabel, &restrikeFade })
         addAndMakeVisible(*c);
 
     keyLayout.addItem("AZERTY", kLayoutAzerty);
@@ -136,7 +146,7 @@ MainComponent::MainComponent()
         corpusStatus.setText("No corpus found: use 'Change corpus...' and pick corpus/reference/noire-dry/single-notes",
                              juce::dontSendNotification);
 
-    setSize(1400, 470);
+    setSize(1400, 500);
     startTimerHz(20);
 }
 
@@ -287,6 +297,7 @@ void MainComponent::saveSettings()
     s->setValue("keyLayout", keyLayout.getSelectedId());
     s->setValue("playWholeTake", wholeTakeButton.getToggleState());
     s->setValue("velocityCurve", formatCurve(curveSettings));
+    s->setValue("restrikeFade", restrikeFade.getValue());
     s->saveIfNeeded();
 }
 
@@ -413,6 +424,11 @@ void MainComponent::resized()
     wholeTakeButton.setBounds(row.removeFromLeft(300));
     row.removeFromLeft(16);
     peakArea = row.removeFromLeft(220).reduced(0, 4);
+
+    area.removeFromTop(4);
+    row = area.removeFromTop(28);
+    restrikeLabel.setBounds(row.removeFromLeft(270));
+    restrikeFade.setBounds(row.removeFromLeft(300));
 }
 
 } // namespace pf::app

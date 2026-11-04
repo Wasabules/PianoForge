@@ -58,8 +58,8 @@ private:
     juce::Label title, corpusStatus, audioStatus, noteStatus, engineStatus, help;
     juce::TextButton audioButton, corpusButton, curveButton;
     juce::ToggleButton sustainButton, wholeTakeButton;
-    juce::Slider volume, velocity;
-    juce::Label volumeLabel, velocityLabel;
+    juce::Slider volume, velocity, restrikeFade;
+    juce::Label volumeLabel, velocityLabel, restrikeLabel;
     juce::ComboBox keyLayout;
     double loadProgress = 0.0;
     juce::ProgressBar progressBar { loadProgress };
