@@ -101,17 +101,24 @@ def cmd_prepare(args) -> int:
     print("\nThe Kontakt window is about to open. Load and set up the instrument, then close the window:")
     print("the complete plugin state will be saved as", repr(args.state), "\n")
     host.open_editor()
-    state = host.state()
+    state, preset = host.state(), bytes(host.plugin.preset_data)
+    # Check before saving: switching snapshots in the editor can leave Kontakt without any instrument,
+    # and an empty state must never replace a good one.
+    print("Checking that the instrument sounds...")
+    try:
+        verification = host.wait_until_loaded(max_s=args.verify_timeout)
+    except TimeoutError:
+        print(f"Nothing saved: the instrument stays silent after {args.verify_timeout:g} s "
+              f"(is an instrument loaded in the Kontakt window?). Run 'prepare' again.")
+        return 1
     path = _state_path(args, args.state)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(state)
-    path.with_suffix(".vstpreset").write_bytes(bytes(host.plugin.preset_data))
+    path.with_suffix(".vstpreset").write_bytes(preset)
     info = {"name": args.state, "fingerprint": fingerprint(state), "kontakt": host.version,
-            "date": dt.datetime.now().isoformat(timespec="seconds"), "note": args.note or ""}
-    print(f"State saved: {path} ({len(state)} bytes, fingerprint {info['fingerprint']})")
-    print("Checking that the instrument sounds...")
-    info["verification"] = host.wait_until_loaded()
+            "date": dt.datetime.now().isoformat(timespec="seconds"), "note": args.note or "", "verification": verification}
     path.with_suffix(".json").write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"State saved: {path} ({len(state)} bytes, fingerprint {info['fingerprint']})")
     return 0
 
 
@@ -306,6 +313,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--state", required=True, help="name of the state to save (e.g. noire-dry)")
     p.add_argument("--from-state", help="start from an already saved state")
     p.add_argument("--note", help="free description of the settings")
+    p.add_argument("--verify-timeout", type=float, default=180.0,
+                   help="seconds to wait for the instrument to sound before giving up without saving")
     p.set_defaults(func=cmd_prepare)
 
     for name, func, help_text in (("render", cmd_render, "render a session (resumes where it stopped)"),

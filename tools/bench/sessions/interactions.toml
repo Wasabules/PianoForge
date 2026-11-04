@@ -1,6 +1,9 @@
 # Interactions session: sustain pedal, sympathetic resonance, half pedal, noises.
-# Recommended Kontakt state: the same instrument as for "reference", with sympathetic resonance and
-# pedal noises enabled.
+# Rendered with the same state as "reference" (noire-dry). Noire holds two recorded pianos (Pure and Felt);
+# its "All Resonance" snapshot is a sound-design preset (reverb at maximum), not a string resonance switch,
+# so this session measures what the library itself does with the pedal.
+# Measured on 2026-11-04 (studies/noire_pedal_behavior.py): pedal-down takes carry extra energy that builds
+# up after the attack (sympathetic resonance), the half pedal is progressive, and there is no pedal noise.
 
 [session]
 name = "interactions"

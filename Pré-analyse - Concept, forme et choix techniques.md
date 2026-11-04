@@ -406,6 +406,11 @@ séance.toml ──► protocole ──► prises (événements MIDI datés à l
   - un fichier stocké ne diffère d'un nouveau rendu que par l'arrondi du FLAC 24 bits ;
   - les fins de prise retombent jusqu'au silence numérique, ce qui exclut toute réverbération ; aucune attaque n'est ajoutée, ce qui exclut Particles. Après le relâchement, le niveau perd 40 dB en 0,9 à 2,2 s ; C8, sans étouffoir, continue de sonner ;
   - les crêtes vont de −50 dBFS (C8, vélocité 20) à −11,6 dBFS (A0, vélocité 127). Il n'y a aucun risque de saturation.
+- **Comportement de Noire avec la pédale** (séance des interactions, état « noire-dry », `studies/noire_pedal_behavior.py`) :
+  - **Résonance sympathique : présente.** Touche tenue, la version pédale enfoncée porte 0,5 à 4,4 dB d'énergie en plus sous 4 kHz. Elle est très proche de la version pédale relevée juste après l'attaque (−12 à −30 dB d'écart), puis s'en écarte à mesure que la résonance se construit. Dans l'aigu, elle garde une énergie surtout grave après l'extinction de la note : les cordes graves libérées vibrent par sympathie. Noire contient donc des prises pédale enfoncée ou une résonance équivalente, ce qui en fait une référence valable pour cet étage du moteur.
+  - **Demi-pédale : progressive.** Par rapport à la même note tenue sans pédale, l'étouffement commence dès que la pédale remonte un peu (−1 dB à CC64 = 104). Il s'accentue jusqu'à CC64 ≈ 16 (−8 dB sur C2, −13 dB sur C4), puis l'étouffoir se referme complètement entre 8 et 0 (−50 dB). C'est la référence des étouffoirs continus.
+  - **Bruit de pédale : absent** (silence numérique) avec Basic Pure.
+  - **« All Resonance »** n'est pas un réglage de résonance des cordes : c'est un preset de couleur sonore, qui pousse la réverbération au maximum. Il est écarté.
 
 **La préparation de Kontakt, une seule fois**
 
