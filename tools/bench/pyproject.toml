@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pianoforge-bench"
+version = "0.2.0"
+description = "PianoForge reference bench: plays a VST3 instrument (Kontakt) through a measurement protocol and stores the renders."
+requires-python = ">=3.11"
+dependencies = [
+    "pedalboard>=0.9.26",    # VST3 host (GPL-3.0): development tool only, never linked into the engine
+    "numpy>=2.0",
+    "soundfile>=0.12",
+    "python-rtmidi>=1.5",    # MIDI keyboard probe (MIT)
+]
+
+[project.scripts]
+bench = "bench.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["bench*"]

@@ -1,0 +1,8 @@
+# Environnements et caches
+.venv/
+__pycache__/
+*.egg-info/
+build/
+
+# Données locales : rendus de bibliothèques commerciales (EULA) et états propres à cette machine
+corpus/

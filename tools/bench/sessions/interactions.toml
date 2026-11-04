@@ -1,0 +1,48 @@
+# Interactions session: sustain pedal, sympathetic resonance, half pedal, noises.
+# Recommended Kontakt state: the same instrument as for "reference", with sympathetic resonance and
+# pedal noises enabled.
+
+[session]
+name = "interactions"
+sample_rate = 48000
+
+# Comparable pairs: the same note with the pedal down (key released at 4 s, pedal held until 10 s) and
+# with the pedal up (key held for 10 s). The difference isolates the sympathetic resonance.
+[[pass]]
+name = "pedal-down"
+type = "note"
+notes = "A0..C8:6"
+velocities = [40, 100]
+pedal = "down"
+preroll = 1.0
+hold = 4.0
+pedal_hold = 6.0
+tail = 3.0
+
+[[pass]]
+name = "pedal-up"
+type = "note"
+notes = "A0..C8:6"
+velocities = [40, 100]
+preroll = 1.0
+hold = 10.0
+tail = 3.0
+
+# Half pedal: CC64 lifted progressively from 127 to 0 over 4 s on a note already released.
+# (The Korg B2 only sends a continuous CC64 with the optional PU-2 pedal unit; the reference tests it anyway.)
+[[pass]]
+name = "half-pedal"
+type = "pedal_ramp"
+notes = ["C2", "C4", "C6"]
+velocities = [80]
+ramp_duration = 4.0
+
+[[pass]]
+name = "pedal-only"
+type = "pedal_only"
+hold = 2.0
+
+[[pass]]
+name = "silence"
+type = "silence"
+duration = 5.0

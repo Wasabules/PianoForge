@@ -1,0 +1,14 @@
+# Smoke session: validates a Kontakt state before a long generation (about 4 min of audio).
+# Long holds stress disk streaming; extreme velocities check headroom and clipping.
+
+[session]
+name = "smoke"
+sample_rate = 48000
+
+[[pass]]
+name = "notes"
+type = "note"
+notes = ["A0", "C2", "C4", "C6", "C8"]
+velocities = [20, 64, 110, 127]
+hold = 8.0
+tail = 3.0
