@@ -59,7 +59,7 @@ def listen(index: int, first_event_timeout_s: float, stop_after_silence_s: float
     port.open_port(index)
     capture, t, start, last = [], 0.0, time.monotonic(), None
     try:
-        while True:
+        while True:  # an interruption (Ctrl+C) ends the capture but keeps what was received
             now = time.monotonic()
             if last is None and now - start > first_event_timeout_s:
                 show("No event received: nothing to analyze.")
@@ -75,6 +75,8 @@ def listen(index: int, first_event_timeout_s: float, stop_after_silence_s: float
             last = now
             capture.append((round(t, 6), list(message)))
             show(f"{t:9.3f} s  {describe(message)}")
+    except KeyboardInterrupt:
+        show(f"Interrupted: analyzing the {len(capture)} events received so far.")
     finally:
         port.close_port()
     return capture
