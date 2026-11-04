@@ -1,3 +1,4 @@
+#include "Diagnostics.h"
 #include "MainComponent.h"
 #include "SelfTest.h"
 
@@ -16,6 +17,16 @@ public:
         const auto arguments = getCommandLineParameterArray();
         if (arguments.contains("--selftest")) {
             setApplicationReturnValue(runSelfTest(arguments));
+            quit();
+            return;
+        }
+        if (arguments.contains("--midi-monitor")) {
+            setApplicationReturnValue(runMidiMonitor(arguments));
+            quit();
+            return;
+        }
+        if (arguments.contains("--list-audio")) {
+            setApplicationReturnValue(runListAudio(arguments));
             quit();
             return;
         }

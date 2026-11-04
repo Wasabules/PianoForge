@@ -29,8 +29,17 @@ public:
         learning = true;
     }
 
-    void handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& message) override
+    std::atomic<float> lastTimestampOffsetMs { 0.0f }; // driver timestamp minus arrival time, for diagnostics
+
+    void handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& raw) override
     {
+        // Windows MIDI Services timestamps lag the arrival time by a constant ~31 ms (measured with JUCE 9.0.5).
+        // The collector would then place every event at the start of the audio block, adding up to one block
+        // of jitter. A timestamp that disagrees with the arrival time by more than 2 ms is replaced by it.
+        const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        lastTimestampOffsetMs.store((float) ((raw.getTimeStamp() - now) * 1000.0), std::memory_order_relaxed);
+        const auto message = std::abs(raw.getTimeStamp() - now) > 0.002 ? juce::MidiMessage(raw).withTimeStamp(now) : raw;
+
         if (!message.isNoteOn()) { // note-offs (including note-on with velocity 0), pedals: unchanged
             collector.handleIncomingMidiMessage(source, message);
             return;

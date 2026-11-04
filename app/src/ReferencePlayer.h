@@ -44,6 +44,7 @@ public:
     std::atomic<bool> sustainDown { false };
     std::atomic<float> outputPeak { 0.0f }; // maximum since the last read (exchanged by the UI)
     std::atomic<std::uint32_t> stolenVoices { 0 };
+    std::atomic<std::uint32_t> noteOnsReceived { 0 }; // every note-on reaching the engine, for diagnostics
 
 private:
     struct Voice {

@@ -10,7 +10,8 @@ target_sources(PianoForgeApp PRIVATE
     src/ReferencePlayer.cpp
     src/MainComponent.cpp
     src/VelocityCurveEditor.cpp
-    src/SelfTest.cpp)
+    src/SelfTest.cpp
+    src/Diagnostics.cpp)
 
 target_compile_definitions(PianoForgeApp PRIVATE
     JUCE_WEB_BROWSER=0
@@ -22,6 +23,21 @@ target_compile_definitions(PianoForgeApp PRIVATE
     PIANOFORGE_VERSION="${PROJECT_VERSION}")
 
 target_compile_options(PianoForgeApp PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+# ASIO (Windows): Steinberg's SDK is fetched at configure time and checked against its hash. Since October
+# 2025 it is dual-licensed, proprietary or GPLv3; the GPLv3 option is compatible with JUCE's AGPLv3.
+if(WIN32)
+    option(PIANOFORGE_ASIO "Enable ASIO drivers (downloads the Steinberg ASIO SDK, GPLv3 option)" ON)
+    if(PIANOFORGE_ASIO)
+        FetchContent_Declare(asiosdk
+            URL      https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip
+            URL_HASH SHA256=d5ebf0c20dd2c5f43771fd0c1418f4b361bf52434ee670097cfa6b3a335e2eca
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+        FetchContent_MakeAvailable(asiosdk)
+        target_include_directories(PianoForgeApp PRIVATE "${asiosdk_SOURCE_DIR}/common")
+        target_compile_definitions(PianoForgeApp PRIVATE JUCE_ASIO=1)
+    endif()
+endif()
 
 target_link_libraries(PianoForgeApp
     PRIVATE

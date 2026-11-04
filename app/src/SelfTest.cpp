@@ -1,5 +1,7 @@
 #include "SelfTest.h"
 
+#include "AudioHost.h"
+#include "KeyboardInput.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
 
@@ -186,6 +188,36 @@ int runSelfTest(const juce::StringArray& arguments)
         r.check(factor > 20.0, "load: " + juce::String(maxVoices) + " simultaneous voices, 10 s rendered in "
                                    + juce::String(seconds * 1000.0, 1) + " ms, i.e. " + juce::String(juce::roundToInt(factor))
                                    + " times real time (threshold: 20)");
+    }
+
+    // 6. A chord through the application's MIDI path (keyboard -> velocity curve -> collector -> audio host ->
+    //    player), 480-sample blocks, timestamps 31 ms in the past as delivered by Windows MIDI Services.
+    {
+        AudioHost host { player };
+        pf::VelocityCurve curve;
+        KeyboardInput keyboard { host.collector, curve };
+        host.collector.reset(fs);
+        player.prepare(fs, 480);
+        player.playWholeTake = false;
+        flush(player, fs);
+        std::vector<float> l(480), rr(480);
+        float* outputs[2] = { l.data(), rr.data() };
+        host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, 480, {}); // first block: sets the time base
+        const int notes[] = { 48, 52, 55, 60 };
+        const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        for (int k = 0; k < 4; ++k)
+            keyboard.handleIncomingMidiMessage(nullptr, juce::MidiMessage::noteOn(1, notes[k], (juce::uint8) 80)
+                                                            .withTimeStamp(now - 0.031 + 0.001 * k));
+        const auto before = player.noteOnsReceived.load();
+        int voices = 0;
+        for (int k = 0; k < 4; ++k) {
+            juce::Thread::sleep(10);
+            host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, 480, {});
+            voices = juce::jmax(voices, player.activeVoices.load());
+        }
+        r.check(voices == 4 && player.noteOnsReceived.load() - before == 4,
+                "chord through the MIDI path: " + juce::String((int) (player.noteOnsReceived.load() - before))
+                    + " note-ons reached the engine, " + juce::String(voices) + " voices sounding (expected 4 and 4)");
     }
 
     r.line(r.passed ? "RESULT: every check passes" : "RESULT: at least one check fails");

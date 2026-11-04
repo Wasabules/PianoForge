@@ -126,6 +126,7 @@ void ReferencePlayer::apply(const SampleBank& b, const pf::Event& e) noexcept
 void ReferencePlayer::noteOn(const SampleBank& b, int note, int velocity) noexcept
 {
     const int index = b.pick(note, velocity);
+    noteOnsReceived.fetch_add(1, std::memory_order_relaxed);
     lastNote.store(note, std::memory_order_relaxed);
     lastVelocity.store(velocity, std::memory_order_relaxed);
     lastRenderedVelocity.store(index >= 0 ? b.samples[(size_t) index].velocity : 0, std::memory_order_relaxed);
