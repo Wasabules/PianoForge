@@ -9,6 +9,7 @@ target_sources(PianoForgeApp PRIVATE
     src/SampleBank.cpp
     src/ReferencePlayer.cpp
     src/MainComponent.cpp
+    src/VelocityCurveEditor.cpp
     src/SelfTest.cpp)
 
 target_compile_definitions(PianoForgeApp PRIVATE

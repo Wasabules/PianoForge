@@ -22,6 +22,31 @@ juce::File findCorpus(const juce::String& saved)
     return {};
 }
 
+/// Saved as "inputMin;inputMax;p0,p1,p2,p3,p4".
+pf::VelocityCurve::Settings parseCurve(const juce::String& text)
+{
+    pf::VelocityCurve::Settings s;
+    const auto parts = juce::StringArray::fromTokens(text, ";", "");
+    if (parts.size() != 3)
+        return s;
+    const auto points = juce::StringArray::fromTokens(parts[2], ",", "");
+    if (points.size() != pf::VelocityCurve::kPoints)
+        return s;
+    s.inputMin = juce::jlimit(1, 126, parts[0].getIntValue());
+    s.inputMax = juce::jlimit(s.inputMin + 1, 127, parts[1].getIntValue());
+    for (int i = 0; i < pf::VelocityCurve::kPoints; ++i)
+        s.points[(size_t) i] = juce::jlimit(0.0f, 1.0f, points[i].getFloatValue());
+    return s;
+}
+
+juce::String formatCurve(const pf::VelocityCurve::Settings& s)
+{
+    juce::StringArray points;
+    for (const float p : s.points)
+        points.add(juce::String(p, 4));
+    return juce::String(s.inputMin) + ";" + juce::String(s.inputMax) + ";" + points.joinIntoString(",");
+}
+
 } // namespace
 
 MainComponent::MainComponent()
@@ -40,8 +65,10 @@ MainComponent::MainComponent()
     preferred.bufferSize = 128;
     const auto savedAudio = settings->getXmlValue("audio");
     deviceManager.initialise(0, 2, savedAudio.get(), true, {}, &preferred);
+    curveSettings = parseCurve(settings->getValue("velocityCurve"));
+    velocityCurve.set(curveSettings);
     deviceManager.addAudioCallback(&host);
-    deviceManager.addMidiInputDeviceCallback({}, &host.collector);
+    deviceManager.addMidiInputDeviceCallback({}, &keyboardInput);
     deviceManager.addChangeListener(this);
     enableMidiInputs();
     midiDevicesConnection = juce::MidiDeviceListConnection::make([this] { enableMidiInputs(); }); // hot-plugged keyboard
@@ -56,8 +83,11 @@ MainComponent::MainComponent()
     audioButton.onClick = [this] { openAudioSettings(); };
     corpusButton.setButtonText("Change corpus...");
     corpusButton.onClick = [this] { chooseCorpus(); };
+    curveButton.setButtonText("Velocity curve...");
+    curveButton.onClick = [this] { openVelocityCurve(); };
     addAndMakeVisible(audioButton);
     addAndMakeVisible(corpusButton);
+    addAndMakeVisible(curveButton);
 
     sustainButton.setButtonText("Sustain pedal (Space)");
     sustainButton.onClick = [this] { sendSustain(sustainButton.getToggleState()); };
@@ -114,9 +144,10 @@ MainComponent::~MainComponent()
 {
     stopTimer();
     saveSettings();
+    curveWindow.reset(); // it refers to curveSettings and keyboardInput
     keyboard.removeKeyListener(this);
     deviceManager.removeChangeListener(this);
-    deviceManager.removeMidiInputDeviceCallback({}, &host.collector);
+    deviceManager.removeMidiInputDeviceCallback({}, &keyboardInput);
     deviceManager.removeAudioCallback(&host);
     deviceManager.closeAudioDevice();
 }
@@ -189,6 +220,32 @@ void MainComponent::openAudioSettings()
     o.launchAsync();
 }
 
+void MainComponent::openVelocityCurve()
+{
+    if (curveWindow == nullptr) {
+        curveWindow = std::make_unique<VelocityCurveWindow>(curveSettings, keyboardInput, [this] {
+            velocityCurve.set(curveSettings);
+            saveSettings();
+        });
+        curveWindow->centreAroundComponent(this, curveWindow->getWidth(), curveWindow->getHeight());
+        updateRenderedLayers();
+    }
+    curveWindow->setVisible(true);
+    curveWindow->toFront(true);
+}
+
+void MainComponent::updateRenderedLayers()
+{
+    if (curveWindow == nullptr)
+        return;
+    std::vector<int> layers;
+    if (const auto* b = player.bank())
+        for (const auto& s : b->samples)
+            if (std::find(layers.begin(), layers.end(), s.velocity) == layers.end())
+                layers.push_back(s.velocity);
+    curveWindow->panel().setRenderedLayers(std::move(layers));
+}
+
 void MainComponent::chooseCorpus()
 {
     fileChooser = std::make_unique<juce::FileChooser>("Folder of one corpus pass (e.g. single-notes)",
@@ -229,6 +286,7 @@ void MainComponent::saveSettings()
     s->setValue("velocity", (int) velocity.getValue());
     s->setValue("keyLayout", keyLayout.getSelectedId());
     s->setValue("playWholeTake", wholeTakeButton.getToggleState());
+    s->setValue("velocityCurve", formatCurve(curveSettings));
     s->saveIfNeeded();
 }
 
@@ -267,6 +325,7 @@ void MainComponent::timerCallback()
         if (auto bank = loader.takeResult()) {
             player.installBank(std::move(bank));
             bankInstalled = true;
+            updateRenderedLayers();
             progressBar.setVisible(false);
             resized();
             corpusStatus.setText("Corpus: " + corpusFolder.getFullPathName() + "  -  " + loader.status(),
@@ -281,7 +340,11 @@ void MainComponent::timerCallback()
         noteStatus.setText("Last note: " + juce::MidiMessage::getMidiNoteName(note, true, true, 4) + " | played velocity "
                                + juce::String(player.lastVelocity.load())
                                + (rendered > 0 ? " -> take rendered at velocity " + juce::String(rendered)
-                                               : juce::String(" -> no take for this note in the corpus")),
+                                               : juce::String(" -> no take for this note in the corpus"))
+                               + (keyboardInput.lastInput.load() > 0
+                                      ? "   |   last MIDI keyboard key: " + juce::String(keyboardInput.lastInput.load())
+                                            + " -> " + juce::String(keyboardInput.lastOutput.load()) + " (velocity curve)"
+                                      : juce::String()),
                            juce::dontSendNotification);
     }
 
@@ -327,6 +390,7 @@ void MainComponent::resized()
     auto header = area.removeFromTop(30);
     audioButton.setBounds(header.removeFromRight(200).reduced(2));
     corpusButton.setBounds(header.removeFromRight(160).reduced(2));
+    curveButton.setBounds(header.removeFromRight(150).reduced(2));
     title.setBounds(header);
 
     corpusStatus.setBounds(area.removeFromTop(22));

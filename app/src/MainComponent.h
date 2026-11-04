@@ -1,8 +1,12 @@
 #pragma once
 
 #include "AudioHost.h"
+#include "KeyboardInput.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
+#include "VelocityCurveEditor.h"
+
+#include <pianoforge/velocity_curve.hpp>
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -27,6 +31,8 @@ private:
     void changeListenerCallback(juce::ChangeBroadcaster*) override;
 
     void openAudioSettings();
+    void openVelocityCurve();
+    void updateRenderedLayers();
     void chooseCorpus();
     void loadCorpus(const juce::File& folder);
     void enableMidiInputs();
@@ -39,6 +45,10 @@ private:
     juce::AudioDeviceManager deviceManager;
     ReferencePlayer player;
     AudioHost host { player };
+    pf::VelocityCurve velocityCurve;
+    pf::VelocityCurve::Settings curveSettings;
+    KeyboardInput keyboardInput { host.collector, velocityCurve }; // hardware keyboards go through the curve
+    std::unique_ptr<VelocityCurveWindow> curveWindow;
     BankLoader loader;
     juce::MidiDeviceListConnection midiDevicesConnection;
     std::unique_ptr<juce::FileChooser> fileChooser;
@@ -46,7 +56,7 @@ private:
 
     juce::MidiKeyboardComponent keyboard { host.keyboardState, juce::KeyboardComponentBase::horizontalKeyboard };
     juce::Label title, corpusStatus, audioStatus, noteStatus, engineStatus, help;
-    juce::TextButton audioButton, corpusButton;
+    juce::TextButton audioButton, corpusButton, curveButton;
     juce::ToggleButton sustainButton, wholeTakeButton;
     juce::Slider volume, velocity;
     juce::Label volumeLabel, velocityLabel;

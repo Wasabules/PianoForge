@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(CTest) # BUILD_TESTING, on by default
+
 # JUCE is only used by the shell (app/). The engine (engine/) does not depend on it.
 include(FetchContent)
 FetchContent_Declare(JUCE
