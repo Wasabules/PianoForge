@@ -80,6 +80,25 @@ def listen(index: int, first_event_timeout_s: float, stop_after_silence_s: float
     return capture
 
 
+HELD_POSITION_S = 0.3  # an intermediate pedal value held this long is a real half-pedal position
+
+
+def _classify_pedal(events: list[tuple[float, int]]) -> str:
+    """The number of distinct values is not enough: the Korg B2 sends 0, 38, 74, 127 with its switch pedal,
+    as a ramp lasting 10 to 140 ms. What matters is whether an intermediate position can be held."""
+    if not events:
+        return "not observed"
+    values = sorted({v for _, v in events})
+    if len(values) <= 2:
+        return "switch (on/off)"
+    lo, hi = values[0], values[-1]
+    dwell = max((t1 - t0 for (t0, v), (t1, _) in zip(events, events[1:]) if lo < v < hi), default=0.0)
+    if dwell < HELD_POSITION_S:
+        return (f"switch with stepped transitions (values {values}; no intermediate position held longer than "
+                f"{dwell * 1000:.0f} ms): no half pedal")
+    return f"continuous ({len(values)} distinct values, intermediate positions held up to {dwell:.1f} s): half pedal possible"
+
+
 def analyze_capture(capture: list[tuple[float, list[int]]]) -> dict:
     vel_on, vel_off, notes, channels = [], [], [], set()
     off_style = collections.Counter()
@@ -115,10 +134,7 @@ def analyze_capture(capture: list[tuple[float, list[int]]]) -> dict:
         f"present ({len(off_values)} values, {min(vel_off)} to {max(vel_off)})" if vel_off else "not observed")
     res["controllers"] = {f"CC{n}": {"name": CC_NAMES.get(n, "?"), "messages": len(v), "distinct_values": len(set(v)),
                                      "min": min(v), "max": max(v)} for n, v in sorted(ccs.items())}
-    pedal = ccs.get(64, [])
-    res["sustain_pedal"] = ("not observed" if not pedal else
-                            "switch (on/off)" if len(set(pedal)) <= 2 else
-                            f"continuous ({len(set(pedal))} distinct values): half pedal possible")
+    res["sustain_pedal"] = _classify_pedal([(t, m[2]) for t, m in capture if m[0] & 0xF0 == 0xB0 and m[1] == 64])
     res["high_resolution_velocity_cc88"] = 88 in ccs
     if others:
         res["other_messages"] = dict(others)

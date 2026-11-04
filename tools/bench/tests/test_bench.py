@@ -152,10 +152,16 @@ class KeyboardProbe(unittest.TestCase):
 
     def test_continuous_pedal_and_measured_release(self):
         capture = [(0.0, [0x90, 60, 30]), (0.5, [0x80, 60, 12]), (0.6, [0x90, 61, 40]), (0.9, [0x80, 61, 90])]
-        capture += [(1.0 + i / 10, [0xB0, 64, v]) for i, v in enumerate((0, 20, 45, 70, 101, 127))]
+        capture += [(1.0 + i / 2, [0xB0, 64, v]) for i, v in enumerate((0, 20, 45, 70, 101, 127))]  # 0.5 s per position
         a = analyze_capture(capture)
         self.assertTrue(a["sustain_pedal"].startswith("continuous"))
         self.assertTrue(a["release_velocity"].startswith("present"))
+
+    def test_stepped_switch_pedal(self):
+        # Sequence captured on the Korg B2 with its supplied pedal: a quick ramp through two fixed steps.
+        values = [(16.22, 74), (16.29, 127), (18.04, 0), (30.15, 38), (30.17, 74), (30.21, 127), (33.28, 38), (33.30, 0)]
+        a = analyze_capture([(t, [0xB0, 64, v]) for t, v in values])
+        self.assertTrue(a["sustain_pedal"].startswith("switch with stepped transitions"), a["sustain_pedal"])
 
 
 class Storage(unittest.TestCase):

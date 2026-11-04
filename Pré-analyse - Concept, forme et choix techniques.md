@@ -550,7 +550,13 @@ Le mode temps réel (port MIDI virtuel et capture en loopback) n'a pas été éc
 
 - **USB type B pour le MIDI et l'audio.** Le B2 peut donc servir de carte son et jouer PianoForge sur ses propres haut-parleurs. Aucun pilote ASIO n'est connu pour lui : ce sera WASAPI en mode exclusif, avec une latence à mesurer au spike A.
 - **La pédale fournie est un simple interrupteur** : le CC64 est tout ou rien. La demi-pédale demande le pédalier optionnel PU-2, à trois pédales, qui se branche sur la même prise. Sans lui, la demi-pédale, le sostenuto et l'una corda ne se testent qu'avec des CC synthétiques, ce que fait le banc.
-- **La vélocité est probablement en 7 bits, sans vélocité de relâchement.** Ce point n'est pas vérifié : l'assistant de calibration du clavier le dira.
+- **Mesuré avec `bench keyboard` le 4 novembre 2026** (406 messages, capture dans `corpus/keyboard/`) :
+  - 88 touches (A0 à C8) sur le canal 1 ;
+  - vélocité en 7 bits, de 1 à 101 lors de ce test, avec 67 valeurs distinctes. Un seul coup a dépassé 96 : reste à tester des fortissimo pour savoir si le B2 atteint 127 ;
+  - **pas de vélocité de relâchement** (toujours 64) ;
+  - ni CC88 ni aftertouch.
+- **La pédale fournie est un interrupteur à paliers.** Le CC64 passe par 0, 38, 74 et 127 en 10 à 140 ms, et aucune position intermédiaire ne tient plus de 110 ms : le B2 adoucit la transition, mais on ne peut pas tenir une demi-pédale. Ça confirme la fiche Korg (demi-pédale avec le PU-2 seulement).
+- **Conséquences pour PianoForge.** La courbe de vélocité devra être calibrée sur la plage réelle du B2. Le relâchement ne pourra pas dépendre de la vitesse de la touche. Avec cette pédale, les étouffoirs continus ne seront jouables qu'à travers ces quatre paliers.
 
 **Compléments du même jour**
 
