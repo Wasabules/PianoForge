@@ -112,8 +112,9 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
 
     char magic[8] {};
     r.bytes(magic, 8);
-    if (std::memcmp(magic, "PFMODAL1", 8) != 0 || r.get<std::uint32_t>() != 1) {
-        error = "not a modal profile (version 1): " + path.string();
+    const auto version = std::memcmp(magic, "PFMODAL1", 8) == 0 ? r.get<std::uint32_t>() : 0u;
+    if (version != 1 && version != 2) { // version 2 adds the fade time of each partial
+        error = "not a modal profile (version 1 or 2): " + path.string();
         return nullptr;
     }
     auto p = std::make_shared<ModalProfile>();
@@ -179,6 +180,8 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
                 ModalProfile::Partial part;
                 part.number = (int) r.get<std::uint32_t>();
                 part.modeCount = (int) r.get<std::uint32_t>();
+                if (version >= 2)
+                    part.fadeSeconds = r.get<float>();
                 part.firstMode = first;
                 first += part.modeCount;
                 layer.partials.push_back(part);

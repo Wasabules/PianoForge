@@ -54,6 +54,7 @@ void ModalEngine::prepare(double newSampleRate, int newMaxBlockSize)
 {
     sampleRate = newSampleRate;
     maxBlockSize = std::max(32, newMaxBlockSize);
+    fadeFactor = (float) std::exp(-std::log(1000.0) / (kPartialFadeSeconds * sampleRate));
     for (auto* b : { &bufferL, &bufferR, &mixL, &mixR })
         b->assign((std::size_t) maxBlockSize, 0.0f);
     allocate();
@@ -78,6 +79,9 @@ void ModalEngine::allocate()
         v.ramps.clear();
         v.ramps.reserve((std::size_t) partials);
         v.ramp = Ramp::none;
+        v.fades.clear();
+        v.fades.reserve((std::size_t) partials);
+        v.nextFade = 0;
     }
     body.reserve(owned != nullptr ? (int) owned->bodyFreq.size() : 0);
     if (owned != nullptr)
@@ -266,6 +270,7 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     auto& v = *target;
     v.bank.clear();
     v.ramps.clear();
+    v.fades.clear();
     // The level ramp starts once the residual is over (output samples); without a residual there is nothing to
     // stay consistent with, and each partial starts at its own level.
     const auto residualEnd = (std::int64_t) std::ceil((double) near.residualFrames * sampleRate / p.residualRate);
@@ -299,7 +304,13 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
         if (ramp)
             v.ramps.push_back({ first, v.bank.size() - first, part.firstMode,
                                 (float) std::pow((double) g / overall, 1.0 / (double) rampLength) });
+        // Past its fade time, the partial dies out (after the level ramp, whose end puts the exact poles back).
+        if (part.fadeSeconds > 0.0f && v.bank.size() > first && v.fades.size() < v.fades.capacity())
+            v.fades.push_back({ std::max((std::int64_t) std::llround(part.fadeSeconds * sampleRate), residualEnd + rampLength),
+                                first, v.bank.size() - first });
     }
+    std::sort(v.fades.begin(), v.fades.end(), [](const PartialFade& a, const PartialFade& b) { return a.at < b.at; });
+    v.nextFade = 0;
     v.ramp = v.ramps.empty() ? Ramp::none : Ramp::waiting;
     v.rampStart = residualEnd;
     v.rampEnd = residualEnd + rampLength;
@@ -409,8 +420,9 @@ void ModalEngine::render(const ModalProfile& p, float* const* outputs, int numCh
 
 void ModalEngine::renderBank(Voice& v, float* left, float* right, int n) noexcept
 {
-    // Split at the level ramp's start and end, to the sample: in between, the ramped partials' poles are raised
-    // (or lowered) by their factor; at the end, the exact poles are put back.
+    // Split at the level ramp's start and end and at the partial fades, to the sample: during the ramp, the ramped
+    // partials' poles are raised (or lowered) by their factor; at its end, the exact poles are put back; from a
+    // fade on, the partial's poles get the fade's extra damping.
     int done = 0;
     while (done < n) {
         const std::int64_t at = v.sinceOn + done;
@@ -427,11 +439,18 @@ void ModalEngine::renderBank(Voice& v, float* left, float* right, int n) noexcep
                 }
             v.ramp = Ramp::none;
         }
+        // Fades are never earlier than the ramp's end (noteOn), so the exact poles are back before they apply.
+        while (v.ramp == Ramp::none && v.nextFade < v.fades.size() && v.fades[v.nextFade].at <= at) {
+            const auto& fade = v.fades[v.nextFade++];
+            v.bank.scalePoles(fade.first, fade.count, fadeFactor);
+        }
         std::int64_t chunk = n - done;
         if (v.ramp == Ramp::waiting)
             chunk = std::min(chunk, v.rampStart - at);
         else if (v.ramp == Ramp::running)
             chunk = std::min(chunk, v.rampEnd - at);
+        else if (v.nextFade < v.fades.size())
+            chunk = std::min(chunk, v.fades[v.nextFade].at - at);
         v.bank.process(left + done, right + done, (int) chunk);
         done += (int) chunk;
     }

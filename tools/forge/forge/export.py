@@ -16,15 +16,20 @@ The layers are kept as they were measured: each one is a real strike, with its o
 amplitudes between two strikes gives neither (studies/velocity_linearity.py); the engine plays the nearest layer
 with the levels interpolated per partial.
 
+Two checks against the recording, where the measurements are extrapolated:
+  - the body may not be louder than what the take holds besides the strings (limit_body);
+  - a partial whose modes would grow again past its analysis window, where the take stays under the floor, is
+    faded out from the window's end (fade_times).
+
 Binary format (little endian), modal-profile.bin:
-  header      char[8] "PFMODAL1", u32 version (1), f64 residual sample rate, u32 channels (2)
+  header      char[8] "PFMODAL1", u32 version (2), f64 residual sample rate, u32 channels (2)
   body        u32 P, then P x (f64 freq Hz, f64 decay 1/s)
   dampers     f64 step s, u32 notes, u32 holds, u32 points, notes x i32 midi, holds x f64 hold s,
               notes x holds x points x f32 dB (level after the key release against the note held)
   notes       u32 count, then per note:
                 u32 midi, u32 layers, f64 f0, then per layer:
                   u32 velocity, u32 partials, u32 modes, u32 residual frames,
-                  partials x (u32 partial number, u32 modes of this partial),
+                  partials x (u32 partial number, u32 modes of this partial, f32 fade time s, 0: none),
                   modes x (f64 freq Hz, f64 decay 1/s, f32 left re, f32 left im, f32 right re, f32 right im),
                   P x (f32 left re, f32 left im, f32 right re, f32 right im)   body amplitudes,
                   f32 residual scale, frames x channels x i16 (interleaved; sample = i16 x scale)
@@ -44,11 +49,16 @@ import numpy as np
 import soundfile as sf
 
 from forge import soundboard
-from forge.modes import synthesize
+from forge.modes import BandExtractor, synthesize
 from forge.note_modes import clean, partial_modes
 
-MAGIC, VERSION = b"PFMODAL1", 1
+MAGIC, VERSION = b"PFMODAL1", 2
 RESIDUAL_S, RESIDUAL_FADE_S = 0.10, 0.04
+BODY_WINDOWS_S = (0.3, 1.0, soundboard.T1)  # ends of the windows where the body is checked (the first one starts
+                                            # where the residual ends)
+BODY_MARGIN_DB = 3.0    # how much louder than the take (besides the strings) the body may be, per band and window
+FADE_EXCESS_DB, FADE_EXCESS_S = 6.0, 1.0  # past its window, a partial louder than the take by this, this long, fades
+FADE_HOLD_MARGIN_S = 0.5                    # a window ending this close to the end of the hold ran to it
 
 
 def velocities(corpus: Path) -> list[int]:
@@ -82,18 +92,120 @@ def residual(path: Path, note: dict, body_freqs, body_decays, body_amps) -> tupl
     return r.T, fs
 
 
+def limit_body(path: Path, note: dict, freqs: np.ndarray, decays: np.ndarray, amps: np.ndarray,
+               start: float) -> tuple[np.ndarray, int]:
+    """The soundboard may not be louder than what the recording holds besides the strings. The body fit weighs the
+    tail of its window most, where the slow resonances are measured: a fast resonance is barely constrained there
+    and, on a few quiet takes, comes out far too loud (E2 at velocity 8: 15 dB at 703 Hz). The body is compared
+    with the take minus the modes, in the bins the fit used (away from the partials), per third octave, in windows
+    from `start` (the end of the residual, which covers what comes before) to T1. Where it is louder than the take
+    by more than BODY_MARGIN_DB (the take also holds noise, and the estimate varies), the band's resonances are
+    brought down to that margin. Returns the amplitudes (channels x resonances, at the note-on) and how many were
+    lowered."""
+    lo, hi = soundboard.BAND
+    centre = (lo + hi) / 2
+    z, fs_d = soundboard.residual_baseband(path, note, seconds=soundboard.T1 + 0.5)
+    i0 = int(round(soundboard.T0 * fs_d))
+    n = z.shape[1]
+    poles = np.exp((-decays + 2j * np.pi * (freqs - centre)) / fs_d)
+    bounds = [max(start, soundboard.T0), *BODY_WINDOWS_S]
+    windows = [(int((a - soundboard.T0) * fs_d), min(n, int((b - soundboard.T0) * fs_d)))
+               for a, b in zip(bounds[:-1], bounds[1:])]
+    windows = [(a, b) for a, b in windows if b - a >= 16]
+    if not windows:
+        return amps, 0
+    edges = lo * 2.0 ** (np.arange(0, 22) / 3)
+    band = np.clip(np.searchsorted(edges, freqs, side="right") - 1, 0, len(edges) - 2)
+    partials, half_width = soundboard.excluded(note)
+
+    def spectrum(x: np.ndarray, a: int, b: int) -> tuple[np.ndarray, np.ndarray]:
+        nfft = 1 << int(np.ceil(np.log2(2 * (b - a))))
+        f = centre + np.fft.fftfreq(nfft, 1 / fs_d)
+        return f, np.sum(np.abs(np.fft.fft(x[:, a:b] * np.hanning(b - a), nfft, axis=1)) ** 2, axis=0)
+
+    data = [spectrum(z, a, b) for a, b in windows]
+    basis = poles[None, :] ** (i0 + np.arange(n))[:, None]  # samples x resonances
+    amps = np.array(amps, dtype=np.complex128)
+    lowered = np.zeros(len(freqs), dtype=bool)
+    limit = 10 ** (BODY_MARGIN_DB / 10)
+    for _ in range(4):  # lowering one band changes its neighbours a little: settle
+        model = (basis @ amps.T).T
+        changed = False
+        for w, (a, b) in enumerate(windows):
+            f, ed = data[w]
+            _, em = spectrum(model, a, b)
+            keep = (f >= lo) & (f <= hi)
+            for p in partials:
+                keep &= np.abs(f - p) > half_width
+            for k in np.unique(band):
+                sel = keep & (f >= edges[k]) & (f < edges[k + 1])
+                e_model, e_data = em[sel].sum(), ed[sel].sum()
+                if e_model > limit * e_data * 1.01:
+                    which = band == k
+                    amps[:, which] *= np.sqrt(limit * e_data / e_model)
+                    lowered |= which & (np.abs(amps[0]) + np.abs(amps[1]) > 0)
+                    changed = True
+        if not changed:
+            break
+    return amps, int(lowered.sum())
+
+
+def fade_times(path: Path, note: dict) -> dict[int, float]:
+    """Partial number -> fade time (s from the note-on). The analysis window of a partial ends at the last instant
+    it is above its floor (its maximum - 50 dB, the noise + 15 dB, or the note's loudest partial - 80 dB); the modes
+    are measured up to there only. Past it they can ring on far louder than the take: from a slow decay, near the
+    floor for tens of seconds (B0 at velocity 16: 800 Hz still 42 dB under the note's peak after 10 s, the take
+    45 dB lower, Noire being denoised), or growing again where close modes cancelled each other over the window
+    (B0 at velocity 8, partial 14: back from -40 to -17 dB). The take is measured in the partial's own band up to
+    the end of the hold: a partial louder than it by FADE_EXCESS_DB for more than FADE_EXCESS_S is faded out from
+    its window's end, where it is at its floor. A window that ran to the end of the hold is left alone."""
+    hold = note["hold_s"]
+    todo = [p for p in note["partials"] if p["modes"] and p["t1"] < hold - FADE_HOLD_MARGIN_S]
+    if not todo:
+        return {}
+    meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    audio, fs = sf.read(path, dtype="float64", always_2d=True)
+    extractor = BandExtractor(audio[meta["note_on_sample"]:meta["note_off_sample"]].T, fs)
+    pass_hz = min(0.33 * note["f0"], 30.0)  # the bands of the analysis (modes.partial_window)
+    stop_hz = min(0.66 * note["f0"], 2 * pass_hz)
+    smear = 1.5 / (stop_hz - pass_hz)
+    out = {}
+    for p in todo:
+        z, fs_d = extractor.baseband(p["centre"], pass_hz, stop_hz)
+        i1, i2 = int(p["t1"] * fs_d), min(z.shape[1], int((hold - smear) * fs_d))
+        if i2 - i1 < FADE_EXCESS_S * fs_d:
+            continue
+        m = np.asarray(p["modes"], dtype=np.float64)
+        t = np.arange(i1, i2) / fs_d
+        basis = np.exp(np.outer(t, -m[:, 1] + 2j * np.pi * (m[:, 0] - p["centre"])))
+        model = basis @ np.stack([m[:, 2] + 1j * m[:, 3], m[:, 4] + 1j * m[:, 5]], axis=1)  # samples x channels
+        k = max(1, int(0.5 * fs_d))
+        smooth = lambda e: np.convolve(e, np.ones(k) / k, mode="same")
+        e_model = smooth(np.mean(np.abs(model) ** 2, axis=1))
+        e_take = smooth(np.mean(np.abs(z[:, i1:i2]) ** 2, axis=0))
+        if np.sum(e_model > e_take * 10 ** (FADE_EXCESS_DB / 10)) > FADE_EXCESS_S * fs_d:
+            out[p["n"]] = float(p["t1"])
+    return out
+
+
 def _layer_task(args) -> dict:
     path, note, body = args
-    freqs, decays, amps = body
-    r, fs = residual(Path(path), note, np.asarray(freqs), np.asarray(decays), np.asarray(amps))
-    return {"midi": note["midi"], "velocity": note["velocity"], "residual": r, "fs": fs}
+    path = Path(path)
+    freqs, decays = np.asarray(body[0]), np.asarray(body[1])
+    amps, lowered = limit_body(path, note, freqs, decays, np.asarray(body[2]), residual_seconds(note))
+    r, fs = residual(path, note, freqs, decays, amps)  # with the body as it will be played
+    return {"midi": note["midi"], "velocity": note["velocity"], "residual": r, "fs": fs, "body": amps,
+            "lowered": lowered, "fades": fade_times(path, note)}
 
 
-def _layer_bytes(note: dict, body_amps: np.ndarray, r: np.ndarray) -> bytes:
+def _layer_bytes(note: dict, body_amps: np.ndarray, r: np.ndarray, fades: dict[int, float]) -> bytes:
     partials = [p for p in note["partials"] if p["modes"]]
     modes = [m for p in partials for m in p["modes"]]
     out = [struct.pack("<4I", note["velocity"], len(partials), len(modes), r.shape[0])]
-    out.append(np.array([(p["n"], len(p["modes"])) for p in partials], dtype="<u4").tobytes())
+    table = np.zeros(len(partials), dtype=[("n", "<u4"), ("modes", "<u4"), ("fade", "<f4")])
+    for i, p in enumerate(partials):
+        table[i] = (p["n"], len(p["modes"]), fades.get(p["n"], 0.0))
+    out.append(table.tobytes())
     rec = np.zeros(len(modes), dtype=[("f", "<f8"), ("d", "<f8"), ("a", "<f4", (4,))])
     for i, m in enumerate(modes):
         rec[i] = (m[0], m[1], m[2:6])
@@ -175,6 +287,12 @@ def run(corpus: Path, jobs: int = 0) -> list[Path]:
     with ProcessPoolExecutor(max_workers=jobs or None) as pool:
         residuals = {(r["midi"], r["velocity"]): r for r in pool.map(_layer_task, tasks)}
     print(f"  residuals of {len(residuals)} takes ({time.time() - start:.0f} s)")
+    lowered = [r for r in residuals.values() if r["lowered"]]
+    print(f"  soundboard louder than the take, brought down: {sum(r['lowered'] for r in lowered)} resonances "
+          f"in {len(lowered)} layers")
+    faded = sum(len(r["fades"]) for r in residuals.values())
+    print(f"  partials louder than the take past their analysis window, faded out from its end: {faded} "
+          f"in {sum(1 for r in residuals.values() if r['fades'])} layers")
     rates = {r["fs"] for r in residuals.values()}
     if len(rates) != 1:
         raise SystemExit(f"Takes at several sample rates: {sorted(rates)}")
@@ -203,8 +321,8 @@ def run(corpus: Path, jobs: int = 0) -> list[Path]:
     for m, present in notes.items():
         out.append(struct.pack("<2Id", m, len(present), modes[present[0]][m]["f0"]))
         for v in present:
-            note = modes[v][m]
-            out.append(_layer_bytes(note, boards[v][2][m], residuals[(m, v)]["residual"]))
+            note, layer = modes[v][m], residuals[(m, v)]
+            out.append(_layer_bytes(note, layer["body"], layer["residual"], layer["fades"]))
             total_modes += sum(len(p["modes"]) for p in note["partials"])
     path = corpus / "modal-profile.bin"
     path.write_bytes(b"".join(out))

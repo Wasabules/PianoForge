@@ -242,6 +242,35 @@ int main()
         check(errAttack < 1e-3 * peak, "attack: the nearest layer's modes and residual, all at the overall gain");
         check(errRamp < 1e-3 * peak, "then a smooth log-linear ramp to each partial's level");
         check(errAfter < 1e-3 * peak, "after the ramp: each partial at its interpolated level, exact poles back");
+
+        // 2c. A partial with a fade time (set by the forge past its analysis window) dies out from there: an extra
+        // -60 dB per kPartialFadeSeconds, the other partial untouched.
+        auto faded = std::make_shared<pf::ModalProfile>(*ramp);
+        for (auto& layer : faded->notes[0].layers)
+            layer.partials[1].fadeSeconds = 0.25f;
+        pf::ModalEngine f;
+        f.install(faded);
+        f.bodyEnabled = false;
+        f.prepare(kRate, 64);
+        std::vector<float> lf, rf;
+        render(f, { { 0, 0x90, 72, 85 } }, frames, lf, rf);
+        const int fadeAt = (int) std::llround(0.25 * kRate);
+        double errFade = 0.0;
+        for (int s = 0; s < frames; ++s) {
+            const double t = s / kRate;
+            double want = s < kResidualFrames ? overall * residualSample(s) : 0.0;
+            for (int p = 0; p < 2; ++p) {
+                const double x = std::clamp((double) (s - kResidualFrames) / rampLength, 0.0, 1.0);
+                double gain = overall * std::pow(g[p] / overall, x);
+                if (p == 1 && s > fadeAt)
+                    gain *= std::pow(1000.0, -(s - fadeAt) / (pf::ModalEngine::kPartialFadeSeconds * kRate));
+                want += gain * near.modes[(std::size_t) p].left.real() * std::exp(-kRampDecay[p] * t)
+                        * std::cos(kTwoPi * kRampF[p] * t);
+            }
+            errFade = std::max(errFade, (double) std::abs(lf[(std::size_t) s] - want));
+        }
+        std::printf("      fade: largest error %.1f dB under the peak\n", 20 * std::log10(errFade / peak + 1e-12));
+        check(errFade < 1e-3 * peak, "a partial's fade time: it dies out from there, the others ring on");
     }
 
     // 3. Key release: the damper curve; sustain pedal: the dampers stay up until the pedal is released.

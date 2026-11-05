@@ -581,7 +581,23 @@ Le mode temps réel (port MIDI virtuel et capture en loopback) n'a pas été éc
     - cas à plus de 6 dB au-dessus des deux couches : 47 avant, 0 après ;
     - pire écart : +31,9 dB avant, +4,2 dB après ;
     - de A0 à B1 aux couches exactes, pire écart de 0 à 0,3 s au-dessus de 500 Hz : +10,0 dB avant, +3,2 dB après.
-  - **Reste à traiter.** La table est surestimée sur quelques notes très douces : pour E2 à v8, une résonance à 703 Hz ressort de 15 dB entre 0,1 et 0,15 s. Par ailleurs, 29 partiels sur tout le profil remontent après la fin de leur fenêtre d'analyse. Ce sont des paires de modes quasi identiques qui s'annulaient sur la fenêtre, et ils remontent 10 à 20 s après la frappe, à −30 à −60 dB sous le maximum de la note.
+
+**Traînes et table (5 novembre 2026, profil version 2).** Deux défauts restaient là où les mesures sont extrapolées.
+  - **Les partiels au-delà de leur fenêtre.** La fenêtre d'analyse d'un partiel s'arrête au dernier instant où il dépasse son plancher : 50 dB sous son maximum, le bruit + 15 dB, ou 80 dB sous le partiel le plus fort de la note. Au-delà, les modes ne sont plus contraints par la mesure.
+    - Ils pouvaient sonner bien plus fort que la prise, de deux façons. Soit ils décroissaient lentement, en restant des dizaines de secondes près du plancher : pour B0 à v16, les partiels vers 800 Hz restaient à −42 dB sous le maximum de la note pendant 20 s, alors que Noire, débruitée, les fait disparaître 45 dB plus bas. Soit des modes voisins, qui s'annulaient sur la fenêtre, remontaient ensuite : le partiel 14 de B0 à v8 repartait de −40 à −17 dB.
+    - **Correctif.** La forge mesure la prise dans la bande de chaque partiel, jusqu'à la fin de la tenue (`export.fade_times`). Si le modèle la dépasse de plus de 6 dB pendant plus d'une seconde, le partiel reçoit un instant d'extinction : la fin de sa fenêtre, où il est à son plancher. Le moteur lui applique alors un amortissement supplémentaire de −60 dB par seconde, en modifiant le module de ses pôles à l'échantillon près. Une fenêtre qui court jusqu'à la fin de la tenue n'est pas touchée.
+    - Cela concerne 20 808 partiels, dans 1 374 couches sur 1 408 : Noire, débruitée, fait disparaître presque tous ses partiels une fois sous leur plancher.
+    - Le format passe en version 2 (instant d'extinction par partiel) ; le chargeur lit encore la version 1.
+  - **La table trop forte sur les notes douces.** L'ajustement de la table pèse surtout la fin de sa fenêtre (×148 à 2,5 s), où se mesurent les résonances lentes. Une résonance rapide y est donc à peine contrainte, et sur quelques prises douces elle sort bien trop forte : +15 dB à 703 Hz pour E2 à v8, +8 dB vers 126 Hz pour F3 à v8.
+    - **Correctif.** La forge compare la table à la prise moins les modes, dans les cases de fréquence que l'ajustement utilise (loin des partiels), par tiers d'octave, dans les fenêtres 0,12–0,3 s, 0,3–1 s et 1–2,5 s (`export.limit_body`). Là où la table dépasse la prise de plus de 3 dB, les résonances de la bande y sont ramenées. Le résidu d'attaque est recalculé avec la table ainsi limitée.
+    - Les couches normales ne bougent pas (C4, C2 à v64, A0 à v104, C3 à v127). 400 couches sur 1 408 ont au moins une bande ramenée, surtout aux vélocités douces. Là où la table compte, l'écart médian à Noire reste le même (−1,3 dB contre −1,2 avant).
+  - **Mesures.**
+    - *Tenues longues de A0 à E3 (512 couches, rendu complet de la tenue) :* les couches où le moteur dépassait Noire de plus de 10 dB pendant au moins 2 s passent de 208 à 1 ; pendant au moins 5 s, de 105 à 0.
+    - *Attaques aux couches exactes de A0 à C4 :* le pire écart passe de +14,7 dB (E2 à v8) à +6,4 dB.
+    - *Niveau total par fenêtre (0–0,1 s, 0,1–1 s, 1–3 s, 3–8 s), sur 30 notes et 6 couches :* l'écart médian à Noire reste sous 0,1 dB, comme avant. La phrase A/B reste à −37,7 dB pour les deux moteurs.
+  - **Limites.**
+    - Dans les notes aiguës très douces, il reste un excès de la table vers 32–40 Hz. Ce n'est pas une résonance : c'est l'éclaboussement de la coupure à −100 dBFS quand l'énergie de la table passe sous le seuil de silence. Il est inaudible, mais la coupure pourrait devenir un fondu.
+    - Quelques queues aiguës s'éteignent dans le moteur alors que Noire garde un reste entre −92 et −130 dBFS.
 
 **Phase 0 entamée.** L'application JUCE existe sous forme d'atelier d'écoute (`app/`) : clavier de 88 touches jouable à la souris, au clavier du PC (AZERTY ou QWERTY) et au clavier MIDI ; pédale forte ; choix de la sortie audio. Elle joue le corpus de référence derrière l'interface `pf::Engine` (`engine/`), celle que le moteur modal implémentera, ce qui permettra l'A/B. Un autotest sans interface (`PianoForge --selftest`) contrôle la fidélité de lecture, le rééchantillonnage, le relâchement et la charge.
 

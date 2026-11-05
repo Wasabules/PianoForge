@@ -23,6 +23,8 @@ namespace pf {
 ///   does so at the same gain. Each partial then reaches its own level over kLevelRampSeconds.
 /// - Soundboard: one bank of resonances shared by every note; a note-on adds its excitation to it, at the
 ///   overall gain (the body is in the residual too).
+/// - Past its analysis window, where the forge found the recording far under the modes, a partial is faded out
+///   (profile fade time, an extra -60 dB per kPartialFadeSeconds).
 /// - Key release: the measured damper curve of the note (level against the note held), applied to the voice.
 /// - Sustain pedal (CC64 >= 64): the dampers stay up. Re-strike: the previous voice of the note keeps ringing and
 ///   fades to -40 dB within restrikeFadeSeconds, as in the reference player.
@@ -34,6 +36,7 @@ public:
     static constexpr int kMaxVoices = 64;
     static constexpr int kMaxVoicesPerNote = 3;
     static constexpr double kLevelRampSeconds = 0.05; // after the residual: overall gain -> each partial's level
+    static constexpr double kPartialFadeSeconds = 1.0; // a partial faded out (profile fade time): extra T60
 
     void prepare(double sampleRate, int maxBlockSize) override;
     void release() noexcept override;
@@ -66,6 +69,11 @@ private:
         float factor = 1.0f;
     };
     enum class Ramp : std::uint8_t { none, waiting, running };
+    /// From sample `at` (since the note-on), the modes [first, first + count) get the extra damping of a fade.
+    struct PartialFade {
+        std::int64_t at = 0;
+        int first = 0, count = 0;
+    };
 
     struct Voice {
         bool active = false, keyDown = false, released = false, damperCurve = false, fadingOut = false;
@@ -75,6 +83,8 @@ private:
         std::vector<PartialRamp> ramps; // reserved for the largest layer
         Ramp ramp = Ramp::none;
         std::int64_t rampStart = 0, rampEnd = 0; // samples since the note-on
+        std::vector<PartialFade> fades;          // ascending `at`, reserved for the largest layer
+        std::size_t nextFade = 0;
         double residualPos = 0.0;      // in residual frames
         float residualGain = 1.0f;
         float gain = 1.0f, decay = 1.0f; // exponential envelope (re-strike, fast fades)
@@ -96,6 +106,7 @@ private:
 
     double sampleRate = 48000.0;
     int maxBlockSize = 0;
+    float fadeFactor = 1.0f; // pole magnitude factor of a partial fade, per sample
     std::array<Voice, kMaxVoices> voices;
     ModeBank body;
     float bodyGain = 1.0f, bodyDecay = 1.0f;

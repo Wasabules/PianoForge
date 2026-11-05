@@ -38,6 +38,9 @@ struct ModalProfile {
     struct Partial {
         int number = 0, firstMode = 0, modeCount = 0;
         float level = 0.0f;                      // RMS amplitude over the first second (interpolation weight)
+        // Seconds from the note-on after which the partial is faded out (0: never). The forge sets it at the end of
+        // the partial's analysis window when the modes would grow again past it, where the recording does not.
+        float fadeSeconds = 0.0f;
     };
     struct Layer {
         int velocity = 0;

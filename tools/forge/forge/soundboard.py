@@ -40,11 +40,14 @@ WEIGHT_PER_S = 2.0
 POLE_NOTES = (81, 104)  # partials all above the band: the residual there is body (and noise) only
 
 
-def residual_baseband(path: Path, note: dict) -> tuple[np.ndarray, float]:
-    """Body band of (recording - measured modes), at baseband, over [T0, T1] (channels x samples)."""
+def residual_baseband(path: Path, note: dict, seconds: float | None = None) -> tuple[np.ndarray, float]:
+    """Body band of (recording - measured modes), at baseband, over [T0, T1] (channels x samples). `seconds` limits
+    the part of the hold that is read (it changes the baseband rate, which depends on the length)."""
     meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     audio, fs = sf.read(path, dtype="float64", always_2d=True)
     on, off = meta["note_on_sample"], meta["note_off_sample"]
+    if seconds is not None:
+        off = min(off, on + int(round(seconds * fs)))
     x = audio[on:off].T
     r = x - synthesize(partial_modes(clean(note)[0]), x.shape[0], x.shape[1], fs)  # failed fits left out
     lo, hi = BAND
@@ -99,17 +102,23 @@ def fit_note(z: np.ndarray, fs_d: float, poles: np.ndarray, partial_freqs: list[
     return amps
 
 
+def excluded(note: dict) -> tuple[list[float], float]:
+    """The frequencies whose neighbourhood the body fit leaves out, and the half width of each: the partials
+    measured, and those too quiet to be analysed, which still sit on the stiff-string law."""
+    f0 = note["f0"]
+    centres = [p["centre"] for p in note["partials"]]
+    n_max = int(BAND[1] / max(f0, 1.0)) + 2
+    law = [n * f0 * np.sqrt(1 + note["inharmonicity"] * n * n) for n in range(1, n_max + 1)]
+    return centres + law, min(0.33 * f0, 30.0)
+
+
 def _fit_task(args) -> dict:
     path, note, freqs, decays = args
     z, fs_d = residual_baseband(Path(path), note)
     lo, hi = BAND  # the poles at this take's own baseband rate (it depends on the take's length)
     poles = np.exp((-np.asarray(decays) + 2j * np.pi * (np.asarray(freqs) - (lo + hi) / 2)) / fs_d)
-    f0 = note["f0"]
-    centres = [p["centre"] for p in note["partials"]]
-    # Partials not analysed (too quiet) still sit on the stiff-string law: exclude their bins as well.
-    n_max = int(BAND[1] / max(f0, 1.0)) + 2
-    law = [n * f0 * np.sqrt(1 + note["inharmonicity"] * n * n) for n in range(1, n_max + 1)]
-    amps = fit_note(z, fs_d, poles, centres + law, half_width=min(0.33 * f0, 30.0))
+    partials, half_width = excluded(note)
+    amps = fit_note(z, fs_d, poles, partials, half_width=half_width)
     i0 = int(round(T0 * fs_d))
     amps0 = amps / (poles[None, :] ** i0)  # back to t = 0 (the note-on)
     return {"midi": note["midi"], "name": note["name"],
