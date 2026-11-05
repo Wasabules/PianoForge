@@ -18,6 +18,44 @@ int SampleBank::pick(int note, int velocity) const noexcept
     return best;
 }
 
+namespace {
+/// Index `lo` and weight `w` such that x lies between axis[lo] and axis[lo + 1] (clamped at both ends).
+template <typename T>
+void bracket(const std::vector<T>& axis, double x, int& lo, double& w) noexcept
+{
+    lo = 0;
+    w = 0.0;
+    if (axis.size() < 2 || x <= (double) axis.front())
+        return;
+    if (x >= (double) axis.back()) {
+        lo = (int) axis.size() - 2;
+        w = 1.0;
+        return;
+    }
+    while (lo + 2 < (int) axis.size() && (double) axis[(size_t) lo + 1] <= x)
+        ++lo;
+    w = (x - (double) axis[(size_t) lo]) / ((double) axis[(size_t) lo + 1] - (double) axis[(size_t) lo]);
+}
+} // namespace
+
+void ReleaseCurves::evaluate(int note, double holdSeconds, float* gains) const noexcept
+{
+    // Called on the audio thread at each key release: no allocation here.
+    int n0, h0;
+    double wn, wh;
+    bracket(notes, (double) note, n0, wn);
+    bracket(logHolds, std::log(std::max(holdSeconds, 1.0e-3)), h0, wh);
+
+    const int numHolds = (int) holds.size();
+    const int n1 = std::min(n0 + 1, (int) notes.size() - 1), h1 = std::min(h0 + 1, numHolds - 1);
+    auto at = [&](int n, int h, int k) { return db[((size_t) n * (size_t) numHolds + (size_t) h) * (size_t) length + (size_t) k]; };
+    for (int k = 0; k < length; ++k) {
+        const double low = at(n0, h0, k) * (1 - wh) + at(n0, h1, k) * wh;
+        const double high = at(n1, h0, k) * (1 - wh) + at(n1, h1, k) * wh;
+        gains[k] = (float) std::pow(10.0, (low * (1 - wn) + high * wn) / 20.0);
+    }
+}
+
 std::uint64_t SampleBank::bytes() const noexcept
 {
     std::uint64_t n = 0;
@@ -32,6 +70,7 @@ struct Entry {
     juce::File audio;
     int note = 0, velocity = 0;
     float releaseDecay40 = -1.0f;
+    std::int64_t noteOnFrame = 0;
 };
 
 /// xorshift32: fast and deterministic, for dithering.
@@ -61,6 +100,7 @@ bool decode(juce::AudioFormatManager& formats, const Entry& entry, Sample& s, do
     s.note = entry.note;
     s.velocity = entry.velocity;
     s.releaseDecay40 = entry.releaseDecay40;
+    s.noteOnFrame = juce::jlimit<std::int64_t>(0, n - 1, entry.noteOnFrame);
     s.length = n;
     s.peak = buffer.getMagnitude(0, n);
     s.pcm.resize((size_t) n * 2);
@@ -139,6 +179,7 @@ void BankLoader::run()
             continue;
         const auto t40 = meta["release_decay_40db_s"];
         e.releaseDecay40 = (t40.isDouble() || t40.isInt() || t40.isInt64()) ? (float) (double) t40 : -1.0f;
+        e.noteOnFrame = (juce::int64) meta["note_on_sample"]; // missing in the JSON: 0
         e.audio = json.withFileExtension("flac");
         if (!e.audio.existsAsFile())
             e.audio = json.withFileExtension("wav");
@@ -186,12 +227,41 @@ void BankLoader::run()
             return bank->samples[(size_t) a].velocity < bank->samples[(size_t) b].velocity;
         });
 
+    // Damper curves measured by the forge, next to the corpus passes (optional).
+    juce::String damperInfo = "no damper curves (exponential approximation)";
+    if (const auto curvesFile = folder.getParentDirectory().getChildFile("release-curves.json"); curvesFile.existsAsFile()) {
+        const auto json = juce::JSON::parse(curvesFile);
+        auto& rc = bank->releaseCurves;
+        rc.stepSeconds = (double) json["step_s"];
+        for (const auto& n : *json["notes"].getArray())
+            rc.notes.push_back((int) n);
+        for (const auto& h : *json["holds_s"].getArray()) {
+            rc.holds.push_back((double) h);
+            rc.logHolds.push_back(std::log((double) h));
+        }
+        const auto* perNote = json["curves_db"].getArray();
+        rc.length = 0;
+        if (perNote != nullptr && !perNote->isEmpty() && (*perNote)[0].getArray() != nullptr
+            && !(*perNote)[0].getArray()->isEmpty())
+            rc.length = juce::jmin(ReleaseCurves::kMaxPoints, (*(*perNote)[0].getArray())[0].getArray()->size());
+        if (perNote != nullptr && rc.length > 0 && perNote->size() == (int) rc.notes.size()) {
+            for (const auto& noteCurves : *perNote)
+                for (const auto& curve : *noteCurves.getArray())
+                    for (int k = 0; k < rc.length; ++k)
+                        rc.db.push_back((float) (double) (*curve.getArray())[k]);
+        }
+        if (rc.db.size() != rc.notes.size() * rc.holds.size() * (size_t) rc.length || rc.stepSeconds <= 0.0)
+            rc = {}; // malformed file: keep the fallback
+        else
+            damperInfo = "damper curves for " + juce::String((int) rc.notes.size()) + " measured notes";
+    }
+
     int notes = 0;
     for (const auto& list : bank->byNote)
         notes += list.empty() ? 0 : 1;
     auto summary = juce::String((int) entries.size() - failures.load()) + " takes, " + juce::String(notes) + " notes, "
                  + juce::String((double) bank->bytes() / 1.0e9, 2) + " GB in memory, loaded in "
-                 + juce::String((juce::Time::getMillisecondCounterHiRes() - start) / 1000.0, 1) + " s";
+                 + juce::String((juce::Time::getMillisecondCounterHiRes() - start) / 1000.0, 1) + " s, " + damperInfo;
     if (failures > 0)
         summary << "; " << failures.load() << " unreadable files";
     if (mismatchedRates > 0)

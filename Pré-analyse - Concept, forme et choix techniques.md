@@ -411,6 +411,11 @@ séance.toml ──► protocole ──► prises (événements MIDI datés à l
   - **Demi-pédale : progressive.** Par rapport à la même note tenue sans pédale, l'étouffement commence dès que la pédale remonte un peu (−1 dB à CC64 = 104). Il s'accentue jusqu'à CC64 ≈ 16 (−8 dB sur C2, −13 dB sur C4), puis l'étouffoir se referme complètement entre 8 et 0 (−50 dB). C'est la référence des étouffoirs continus.
   - **Bruit de pédale : absent** (silence numérique) avec Basic Pure.
   - **« All Resonance »** n'est pas un réglage de résonance des cordes : c'est un preset de couleur sonore, qui pousse la réverbération au maximum. Il est écarté.
+- **Le lecteur de l'atelier comparé à Noire sur une pièce entière** (« Study No. 1 », 180 notes, `studies/compare_renders.py`, 5 novembre 2026) :
+  - **Étouffoirs.** Ils sont mesurés par la forge (`forge release-curves`) en comparant les prises `releases` et `single-notes`, qui sont identiques au bit près jusqu'au relâchement. Une note fraîche perd 7 à 14 dB en 100 ms, et rien ne se passe au-dessus de A6. L'ancien modèle, une seule exponentielle réglée sur des notes tenues longtemps, était trois à quatre fois trop lent. C#6 non étouffé dans Noire est écarté comme anomalie de la bibliothèque.
+  - **Bug de 50 ms corrigé.** Le lecteur jouait les 50 ms de pré-roll des prises, ce qui ajoutait 50 ms de latence à chaque note.
+  - **Résultat.** L'écart moyen d'enveloppe passe de 2,4 à **0,9 dB** sur la pièce, et de 6,6 à **1,1 dB** dans le passage staccato. Le test d'annulation descend de +2,3 à −4,9 dB.
+  - **Limites connues.** Les sons de relâchement de Noire (bruit de touche et d'étouffoir), qui dominent après une longue tenue, ne sont pas reproduits par une courbe de gain. Les tenues longues et le relâchement de pédale s'étouffent 2 à 6 dB trop lentement dans le grave. Ces écarts restent vers −90 dBFS.
 
 **La préparation de Kontakt, une seule fois**
 

@@ -176,9 +176,12 @@ void ReferencePlayer::noteOn(const SampleBank& b, int note, int velocity) noexce
     v.released = false;
     v.sample = index;
     v.note = note;
-    v.position = 0;
+    v.position = b.samples[(size_t) index].noteOnFrame; // skip the take's pre-roll: no added latency
+    v.sinceOn = 0;
     v.gain = 1.0f;
     v.decay = 1.0f;
+    v.damperCurve = false;
+    v.curveGain = 1.0f;
     v.age = ++ageCounter;
     v.left.reset();
     v.right.reset();
@@ -199,6 +202,14 @@ void ReferencePlayer::releaseVoice(const SampleBank& b, Voice& v) noexcept
 {
     if (v.released)
         return;
+    if (!b.releaseCurves.empty()) { // measured damper: depends on the note and on how long it was held
+        b.releaseCurves.evaluate(v.note, (double) v.sinceOn / sampleRate, v.releaseGains.data());
+        v.curvePoints = b.releaseCurves.length;
+        v.sinceRelease = 0;
+        v.damperCurve = true;
+        v.released = true;
+        return;
+    }
     const float t40 = b.samples[(size_t) v.sample].releaseDecay40;
     if (t40 <= 0.0f)
         return; // no damper measured (top treble): the string keeps ringing
@@ -263,7 +274,7 @@ bool ReferencePlayer::produce(const SampleBank& b, Voice& v, int m) noexcept
         return false;
     }
 
-    if (v.released) {
+    if (v.released && v.decay < 1.0f) {
         float g = v.gain;
         const float d = v.decay;
         for (int k = 0; k < m; ++k) {
@@ -273,7 +284,23 @@ bool ReferencePlayer::produce(const SampleBank& b, Voice& v, int m) noexcept
         }
         v.gain = g;
     }
-    return v.position < s.length && v.gain > kSilentGain;
+    if (v.damperCurve) { // linear interpolation between the curve points
+        const double pointsPerFrame = 1.0 / (b.releaseCurves.stepSeconds * sampleRate);
+        const int last = v.curvePoints - 1;
+        float g = v.curveGain;
+        for (int k = 0; k < m; ++k) {
+            const double p = (double) (v.sinceRelease + k) * pointsPerFrame;
+            const int i = (int) p;
+            g = i < last ? v.releaseGains[(size_t) i] + (float) (p - i) * (v.releaseGains[(size_t) i + 1] - v.releaseGains[(size_t) i])
+                         : v.releaseGains[(size_t) last];
+            bufferL[(size_t) k] *= g;
+            bufferR[(size_t) k] *= g;
+        }
+        v.sinceRelease += m;
+        v.curveGain = g;
+    }
+    v.sinceOn += m;
+    return v.position < s.length && v.gain * v.curveGain > kSilentGain;
 }
 
 } // namespace pf::app

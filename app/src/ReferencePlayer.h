@@ -38,8 +38,9 @@ public:
     std::atomic<float> outputGain { 1.0f };
     std::atomic<bool> playWholeTake { false }; // true: the take plays to its end, key releases are ignored
     // Re-strike: the previous voice of the same note keeps sounding and fades to -40 dB within this time.
-    // 0.8 s fits the reference library best (studies/restrike_fit.py: 3.4 dB mean envelope error, against
-    // 6.0 dB for a 15 ms cut).
+    // studies/restrike_fit.py (playback aligned on the note-on): fades from 15 ms to 0.4 s fit the reference
+    // library equally (2.4 dB mean envelope error), 0.8 s is close (2.5 dB) and sounded better by ear than a
+    // cut, so it is the default; between strikes, the damper does most of the work anyway.
     std::atomic<float> restrikeFadeSeconds { 0.8f };
     static constexpr int kMaxVoicesPerNote = 4; // beyond this, the oldest voice of the note is cut quickly
 
@@ -55,8 +56,15 @@ private:
     struct Voice {
         bool active = false, keyDown = false, released = false;
         int sample = -1, note = -1;
-        std::int64_t position = 0; // in corpus frames
-        float gain = 1.0f, decay = 1.0f;
+        std::int64_t position = 0;   // in corpus frames
+        std::int64_t sinceOn = 0;    // output frames since the note-on
+        float gain = 1.0f, decay = 1.0f; // exponential envelope (re-strike, fallback damper, fast fades)
+        // Measured damper curve, applied from the key release on (linear gains, one point per curve step).
+        bool damperCurve = false;
+        int curvePoints = 0;
+        std::int64_t sinceRelease = 0;
+        float curveGain = 1.0f;
+        std::array<float, ReleaseCurves::kMaxPoints> releaseGains {};
         std::uint64_t age = 0;
         juce::LagrangeInterpolator left, right;
     };

@@ -38,7 +38,7 @@ def per_sample_log_rate(t40: float, fs: int) -> float:
     return -math.log(100.0) / (t40 * fs) if math.isfinite(t40) and t40 > 0 else 0.0
 
 
-def simulate(events, single: np.ndarray, t40: float, fade: float, n: int, fs: int) -> np.ndarray:
+def simulate(events, single: np.ndarray, t40: float, fade: float, n: int, fs: int, note_on: int = 0) -> np.ndarray:
     """Same rules as ReferencePlayer: decay rates only get faster; a voice is a gain-shaped copy of the take."""
     voices = []  # (start, rate changes [(time, log rate)], key down)
     for t, b in events:
@@ -54,6 +54,7 @@ def simulate(events, single: np.ndarray, t40: float, fade: float, n: int, fs: in
                     v["down"] = False
                     v["changes"].append((t, per_sample_log_rate(t40, fs)))
     out = np.zeros((2, n))
+    single = single[:, note_on:]  # playback starts at the note-on of the take, after its pre-roll
     for v in voices:
         start = v["start"]
         length = min(single.shape[1], n - start)
@@ -81,7 +82,8 @@ for path in sorted((root / "repetitions").glob("*.flac")):
     valid = ref_env > ref_env.max() - 60  # ignore the noise floor
     errors = []
     for fade in FADES:
-        sim_env = envelope_db(simulate(events, single, t40, fade, reference.shape[1], fs), fs)
+        sim_env = envelope_db(simulate(events, single, t40, fade, reference.shape[1], fs,
+                                       single_meta.get("note_on_sample", 0)), fs)
         mask = valid.copy()
         mask[:first] = False
         errors.append(float(np.mean(np.abs(sim_env[mask] - ref_env[mask]))))

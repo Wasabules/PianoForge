@@ -114,18 +114,22 @@ int runSelfTest(const juce::StringArray& arguments)
     player.prepare(fs, 512);
     player.playWholeTake = true;
     double worst = -300.0;
+    bool startsAtNoteOn = true;
     for (const auto* s : takes) {
         flush(player, fs);
-        const auto rendered = renderNote(player, s->note, s->velocity, (int) s->length, 512);
+        const int start = (int) s->noteOnFrame; // playback skips the take's pre-roll
+        startsAtNoteOn = startsAtNoteOn && start > 0;
+        const auto rendered = renderNote(player, s->note, s->velocity, (int) (s->length - start), 512);
         const auto reference = decodeFile(s->file);
         float diff = 0.0f;
         for (int c = 0; c < 2; ++c)
-            for (int k = 0; k < juce::jmin(rendered.getNumSamples(), reference.getNumSamples()); ++k)
-                diff = juce::jmax(diff, std::abs(rendered.getSample(c, k) - reference.getSample(c, k)));
+            for (int k = 0; k < juce::jmin(rendered.getNumSamples(), reference.getNumSamples() - start); ++k)
+                diff = juce::jmax(diff, std::abs(rendered.getSample(c, k) - reference.getSample(c, k + start)));
         worst = juce::jmax(worst, (double) juce::Decibels::gainToDecibels(diff / s->peak, -300.0f));
     }
-    r.check(worst < -80.0, "fidelity over " + juce::String((int) takes.size()) + " takes: largest difference "
-                               + juce::String(worst, 1) + " dB below each take's peak (threshold -80 dB)");
+    r.check(worst < -80.0 && startsAtNoteOn,
+            "fidelity over " + juce::String((int) takes.size()) + " takes, from the note-on (pre-roll skipped): largest "
+                "difference " + juce::String(worst, 1) + " dB below each take's peak (threshold -80 dB)");
 
     // 3. Resampling: output at 44.1 kHz, the level must be preserved.
     const Sample* c4 = takes.front();
@@ -137,7 +141,7 @@ int runSelfTest(const juce::StringArray& arguments)
         flush(player, 44100.0);
         const auto rendered = renderNote(player, c4->note, c4->velocity, 2 * 44100, 512);
         const auto reference = decodeFile(c4->file);
-        const double levelDiff = rmsDb(rendered, 0, 2 * 44100) - rmsDb(reference, 0, (int) (2 * fs));
+        const double levelDiff = rmsDb(rendered, 0, 2 * 44100) - rmsDb(reference, (int) c4->noteOnFrame, (int) (2 * fs));
         bool finite = true;
         for (int c = 0; c < 2; ++c)
             for (int k = 0; k < rendered.getNumSamples(); ++k)
@@ -146,10 +150,30 @@ int runSelfTest(const juce::StringArray& arguments)
                 "resampling 48 -> 44.1 kHz: level difference " + juce::String(levelDiff, 3) + " dB (threshold +-0.2 dB)");
     }
 
-    // 4. Key release: -40 dB reached at the time measured by the bench (plus the note's own decay).
+    // 4. Key release. With the measured damper curves, the release of A0 (velocity 80, held 0.5 s) must follow
+    //    the library's own release take; without them, the exponential fallback must reach -40 dB in time.
     player.prepare(fs, 512);
     player.playWholeTake = false;
-    if (c4->releaseDecay40 > 0.0f) {
+    const auto releaseTake = folder.getParentDirectory().getChildFile("releases").getChildFile("021-A0_v080_h500ms.flac");
+    if (!b->releaseCurves.empty() && releaseTake.existsAsFile() && !b->byNote[21].empty()) {
+        flush(player, fs);
+        const int hold = (int) std::lround(0.5 * fs), preroll = (int) std::lround(0.05 * fs), win = (int) (0.02 * fs);
+        const auto rendered = renderNote(player, 21, 80, hold + (int) (2.0 * fs), 512, hold);
+        const auto reference = decodeFile(releaseTake); // note-on after a 50 ms pre-roll
+        const double atRelease = rmsDb(reference, preroll + hold - win, win);
+        double sum = 0.0;
+        int count = 0;
+        for (int k = win; k < (int) (1.5 * fs); k += win) {
+            const double ref = rmsDb(reference, preroll + hold + k, win);
+            if (ref < atRelease - 60.0)
+                continue; // below the noise floor of the comparison
+            sum += std::abs(rmsDb(rendered, hold + k, win) - ref);
+            ++count;
+        }
+        const double error = count > 0 ? sum / count : 99.0;
+        r.check(error < 4.0, "key release of A0 (velocity 80, held 0.5 s) against the library's release take: mean "
+                                 "envelope error " + juce::String(error, 1) + " dB over 1.5 s (threshold 4 dB)");
+    } else if (c4->releaseDecay40 > 0.0f) {
         flush(player, fs);
         const int releaseAt = (int) fs;
         const int t40 = (int) (c4->releaseDecay40 * fs);

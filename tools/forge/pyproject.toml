@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pianoforge-forge"
+version = "0.1.0"
+description = "PianoForge forge: analysis and calibration tools that turn the reference corpus into engine data."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.0",
+    "soundfile>=0.12",
+]
+
+[project.scripts]
+forge = "forge.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["forge*"]

@@ -55,14 +55,16 @@ residual = db(np.sqrt(np.mean((a - b) ** 2))) - db(np.sqrt(np.mean(a ** 2)))
 print(f"Null test: residual A - B is {residual:.1f} dB relative to A "
       f"(0 dB = unrelated signals, below -20 dB = very close)\n")
 
-print("Per section: B - A, level (dB) and spectral balance per band (dB)")
-print(f"  {'section':<16} {'level':>6}   " + "  ".join(f"{lo}-{hi} Hz" for lo, hi in BANDS))
+print("Per section: B - A, level (dB), mean |envelope difference| (dB) and spectral balance per band (dB)")
+print(f"  {'section':<16} {'level':>6} {'|env|':>6}   " + "  ".join(f"{lo}-{hi} Hz" for lo, hi in BANDS))
 bounds = sections + [n / fs]
 for s0, s1 in zip(bounds, bounds[1:]):
     i0, i1 = round(s0 * fs), round(s1 * fs)
     level = db(np.sqrt(np.mean(b[:, i0:i1] ** 2))) - db(np.sqrt(np.mean(a[:, i0:i1] ** 2)))
+    sel = (t_env >= s0) & (t_env < s1) & audible
+    env_err = float(np.mean(np.abs(env_b - env_a)[sel])) if sel.any() else float("nan")
     bal = np.array(band_levels(b[:, i0:i1])) - np.array(band_levels(a[:, i0:i1]))
-    print(f"  {s0:6.1f}-{s1:5.1f} s   {level:+6.1f}   " + "  ".join(f"{v:+9.1f}" for v in bal))
+    print(f"  {s0:6.1f}-{s1:5.1f} s   {level:+6.1f} {env_err:6.1f}   " + "  ".join(f"{v:+9.1f}" for v in bal))
 
 # A/B listening file: alternate every 4 s with 20 ms crossfades.
 seg, fade = round(4 * fs), round(0.02 * fs)
