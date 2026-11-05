@@ -8,6 +8,7 @@ target_sources(PianoForgeApp PRIVATE
     src/Main.cpp
     src/SampleBank.cpp
     src/ReferencePlayer.cpp
+    src/TakeRecorder.cpp
     src/MainComponent.cpp
     src/VelocityCurveEditor.cpp
     src/SelfTest.cpp

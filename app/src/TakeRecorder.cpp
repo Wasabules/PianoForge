@@ -1,0 +1,79 @@
+#include "TakeRecorder.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+
+namespace pf::app {
+
+void TakeRecorder::add(const std::vector<RecordedEvent>& newEvents, std::uint32_t currentSegment, double currentRate)
+{
+    if (currentRate > 0.0)
+        rates[currentSegment] = currentRate;
+    events.insert(events.end(), newEvents.begin(), newEvents.end());
+}
+
+std::optional<TakeRecorder::Take> TakeRecorder::lastTake(double gapSeconds, double leadSeconds) const
+{
+    if (events.empty())
+        return std::nullopt;
+    const auto segment = events.back().segment;
+    const auto rate = rates.count(segment) != 0 ? rates.at(segment) : 0.0;
+    if (rate <= 0.0)
+        return std::nullopt;
+
+    // Walk back to the last long silence (or the start of the device session).
+    const auto gap = (std::int64_t) std::llround(gapSeconds * rate);
+    std::size_t first = events.size() - 1;
+    while (first > 0 && events[first - 1].segment == segment && events[first].sample - events[first - 1].sample < gap)
+        --first;
+
+    // Pedals already down when the take starts: re-stated at its start.
+    std::array<int, 128> controllers {};
+    controllers.fill(-1);
+    for (std::size_t i = 0; i < first; ++i)
+        if (events[i].segment == segment && (events[i].status & 0xF0) == 0xB0)
+            controllers[events[i].data1] = events[i].data2;
+
+    Take take;
+    take.sampleRate = rate;
+    const auto start = std::max<std::int64_t>(0, events[first].sample - (std::int64_t) std::llround(leadSeconds * rate));
+    for (const int cc : { 64, 66, 67 })
+        if (controllers[(size_t) cc] > 0)
+            take.events.push_back({ 0, segment, 0xB0, (std::uint8_t) cc, (std::uint8_t) controllers[(size_t) cc] });
+    for (std::size_t i = first; i < events.size(); ++i) {
+        auto e = events[i];
+        e.sample -= start;
+        take.events.push_back(e);
+        take.notes += ((e.status & 0xF0) == 0x90 && e.data2 > 0) ? 1 : 0;
+    }
+    take.lengthSamples = take.events.back().sample;
+    return take;
+}
+
+juce::MidiFile TakeRecorder::toMidiFile(const Take& take)
+{
+    juce::MidiMessageSequence sequence; // timestamps in ticks: one tick per sample
+    sequence.addEvent(juce::MidiMessage::tempoMetaEvent(500000), 0.0); // 120 BPM
+    sequence.addEvent(juce::MidiMessage::textMetaEvent(1, "PianoForge take, sample rate " + juce::String(take.sampleRate, 0)
+                                                              + " Hz, velocities after the velocity curve"), 0.0);
+    for (const auto& e : take.events)
+        sequence.addEvent(juce::MidiMessage(e.status, e.data1, e.data2), (double) e.sample);
+    sequence.addEvent(juce::MidiMessage::endOfTrack(), (double) take.lengthSamples + take.sampleRate);
+    // No updateMatchedPairs(): it inserts a note-off before a re-strike of a note still held, which changes what
+    // the engine receives (a damper release instead of a re-strike). The file holds exactly what was played.
+    juce::MidiFile file;
+    file.setTicksPerQuarterNote((int) std::lround(take.sampleRate / 2.0));
+    file.addTrack(sequence);
+    return file;
+}
+
+juce::MidiMessageSequence TakeRecorder::toSequence(const Take& take)
+{
+    juce::MidiMessageSequence sequence;
+    for (const auto& e : take.events)
+        sequence.addEvent(juce::MidiMessage(e.status, e.data1, e.data2), (double) e.sample / take.sampleRate);
+    return sequence; // events exactly as played (see toMidiFile)
+}
+
+} // namespace pf::app

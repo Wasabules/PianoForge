@@ -530,6 +530,9 @@ Le mode temps réel (port MIDI virtuel et capture en loopback) n'a pas été éc
 
 **Phase 0 entamée.** L'application JUCE existe sous forme d'atelier d'écoute (`app/`) : clavier de 88 touches jouable à la souris, au clavier du PC (AZERTY ou QWERTY) et au clavier MIDI ; pédale forte ; choix de la sortie audio. Elle joue le corpus de référence derrière l'interface `pf::Engine` (`engine/`), celle que le moteur modal implémentera, ce qui permettra l'A/B. Un autotest sans interface (`PianoForge --selftest`) contrôle la fidélité de lecture, le rééchantillonnage, le relâchement et la charge.
 
+**Capture des prises (5 novembre 2026).** L'hôte audio enregistre en permanence, sans verrou, chaque événement qui atteint le moteur, à l'échantillon près. « Save last take » garde ce qui a été joué depuis le dernier silence de 10 s. La prise est écrite en SMF, avec un tick par échantillon (tempo 120, ticks par noire = fréquence / 2), et les pédales déjà enfoncées sont rappelées au début. Un rendu WAV est fait en arrière-plan avec les réglages entendus, dans `Documents/PianoForge/Takes`. L'autotest joue une séquence par l'hôte (accord, pédale, refrappe d'une note tenue), l'exporte, la relit, la re-rend, et retrouve **l'audio en direct au bit près**. Le critère de sortie « une prise re-rendue à l'identique » de la phase 0 est donc tenu pour le lecteur de référence.
+  - **Piège JUCE.** `MidiFile::readFrom` et `MidiMessageSequence::updateMatchedPairs` ajoutent par défaut un note-off avant toute refrappe d'une note encore tenue. Le moteur reçoit alors un relâchement (étouffoir) au lieu d'une refrappe. La prise doit être écrite et relue telle quelle (`readFrom(in, false)`, sans `updateMatchedPairs`).
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

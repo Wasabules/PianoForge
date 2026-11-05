@@ -1,5 +1,7 @@
 #include "MainComponent.h"
 
+#include "OfflineRender.h"
+
 namespace pf::app {
 
 namespace {
@@ -90,6 +92,20 @@ MainComponent::MainComponent()
     addAndMakeVisible(corpusButton);
     addAndMakeVisible(curveButton);
 
+    saveTakeButton.setButtonText("Save last take");
+    saveTakeButton.onClick = [this] { saveLastTake(); };
+    takesFolderButton.setButtonText("Takes folder");
+    takesFolderButton.onClick = [] {
+        takesFolder().createDirectory();
+        takesFolder().startAsProcess();
+    };
+    takeStatus.setText("Every note is captured. 'Save last take' keeps what was played since the last 10 s of silence, "
+                       "as a MIDI file and a WAV render, in " + takesFolder().getFullPathName(),
+                       juce::dontSendNotification);
+    addAndMakeVisible(saveTakeButton);
+    addAndMakeVisible(takesFolderButton);
+    addAndMakeVisible(takeStatus);
+
     sustainButton.setButtonText("Sustain pedal (Space)");
     sustainButton.onClick = [this] { sendSustain(sustainButton.getToggleState()); };
     wholeTakeButton.setButtonText("Play the whole take (ignore key release)");
@@ -147,7 +163,7 @@ MainComponent::MainComponent()
         corpusStatus.setText("No corpus found: use 'Change corpus...' and pick corpus/reference/noire-dry/single-notes",
                              juce::dontSendNotification);
 
-    setSize(1400, 500);
+    setSize(1400, 540);
     startTimerHz(20);
 }
 
@@ -155,6 +171,8 @@ MainComponent::~MainComponent()
 {
     stopTimer();
     saveSettings();
+    if (takeRender.joinable())
+        takeRender.join();
     curveWindow.reset(); // it refers to curveSettings and keyboardInput
     keyboard.removeKeyListener(this);
     deviceManager.removeChangeListener(this);
@@ -257,6 +275,57 @@ void MainComponent::updateRenderedLayers()
     curveWindow->panel().setRenderedLayers(std::move(layers));
 }
 
+juce::File MainComponent::takesFolder()
+{
+    return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("PianoForge").getChildFile("Takes");
+}
+
+void MainComponent::saveLastTake()
+{
+    const auto take = takes.lastTake();
+    if (!take.has_value() || take->notes == 0) {
+        takeStatus.setText("Nothing played yet: play something, then save it.", juce::dontSendNotification);
+        return;
+    }
+    const auto folder = takesFolder();
+    folder.createDirectory();
+    const auto stem = "take-" + juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S");
+    const auto midiFile = folder.getChildFile(stem + ".mid"), wavFile = folder.getChildFile(stem + ".wav");
+    {
+        juce::FileOutputStream out(midiFile);
+        if (!out.openedOk() || !TakeRecorder::toMidiFile(*take).writeTo(out)) {
+            takeStatus.setText("Cannot write " + midiFile.getFullPathName(), juce::dontSendNotification);
+            return;
+        }
+    }
+    const auto summary = juce::String(take->notes) + " notes, " + juce::String((double) take->lengthSamples / take->sampleRate, 1) + " s";
+    auto bank = player.sharedBank();
+    if (bank == nullptr || renderingTake.load()) {
+        takeStatus.setText("Saved " + midiFile.getFileName() + " (" + summary + ").", juce::dontSendNotification);
+        return;
+    }
+    takeStatus.setText("Saved " + midiFile.getFileName() + " (" + summary + "); rendering the WAV...", juce::dontSendNotification);
+    if (takeRender.joinable())
+        takeRender.join();
+    renderingTake = true;
+    // Same engine and settings as heard live, at the rate it was played: the WAV is the take as heard.
+    takeRender = std::thread([sequence = TakeRecorder::toSequence(*take), bank = std::move(bank), rate = take->sampleRate,
+                              restrike = (float) restrikeFade.getValue(), whole = wholeTakeButton.getToggleState(),
+                              wavFile, summary, safe = juce::Component::SafePointer<MainComponent>(this)] {
+        const auto audio = renderSequence(sequence, bank, rate, restrike, whole);
+        const auto written = writeWav(audio, rate, wavFile);
+        juce::MessageManager::callAsync([safe, written, wavFile, summary] {
+            if (auto* self = safe.getComponent()) {
+                self->renderingTake = false;
+                self->takeStatus.setText(written.wasOk() ? "Saved " + wavFile.getFileNameWithoutExtension() + " .mid and .wav ("
+                                                               + summary + ") in " + wavFile.getParentDirectory().getFullPathName()
+                                                         : "WAV render failed: " + written.getErrorMessage(),
+                                         juce::dontSendNotification);
+            }
+        });
+    });
+}
+
 void MainComponent::chooseCorpus()
 {
     fileChooser = std::make_unique<juce::FileChooser>("Folder of one corpus pass (e.g. single-notes)",
@@ -327,6 +396,10 @@ void MainComponent::timerCallback()
         keyboard.grabKeyboardFocus();
         focusGiven = true;
     }
+
+    drained.clear(); // take capture: move what reached the engine into the session record
+    host.drainRecorded(drained);
+    takes.add(drained, host.currentSegment(), host.currentRate());
 
     if (loader.isLoading()) {
         loadProgress = loader.progress();
@@ -439,6 +512,13 @@ void MainComponent::resized()
     row = area.removeFromTop(28);
     restrikeLabel.setBounds(row.removeFromLeft(270));
     restrikeFade.setBounds(row.removeFromLeft(300));
+
+    area.removeFromTop(6);
+    row = area.removeFromTop(28);
+    saveTakeButton.setBounds(row.removeFromLeft(140).reduced(2));
+    takesFolderButton.setBounds(row.removeFromLeft(120).reduced(2));
+    row.removeFromLeft(8);
+    takeStatus.setBounds(row);
 }
 
 } // namespace pf::app

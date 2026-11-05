@@ -2,8 +2,10 @@
 
 #include "AudioHost.h"
 #include "KeyboardInput.h"
+#include "OfflineRender.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
+#include "TakeRecorder.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -266,6 +268,88 @@ int runSelfTest(const juce::StringArray& arguments)
         r.check(right_after == 2 && two_seconds_later == 1,
                 "re-strike of C4: " + juce::String(right_after) + " voices right after (expected 2), "
                     + juce::String(two_seconds_later) + " two seconds later (expected 1)");
+    }
+
+    // 8. Takes: a session played through the audio host (notes, pedal, re-strike), saved as a take, written to a
+    //    MIDI file (one tick per sample), read back and rendered offline, must give exactly the live audio.
+    {
+        player.playWholeTake = false;
+        player.restrikeFadeSeconds = 0.8f;
+        AudioHost host { player };
+        host.start(fs, 512);
+        const int blocks = (int) (4.0 * fs) / 512;
+        juce::AudioBuffer<float> live(2, blocks * 512);
+        std::vector<float> l(512), rr(512);
+        float* outputs[2] = { l.data(), rr.data() };
+        const std::vector<std::pair<int, juce::MidiMessage>> script = {
+            { 10, juce::MidiMessage::noteOn(1, 60, (juce::uint8) 90) }, { 12, juce::MidiMessage::noteOn(1, 64, (juce::uint8) 70) },
+            { 40, juce::MidiMessage::controllerEvent(1, 64, 127) }, { 60, juce::MidiMessage::noteOff(1, 60) },
+            { 62, juce::MidiMessage::noteOff(1, 64) }, { 150, juce::MidiMessage::controllerEvent(1, 64, 0) },
+            { 200, juce::MidiMessage::noteOn(1, 60, (juce::uint8) 50) }, { 215, juce::MidiMessage::noteOn(1, 60, (juce::uint8) 100) },
+            { 260, juce::MidiMessage::noteOff(1, 60) } };
+        size_t next = 0;
+        for (int k = 0; k < blocks; ++k) {
+            while (next < script.size() && script[next].first == k)
+                host.send(script[next++].second);
+            host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, 512, {});
+            live.copyFrom(0, k * 512, l.data(), 512);
+            live.copyFrom(1, k * 512, rr.data(), 512);
+        }
+        std::vector<RecordedEvent> recorded;
+        host.drainRecorded(recorded);
+        TakeRecorder recorder;
+        recorder.add(recorded, host.currentSegment(), host.currentRate());
+        const auto take = recorder.lastTake(10.0, 0.2);
+        double worstDb = 999.0;
+        int notesInFile = 0;
+        if (take.has_value() && !recorded.empty()) {
+            const auto file = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("pianoforge-selftest-take.mid");
+            file.deleteFile();
+            {
+                juce::FileOutputStream out(file);
+                TakeRecorder::toMidiFile(*take).writeTo(out);
+            }
+            juce::MidiFile reread;
+            juce::FileInputStream in(file);
+            reread.readFrom(in, false); // false: the reader must not add note-offs either
+            reread.convertTimestampTicksToSeconds();
+            juce::MidiMessageSequence sequence;
+            for (int t = 0; t < reread.getNumTracks(); ++t)
+                sequence.addSequence(*reread.getTrack(t), 0.0);
+            for (const auto* e : sequence)
+                notesInFile += e->message.isNoteOn() ? 1 : 0;
+            const auto offline = renderSequence(sequence, player.sharedBank(), fs, 0.8f, false, 1.0);
+            const auto start = std::max<std::int64_t>(0, recorded.front().sample - (std::int64_t) std::llround(0.2 * fs));
+            float diff = 0.0f;
+            for (int c = 0; c < 2; ++c)
+                for (int k = 0; k < juce::jmin(offline.getNumSamples(), live.getNumSamples() - (int) start); ++k)
+                    diff = juce::jmax(diff, std::abs(offline.getSample(c, k) - live.getSample(c, k + (int) start)));
+            worstDb = juce::Decibels::gainToDecibels(diff, -300.0f);
+            if (worstDb > -120.0) { // diagnostic: events as recorded and as read back from the file
+                juce::String events = "    recorded (sample, bytes):";
+                for (const auto& e : take->events)
+                    events << " " << (int) e.sample << ":" << juce::String::toHexString(e.status) << "/" << (int) e.data1 << "/" << (int) e.data2;
+                events << "\n    from the file:";
+                for (const auto* e : sequence)
+                    if (e->message.isNoteOnOrOff() || e->message.isController())
+                        events << " " << (int) std::llround(e->message.getTimeStamp() * fs) << ":"
+                               << juce::String::toHexString(e->message.getRawData()[0]) << "/" << e->message.getRawData()[1] << "/"
+                               << (e->message.getRawDataSize() > 2 ? e->message.getRawData()[2] : 0);
+                int worstAt = 0;
+                float worstValue = 0.0f;
+                for (int k = 0; k < juce::jmin(offline.getNumSamples(), live.getNumSamples() - (int) start); ++k)
+                    if (const float d = std::abs(offline.getSample(0, k) - live.getSample(0, k + (int) start)); d > worstValue) {
+                        worstValue = d;
+                        worstAt = k;
+                    }
+                r.line(events + "\n    largest difference at sample " + juce::String(worstAt) + " of the take");
+            }
+            file.deleteFile();
+        }
+        r.check(take.has_value() && take->notes == 4 && notesInFile == 4 && worstDb < -120.0,
+                "take recorded live, saved as MIDI, re-rendered offline: " + juce::String(take.has_value() ? take->notes : 0)
+                    + " notes captured, " + juce::String(notesInFile) + " in the file, largest difference with the live audio "
+                    + (worstDb <= -300.0 ? juce::String("none (bit-identical)") : juce::String(worstDb, 1) + " dBFS"));
     }
 
     r.line(r.passed ? "RESULT: every check passes" : "RESULT: at least one check fails");

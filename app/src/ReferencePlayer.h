@@ -30,9 +30,11 @@ public:
                  const pf::Event* events, int numEvents) noexcept override;
     void allSoundOff() noexcept override;
 
-    /// Message thread: replaces the bank. The old one is only destroyed once the audio thread has let go of it.
-    void installBank(std::unique_ptr<SampleBank> newBank);
+    /// Message thread: replaces the bank. The old one is only released once the audio thread has let go of it.
+    /// The bank is shared (read-only): an offline render can use it while the live player plays.
+    void installBank(std::shared_ptr<const SampleBank> newBank);
     const SampleBank* bank() const noexcept { return owned.get(); }
+    std::shared_ptr<const SampleBank> sharedBank() const noexcept { return owned; }
 
     // Settings, read on every block.
     std::atomic<float> outputGain { 1.0f };
@@ -87,7 +89,7 @@ private:
     std::atomic<const SampleBank*> bankSeenByAudio { nullptr };
     std::atomic<bool> audioRunning { false };
     const SampleBank* currentBank = nullptr; // audio thread only
-    std::unique_ptr<SampleBank> owned;       // message thread only
+    std::shared_ptr<const SampleBank> owned; // message thread only
 };
 
 } // namespace pf::app

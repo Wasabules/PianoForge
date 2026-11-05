@@ -31,7 +31,7 @@ void ReferencePlayer::release() noexcept
     audioRunning = false;
 }
 
-void ReferencePlayer::installBank(std::unique_ptr<SampleBank> newBank)
+void ReferencePlayer::installBank(std::shared_ptr<const SampleBank> newBank)
 {
     publishedBank.store(nullptr, std::memory_order_release);
     if (owned != nullptr) {

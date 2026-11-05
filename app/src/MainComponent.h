@@ -4,11 +4,15 @@
 #include "KeyboardInput.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
+#include "TakeRecorder.h"
 #include "VelocityCurveEditor.h"
 
 #include <pianoforge/velocity_curve.hpp>
 
 #include <juce_audio_utils/juce_audio_utils.h>
+
+#include <atomic>
+#include <thread>
 
 namespace pf::app {
 
@@ -32,6 +36,8 @@ private:
 
     void openAudioSettings();
     void openVelocityCurve();
+    void saveLastTake();
+    static juce::File takesFolder();
     void updateRenderedLayers();
     void chooseCorpus();
     void loadCorpus(const juce::File& folder);
@@ -49,14 +55,18 @@ private:
     pf::VelocityCurve::Settings curveSettings;
     KeyboardInput keyboardInput { host.collector, velocityCurve }; // hardware keyboards go through the curve
     std::unique_ptr<VelocityCurveWindow> curveWindow;
+    TakeRecorder takes;                  // every event that reached the engine (message thread)
+    std::vector<RecordedEvent> drained;  // reused buffer
+    std::thread takeRender;              // renders a saved take to WAV in the background
+    std::atomic<bool> renderingTake { false };
     BankLoader loader;
     juce::MidiDeviceListConnection midiDevicesConnection;
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::File corpusFolder;
 
     juce::MidiKeyboardComponent keyboard { host.keyboardState, juce::KeyboardComponentBase::horizontalKeyboard };
-    juce::Label title, corpusStatus, audioStatus, noteStatus, engineStatus, help;
-    juce::TextButton audioButton, corpusButton, curveButton;
+    juce::Label title, corpusStatus, audioStatus, noteStatus, engineStatus, help, takeStatus;
+    juce::TextButton audioButton, corpusButton, curveButton, saveTakeButton, takesFolderButton;
     juce::ToggleButton sustainButton, wholeTakeButton;
     juce::Slider volume, velocity, restrikeFade;
     juce::Label volumeLabel, velocityLabel, restrikeLabel;
