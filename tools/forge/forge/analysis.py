@@ -95,9 +95,9 @@ def _t60(rate_db_s: float) -> float | None:
 def write_profile(data: dict, out: Path) -> None:
     lines = [
         "# PianoForge instrument profile (physics), first draft measured by the forge from the reference corpus.",
-        "# Per note: fundamental, inharmonicity B (f_n = n f0 sqrt(1 + B n^2)), tuning against equal temperament",
-        "# at A4 = 440 Hz, decay of the fundamental (prompt sound, after-sound, knee), and the damping law",
-        "# sigma = b1 + b3 omega^2 fitted on the prompt-sound decay of the partials.",
+        "# Per note: fundamental, inharmonicity B (f_n = n f0 sqrt(1 + B n^2)), tuning of the first partial against",
+        "# equal temperament at A4 = 440 Hz, decay of the whole note (prompt sound, and after-sound with its knee",
+        "# when the decay is double), and the damping law sigma = b1 + b3 omega^2 fitted on the partials.",
         "",
         "[instrument]",
         'name = "concert-grand-noire-pure"',
@@ -121,9 +121,11 @@ def write_profile(data: dict, out: Path) -> None:
         t_prompt, t_after = _t60(n["level_early_db_s"]), _t60(n["level_late_db_s"])  # whole note, broadband
         if t_prompt is not None:
             lines.append(f"t60_prompt_s = {t_prompt}")
-        if t_after is not None and t_after < 1000:
+        # An after-sound only exists when the late decay is gentler than the early one (double decay); a
+        # steeper late slope is the note sinking into the noise floor.
+        if t_after is not None and t_after < 1000 and n["level_late_db_s"] > n["level_early_db_s"]:
             lines.append(f"t60_aftersound_s = {t_after}")
-        lines.append(f"decay_knee_s = {n['level_knee_s']:.2f}")
+            lines.append(f"decay_knee_s = {n['level_knee_s']:.2f}")
         lines += [f"damping_b1 = {n['b1']:.4f}", f"damping_b3 = {n['b3']:.4e}", ""]
     out.write_text("\n".join(lines), encoding="utf-8")
 
@@ -148,7 +150,7 @@ def plot(data: dict, out: Path) -> None:
     ax[0, 1].axhline(0, color="grey", lw=0.5)
     ax[0, 1].set_title("Tuning against equal temperament at A4 = 440 Hz (cents)", loc="left")
     t_prompt = [_t60(n["level_early_db_s"]) for n in notes]
-    t_after = [_t60(n["level_late_db_s"]) for n in notes]
+    t_after = [_t60(n["level_late_db_s"]) if n["level_late_db_s"] > n["level_early_db_s"] else None for n in notes]
     ax[1, 0].semilogy(m, [t if t else np.nan for t in t_prompt], "o-", ms=3, label="prompt sound")
     ax[1, 0].semilogy(m, [t if t and t < 1000 else np.nan for t in t_after], "s-", ms=3, label="after-sound")
     ax[1, 0].set_title("T60 of the whole note, broadband level (s)", loc="left")
