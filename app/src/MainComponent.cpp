@@ -76,9 +76,9 @@ MainComponent::MainComponent()
     enableMidiInputs();
     midiDevicesConnection = juce::MidiDeviceListConnection::make([this] { enableMidiInputs(); }); // hot-plugged keyboard
 
-    title.setText("PianoForge - reference corpus listening lab", juce::dontSendNotification);
+    title.setText("PianoForge - listening lab", juce::dontSendNotification);
     title.setFont(juce::FontOptions(18.0f, juce::Font::bold));
-    for (auto* l : { &title, &corpusStatus, &audioStatus, &noteStatus, &engineStatus, &help })
+    for (auto* l : { &title, &corpusStatus, &modalStatus, &audioStatus, &noteStatus, &engineStatus, &help })
         addAndMakeVisible(*l);
     help.setColour(juce::Label::textColourId, juce::Colours::grey);
 
@@ -91,6 +91,28 @@ MainComponent::MainComponent()
     addAndMakeVisible(audioButton);
     addAndMakeVisible(corpusButton);
     addAndMakeVisible(curveButton);
+
+    // Engine: switchable while playing, for A/B listening from the keyboard.
+    engineChoice.addItem("Reference: Noire samples", kEngineReference);
+    engineChoice.addItem("Modal: PianoForge engine", kEngineModal);
+    engineChoice.setSelectedId(settings->getIntValue("engine", kEngineReference) == kEngineModal ? kEngineModal : kEngineReference,
+                               juce::dontSendNotification);
+    engineChoice.onChange = [this] {
+        engines.selected = modalSelected() ? 1 : 0;
+        saveSettings();
+    };
+    engines.selected = modalSelected() ? 1 : 0;
+    addAndMakeVisible(engineChoice);
+    bodyButton.setButtonText("Soundboard body");
+    bodyButton.setToggleState(settings->getBoolValue("modalBody", true), juce::dontSendNotification);
+    bodyButton.onClick = [this] { modal.bodyEnabled = bodyButton.getToggleState(); saveSettings(); };
+    residualButton.setButtonText("Attack residual");
+    residualButton.setToggleState(settings->getBoolValue("modalResidual", true), juce::dontSendNotification);
+    residualButton.onClick = [this] { modal.residualEnabled = residualButton.getToggleState(); saveSettings(); };
+    modal.bodyEnabled = bodyButton.getToggleState();
+    modal.residualEnabled = residualButton.getToggleState();
+    addAndMakeVisible(bodyButton);
+    addAndMakeVisible(residualButton);
 
     saveTakeButton.setButtonText("Save last take");
     saveTakeButton.onClick = [this] { saveLastTake(); };
@@ -119,7 +141,9 @@ MainComponent::MainComponent()
     volume.setRange(-24.0, 24.0, 0.5);
     volume.setTextValueSuffix(" dB");
     volume.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
-    volume.onValueChange = [this] { player.outputGain = juce::Decibels::decibelsToGain((float) volume.getValue()); };
+    volume.onValueChange = [this] {
+        player.outputGain = modal.outputGain = juce::Decibels::decibelsToGain((float) volume.getValue());
+    };
     volume.setValue(settings->getDoubleValue("volume", 6.0));
     velocityLabel.setText("Velocity", juce::dontSendNotification);
     velocity.setRange(1.0, 127.0, 1.0);
@@ -132,7 +156,7 @@ MainComponent::MainComponent()
     restrikeFade.setTextValueSuffix(" s");
     restrikeFade.setNumDecimalPlacesToDisplay(2);
     restrikeFade.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
-    restrikeFade.onValueChange = [this] { player.restrikeFadeSeconds = (float) restrikeFade.getValue(); };
+    restrikeFade.onValueChange = [this] { player.restrikeFadeSeconds = modal.restrikeFadeSeconds = (float) restrikeFade.getValue(); };
     restrikeFade.setValue(settings->getDoubleValue("restrikeFade", 0.8));
     restrikeFade.onDragEnd = [this] { saveSettings(); };
     for (auto* c : std::initializer_list<juce::Component*> { &volumeLabel, &volume, &velocityLabel, &velocity,
@@ -163,7 +187,7 @@ MainComponent::MainComponent()
         corpusStatus.setText("No corpus found: use 'Change corpus...' and pick corpus/reference/noire-dry/single-notes",
                              juce::dontSendNotification);
 
-    setSize(1400, 540);
+    setSize(1400, 562);
     startTimerHz(20);
 }
 
@@ -173,6 +197,8 @@ MainComponent::~MainComponent()
     saveSettings();
     if (takeRender.joinable())
         takeRender.join();
+    if (modalLoader.joinable())
+        modalLoader.join();
     curveWindow.reset(); // it refers to curveSettings and keyboardInput
     keyboard.removeKeyListener(this);
     deviceManager.removeChangeListener(this);
@@ -300,7 +326,9 @@ void MainComponent::saveLastTake()
     }
     const auto summary = juce::String(take->notes) + " notes, " + juce::String((double) take->lengthSamples / take->sampleRate, 1) + " s";
     auto bank = player.sharedBank();
-    if (bank == nullptr || renderingTake.load()) {
+    auto profile = modal.sharedProfile();
+    const bool withModal = modalSelected() && profile != nullptr;
+    if ((withModal ? profile == nullptr : bank == nullptr) || renderingTake.load()) {
         takeStatus.setText("Saved " + midiFile.getFileName() + " (" + summary + ").", juce::dontSendNotification);
         return;
     }
@@ -309,10 +337,13 @@ void MainComponent::saveLastTake()
         takeRender.join();
     renderingTake = true;
     // Same engine and settings as heard live, at the rate it was played: the WAV is the take as heard.
-    takeRender = std::thread([sequence = TakeRecorder::toSequence(*take), bank = std::move(bank), rate = take->sampleRate,
-                              restrike = (float) restrikeFade.getValue(), whole = wholeTakeButton.getToggleState(),
-                              wavFile, summary, safe = juce::Component::SafePointer<MainComponent>(this)] {
-        const auto audio = renderSequence(sequence, bank, rate, restrike, whole);
+    takeRender = std::thread([sequence = TakeRecorder::toSequence(*take), bank = std::move(bank), profile = std::move(profile),
+                              withModal, body = bodyButton.getToggleState(), residual = residualButton.getToggleState(),
+                              rate = take->sampleRate, restrike = (float) restrikeFade.getValue(),
+                              whole = wholeTakeButton.getToggleState(), wavFile, summary,
+                              safe = juce::Component::SafePointer<MainComponent>(this)] {
+        const auto audio = withModal ? renderSequenceModal(sequence, profile, rate, restrike, body, residual)
+                                     : renderSequence(sequence, bank, rate, restrike, whole);
         const auto written = writeWav(audio, rate, wavFile);
         juce::MessageManager::callAsync([safe, written, wavFile, summary] {
             if (auto* self = safe.getComponent()) {
@@ -349,6 +380,48 @@ void MainComponent::loadCorpus(const juce::File& folder)
     loader.load(folder);
     progressBar.setVisible(true);
     resized();
+    loadModalProfile();
+}
+
+void MainComponent::loadModalProfile()
+{
+    // The profile written by `forge export` sits in the corpus state folder, next to the passes.
+    const auto path = corpusFolder.getParentDirectory().getChildFile("modal-profile.bin");
+    if (!path.existsAsFile()) {
+        modalProfileText = "Modal profile: none in " + path.getParentDirectory().getFullPathName()
+                         + " (forge modes, forge soundboard, then forge export)";
+        return;
+    }
+    if (modalLoader.joinable())
+        modalLoader.join();
+    modalProfileText = "Modal profile: loading " + path.getFullPathName() + "...";
+    modalLoader = std::thread([path, safe = juce::Component::SafePointer<MainComponent>(this)] {
+        std::string error;
+        const auto start = juce::Time::getMillisecondCounterHiRes();
+        auto profile = pf::loadModalProfile(path.getFullPathName().toStdString(), error);
+        const double ms = juce::Time::getMillisecondCounterHiRes() - start;
+        juce::MessageManager::callAsync([safe, profile = std::move(profile), error, ms]() mutable {
+            auto* self = safe.getComponent();
+            if (self == nullptr)
+                return;
+            if (profile == nullptr) {
+                self->modalProfileText = "Modal profile: " + juce::String(error);
+                return;
+            }
+            std::size_t layers = 0, modes = 0;
+            for (const auto& n : profile->notes) {
+                layers = std::max(layers, n.layers.size());
+                for (const auto& l : n.layers)
+                    modes += l.modes.size();
+            }
+            self->modalProfileText = "Modal profile: " + juce::String((int) profile->notes.size()) + " notes x "
+                                   + juce::String((int) layers) + " velocity layers, " + juce::String((int) modes) + " modes, "
+                                   + juce::String((int) profile->bodyFreq.size()) + " soundboard resonances, "
+                                   + juce::String((double) profile->bytes / 1.0e6, 1) + " MB (loaded in "
+                                   + juce::String(ms / 1000.0, 2) + " s)";
+            self->modal.install(std::move(profile));
+        });
+    });
 }
 
 void MainComponent::changeListenerCallback(juce::ChangeBroadcaster*)
@@ -368,6 +441,9 @@ void MainComponent::saveSettings()
     s->setValue("playWholeTake", wholeTakeButton.getToggleState());
     s->setValue("velocityCurve", formatCurve(curveSettings));
     s->setValue("restrikeFade", restrikeFade.getValue());
+    s->setValue("engine", engineChoice.getSelectedId());
+    s->setValue("modalBody", bodyButton.getToggleState());
+    s->setValue("modalResidual", residualButton.getToggleState());
     s->saveIfNeeded();
 }
 
@@ -428,8 +504,20 @@ void MainComponent::timerCallback()
     }
 
     audioStatus.setText(audioDescription(), juce::dontSendNotification);
+    modalStatus.setText(modalProfileText, juce::dontSendNotification);
 
-    if (const int note = player.lastNote.load(); note >= 0) {
+    if (const int modalNote = modal.lastNote.load(); modalSelected() && modalNote >= 0) {
+        const int layer = modal.lastLayerVelocity.load();
+        noteStatus.setText("Last note: " + juce::MidiMessage::getMidiNoteName(modalNote, true, true, 4) + " | played velocity "
+                               + juce::String(modal.lastVelocity.load())
+                               + (layer > 0 ? " -> modal layer " + juce::String(layer) + ", levels interpolated per partial"
+                                            : juce::String(" -> no modal data for this note"))
+                               + (keyboardInput.lastInput.load() > 0
+                                      ? "   |   last MIDI keyboard key: " + juce::String(keyboardInput.lastInput.load())
+                                            + " -> " + juce::String(keyboardInput.lastOutput.load()) + " (velocity curve)"
+                                      : juce::String()),
+                           juce::dontSendNotification);
+    } else if (const int note = player.lastNote.load(); !modalSelected() && note >= 0) {
         const int rendered = player.lastRenderedVelocity.load();
         noteStatus.setText("Last note: " + juce::MidiMessage::getMidiNoteName(note, true, true, 4) + " | played velocity "
                                + juce::String(player.lastVelocity.load())
@@ -442,14 +530,24 @@ void MainComponent::timerCallback()
                            juce::dontSendNotification);
     }
 
-    engineStatus.setText("Voices: " + juce::String(player.activeVoices.load()) + " / " + juce::String(ReferencePlayer::kMaxVoices)
-                             + "   |   Audio thread load: " + juce::String(deviceManager.getCpuUsage() * 100.0, 1) + " %"
-                             + "   |   Stolen voices: " + juce::String((int) player.stolenVoices.load()),
-                         juce::dontSendNotification);
+    if (modalSelected())
+        engineStatus.setText("Modal engine | voices: " + juce::String(modal.activeVoices.load()) + " / "
+                                 + juce::String(pf::ModalEngine::kMaxVoices) + "   |   resonators: "
+                                 + juce::String(modal.activeModes.load()) + "   |   Audio thread load: "
+                                 + juce::String(deviceManager.getCpuUsage() * 100.0, 1) + " %   |   Stolen voices: "
+                                 + juce::String((int) modal.stolenVoices.load()),
+                             juce::dontSendNotification);
+    else
+        engineStatus.setText("Reference player | voices: " + juce::String(player.activeVoices.load()) + " / "
+                                 + juce::String(ReferencePlayer::kMaxVoices) + "   |   Audio thread load: "
+                                 + juce::String(deviceManager.getCpuUsage() * 100.0, 1) + " %   |   Stolen voices: "
+                                 + juce::String((int) player.stolenVoices.load()),
+                             juce::dontSendNotification);
 
-    sustainButton.setToggleState(player.sustainDown.load(), juce::dontSendNotification);
+    sustainButton.setToggleState(modalSelected() ? modal.sustainDown.load() : player.sustainDown.load(),
+                                 juce::dontSendNotification);
 
-    const float peak = player.outputPeak.exchange(0.0f);
+    const float peak = juce::jmax(player.outputPeak.exchange(0.0f), modal.outputPeak.exchange(0.0f));
     displayedPeak = juce::jmax(peak, displayedPeak * 0.85f);
     repaint(peakArea);
 }
@@ -485,9 +583,14 @@ void MainComponent::resized()
     audioButton.setBounds(header.removeFromRight(200).reduced(2));
     corpusButton.setBounds(header.removeFromRight(160).reduced(2));
     curveButton.setBounds(header.removeFromRight(150).reduced(2));
+    header.removeFromRight(12);
+    residualButton.setBounds(header.removeFromRight(130));
+    bodyButton.setBounds(header.removeFromRight(140));
+    engineChoice.setBounds(header.removeFromRight(240).reduced(2));
     title.setBounds(header);
 
     corpusStatus.setBounds(area.removeFromTop(22));
+    modalStatus.setBounds(area.removeFromTop(22));
     progressBar.setBounds(area.removeFromTop(progressBar.isVisible() ? 16 : 0));
     audioStatus.setBounds(area.removeFromTop(22));
     noteStatus.setBounds(area.removeFromTop(22));

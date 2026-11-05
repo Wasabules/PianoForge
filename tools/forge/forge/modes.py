@@ -207,17 +207,33 @@ def _fit_orders(seg: np.ndarray, weight: np.ndarray, fs_d: float, max_order: int
     return chosen, [(r[0], round(10 * np.log10(max(r[4], 1e-30)), 1), round(r[5], 2)) for r in results]
 
 
-def analyze_partial(extractor: BandExtractor, n: int, centre: float, spacing: float, *, t_start: float = 0.08,
-                    t_end: float | None = None, max_order: int = 6, dynamic_db: float = 50.0, snr_db: float = 15.0,
-                    audible_floor: float = 0.0, flatten: float = 0.5, tolerance_db: float = 0.5,
-                    good_db: float = 0.7) -> PartialModes | None:
-    """Modes of one partial. `spacing` is the distance to the neighbouring partials (about f0); the passband is
-    a third of it, at most 30 Hz. The window runs from `t_start` (after the attack and the filter's smear) to the
-    end of the hold, and stops earlier when the partial comes within `snr_db` of the noise floor (measured in an
-    equal band halfway to the next partial), falls `dynamic_db` under its maximum, or under `audible_floor` (an
-    absolute amplitude, typically the note's loudest partial minus 80 dB). Sample libraries are often denoised:
-    partials then vanish abruptly near the floor, and the noise left around them is not a decay to be modelled.
-    `flatten` (0..1) is the share of the overall decay compensated by the weight of the fit."""
+@dataclass
+class PartialWindow:
+    """One partial at baseband over its analysis window, with the weight of the fit."""
+    seg: np.ndarray           # channels x samples, from sample i0 of the baseband signal
+    weight: np.ndarray        # per sample
+    fs_d: float
+    i0: int
+    i1: int
+    pass_hz: float
+    noise: float              # noise floor (amplitude) in an equal band halfway to the next partial
+    peak: float               # maximum of the smoothed envelope
+
+    @property
+    def length_s(self) -> float:
+        return (self.i1 - self.i0) / self.fs_d
+
+
+def partial_window(extractor: BandExtractor, centre: float, spacing: float, *, t_start: float = 0.08,
+                   t_end: float | None = None, dynamic_db: float = 50.0, snr_db: float = 15.0,
+                   audible_floor: float = 0.0, flatten: float = 0.5) -> PartialWindow | None:
+    """The analysis window of one partial. `spacing` is the distance to the neighbouring partials (about f0); the
+    passband is a third of it, at most 30 Hz. The window runs from `t_start` (after the attack and the filter's
+    smear) to the end of the hold, and stops earlier when the partial comes within `snr_db` of the noise floor
+    (measured in an equal band halfway to the next partial), falls `dynamic_db` under its maximum, or under
+    `audible_floor` (an absolute amplitude, typically the note's loudest partial minus 80 dB). Sample libraries are
+    often denoised: partials then vanish abruptly near the floor, and the noise left around them is not a decay to
+    be modelled. `flatten` (0..1) is the share of the overall decay compensated by the weight of the fit."""
     pass_hz = min(0.33 * spacing, 30.0)
     stop_hz = min(0.66 * spacing, 2 * pass_hz)
     z, fs_d = extractor.baseband(centre, pass_hz, stop_hz)
@@ -240,28 +256,105 @@ def analyze_partial(extractor: BandExtractor, n: int, centre: float, spacing: fl
     i1 = i0 + int(above[-1]) + 1
     if i1 - i0 < 24:
         return None
-    seg = z[:, i0:i1]
     # Weight: compensates part of the overall decay (fitted on the log envelope), so that the after-sound counts.
     t = np.arange(i1 - i0)
     slope = np.polyfit(t, np.log(np.maximum(env[: i1 - i0], 1e-30)), 1)[0]
     weight = np.exp(-flatten * min(slope, 0.0) * t)
-    (order, decay, offset, amps, res, error, _), orders = _fit_orders(seg, weight, fs_d, max_order, pass_hz,
-                                                                      tolerance_db, good_db)
-    # A decay much slower than the window is long is not measured, only extrapolated: T60 is capped at ten times
-    # the window, and the amplitudes are solved again for the capped poles.
-    min_decay = 6.91 / (10.0 * (i1 - i0) / fs_d)
-    if np.any(decay < min_decay):
-        decay = np.maximum(decay, min_decay)
-        vw = np.exp(np.outer(t, (-decay + 2j * np.pi * offset) / fs_d)) * weight[:, None]
-        amps = np.linalg.lstsq(vw, (seg * weight).T, rcond=None)[0].T
-    amps0 = amps * np.exp((decay - 2j * np.pi * offset) * i0 / fs_d)[None, :]  # from the window start to t = 0
-    out = PartialModes(n, centre, t0=i0 / fs_d, t1=i1 / fs_d, residual_db=10 * np.log10(max(res, 1e-30)),
-                       orders_db=orders, envelope_error_db=error)
-    out.noise_db = 20 * np.log10(max(noise, 1e-30) / max(smooth.max(), 1e-30))
+    return PartialWindow(z[:, i0:i1], weight, fs_d, i0, i1, pass_hz, noise, float(smooth.max()))
+
+
+def _cap_decays(decay: np.ndarray, length_s: float) -> np.ndarray:
+    """A decay much slower than the window is long is not measured, only extrapolated: T60 is capped at ten times
+    the window."""
+    return np.maximum(decay, 6.91 / (10.0 * length_s))
+
+
+def _amplitudes(w: PartialWindow, decay: np.ndarray, offset: np.ndarray) -> np.ndarray:
+    """Weighted least squares amplitudes (channels x modes) at the window start, for given poles."""
+    t = np.arange(w.seg.shape[1])
+    vw = np.exp(np.outer(t, (-decay + 2j * np.pi * offset) / w.fs_d)) * w.weight[:, None]
+    return np.linalg.lstsq(vw, (w.seg * w.weight).T, rcond=None)[0].T
+
+
+def _model(w: PartialWindow, decay: np.ndarray, offset: np.ndarray, amps: np.ndarray) -> np.ndarray:
+    """The modes over the window (samples x channels), amplitudes at the window start."""
+    t = np.arange(w.seg.shape[1])
+    return np.exp(np.outer(t, (-decay + 2j * np.pi * offset) / w.fs_d)) @ amps.T
+
+
+def _to_note_on(w: PartialWindow, decay: np.ndarray, offset: np.ndarray, amps: np.ndarray) -> np.ndarray:
+    """Amplitudes moved from the window start back to t = 0 (the note-on)."""
+    return amps * np.exp((decay - 2j * np.pi * offset) * w.i0 / w.fs_d)[None, :]
+
+
+def _partial_modes(n: int, centre: float, w: PartialWindow, decay, offset, amps0, error: float, res: float = 0.0,
+                   orders=()) -> PartialModes:
+    out = PartialModes(n, centre, t0=w.i0 / w.fs_d, t1=w.i1 / w.fs_d, residual_db=10 * np.log10(max(res, 1e-30)),
+                       orders_db=list(orders), envelope_error_db=error)
+    out.noise_db = 20 * np.log10(max(w.noise, 1e-30) / max(w.peak, 1e-30))
     for k in range(len(decay)):
         out.modes.append(Mode(float(centre + offset[k]), float(decay[k]), [complex(a) for a in amps0[:, k]]))
     out.modes.sort(key=lambda mode: -mode.level)
     return out
+
+
+def analyze_partial(extractor: BandExtractor, n: int, centre: float, spacing: float, *, t_start: float = 0.08,
+                    t_end: float | None = None, max_order: int = 6, dynamic_db: float = 50.0, snr_db: float = 15.0,
+                    audible_floor: float = 0.0, flatten: float = 0.5, tolerance_db: float = 0.5,
+                    good_db: float = 0.7) -> PartialModes | None:
+    """Modes of one partial, over the window chosen by `partial_window` (same parameters)."""
+    w = partial_window(extractor, centre, spacing, t_start=t_start, t_end=t_end, dynamic_db=dynamic_db,
+                       snr_db=snr_db, audible_floor=audible_floor, flatten=flatten)
+    if w is None:
+        return None
+    (order, decay, offset, amps, res, error, _), orders = _fit_orders(w.seg, w.weight, w.fs_d, max_order, w.pass_hz,
+                                                                      tolerance_db, good_db)
+    capped = _cap_decays(decay, w.length_s)
+    if np.any(capped != decay):  # the amplitudes are solved again for the capped poles
+        decay, amps = capped, _amplitudes(w, capped, offset)
+    return _partial_modes(n, centre, w, decay, offset, _to_note_on(w, decay, offset, amps), error, res, orders)
+
+
+def fit_shared(windows: list[PartialWindow], decay: np.ndarray, offset: np.ndarray, refine: bool = True):
+    """Poles shared by several takes of the same partial (velocity layers, repeated strikes), each over its own
+    window and with its own amplitudes. With `refine`, the poles are optimised jointly by variable projection,
+    each take's residual normalised by its own weighted energy so that a quiet take counts as much as a loud one;
+    otherwise they are kept as given and only the amplitudes are solved.
+    Returns (decay, offset, [amplitudes at t = 0 per take], [envelope error dB per take])."""
+    k = len(decay)
+    if refine and k:
+        from scipy.optimize import least_squares
+
+        data = []
+        for w in windows:
+            target = (w.seg * w.weight).T
+            data.append((np.arange(w.seg.shape[1], dtype=np.float64), w.weight, w.fs_d, target,
+                         1.0 / np.sqrt(float(np.sum(np.abs(target) ** 2)) + 1e-300)))
+
+        def residual(theta):
+            s = -np.exp(np.clip(theta[:k], -12.0, 8.0)) + 2j * np.pi * theta[k:]
+            parts = []
+            for m, weight, fs_d, target, norm in data:
+                vw = np.exp(np.outer(m, s / fs_d)) * weight[:, None]
+                amps, *_ = np.linalg.lstsq(vw, target, rcond=None)
+                e = (target - vw @ amps).ravel() * norm
+                parts += [e.real, e.imag]
+            return np.concatenate(parts)
+
+        theta0 = np.concatenate([np.log(np.maximum(decay, 1e-5)), offset])
+        try:
+            theta = least_squares(residual, theta0, method="lm", max_nfev=200).x
+        except (ValueError, np.linalg.LinAlgError):
+            theta = theta0
+        decay, offset = np.exp(np.clip(theta[:k], -12.0, 8.0)), theta[k:]
+    decay = _cap_decays(np.asarray(decay, dtype=np.float64), max(w.length_s for w in windows))
+    offset = np.asarray(offset, dtype=np.float64)
+    amps0, errors = [], []
+    for w in windows:
+        amps = _amplitudes(w, decay, offset)
+        errors.append(envelope_error_db(w.seg, _model(w, decay, offset, amps), w.fs_d))
+        amps0.append(_to_note_on(w, decay, offset, amps))
+    return decay, offset, amps0, errors
 
 
 def synthesize(partials: list[PartialModes], channels: int, length: int, fs: float,

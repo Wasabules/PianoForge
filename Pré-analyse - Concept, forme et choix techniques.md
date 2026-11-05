@@ -544,8 +544,35 @@ Le mode temps réel (port MIDI virtuel et capture en loopback) n'a pas été éc
 | C7 | 3,9 → **1,2 dB** | −46 / −70 → **−0,8 / −1,0 dB** | 5,5 → 7,3 dB |
 
   - **Limites.** Sur C7, le transitoire dure plus longtemps que les 100 ms de résidu d'attaque, au-dessus de la bande de la table. La queue du corps (au-delà de 0,5 s) n'est juste qu'en niveau moyen. Dans le grave, le corps reste masqué par les partiels et n'est pas modélisé. Tout est mesuré à une seule vélocité.
-  - **Question ouverte : la linéarité.** Entre les vélocités 32, 64 et 104, les fréquences des modes concordent à un cent près. Un jeu de pôles commun aux trois vélocités suffit pour A1, mais coûte 1 à 3 dB sur C4 et C6. Ce test est biaisé : la fenêtre commune suit la prise la plus forte et juge la plus faible dans son bruit. Il faut le refaire avec une fenêtre par vélocité avant de fixer le format des données du moteur : soit un jeu de pôles par note avec des amplitudes par vélocité, soit des pôles par couche.
-  - **La suite.** Le modèle physique des cordes couplées (§4.1, la cuisson) prend ces modes mesurés pour cible. Il en tire les désaccords d'unisson et l'admittance du chevalet, ce qui donne des réglages de technicien, l'una corda et des vélocités continues. Le moteur modal C++ vient ensuite.
+  - **La linéarité en vélocité** a d'abord été testée sur trois vélocités avec une fenêtre commune, ce qui biaisait le test. Elle est tranchée plus bas, couche par couche.
+  - **La suite.** Le modèle physique des cordes couplées (§4.1, la cuisson) prend ces modes mesurés pour cible. Il en tire les désaccords d'unisson et l'admittance du chevalet, ce qui donne des réglages de technicien, l'una corda et des vélocités continues. À l'écoute, l'utilisateur juge la version « modes + table + résidu de 100 ms » « super propre ».
+
+**Test des vélocités (5 novembre 2026, `studies/velocity_linearity.py`).** Les 12 premiers partiels de A0, A1, C4, C6 et C7 sont analysés sur chacune des 16 couches de vélocité, chaque couche sur sa propre fenêtre. Le tableau donne le coût en erreur d'enveloppe par rapport à l'ajustement indépendant de chaque couche (médiane / 90e centile, en dB).
+
+| Variante | A0 | A1 | C4 | C6 | C7 |
+|---|---|---|---|---|---|
+| Pôles de v64, amplitudes par couche | +0,5 / +7,1 | +0,7 / +4,6 | +1,0 / +4,7 | +1,9 / +6,1 | +1,0 / +2,8 |
+| Pôles communs, ajustés sur toutes les couches | 0,0 / +0,9 | +0,3 / +1,5 | +0,5 / +1,9 | +0,9 / +3,1 | +0,8 / +3,6 |
+| Modes appariés, valeurs propres à chaque couche | −0,1 / 0,0 | −0,1 / +0,2 | 0,0 / +0,9 | −0,1 / +0,4 | −0,1 / +1,7 |
+| Couche prédite par ses voisines : pôles interpolés | 0,0 / +1,2 | 0,0 / +1,1 | +0,6 / +2,8 | +0,6 / +3,1 | +1,0 / +3,5 |
+| … pôles et amplitudes complexes interpolés | +0,8 / +6,2 | +0,9 / +7,3 | +2,6 / +20,8 | +3,2 / +8,5 | +2,2 / +7,2 |
+| … couche voisine, niveau interpolé par partiel | +1,4 / +6,4 | +1,2 / +7,2 | +1,9 / +13,5 | +3,4 / +14,9 | +2,9 / +32,8 |
+
+  - **Les pôles bougent avec la vélocité.** Figés sur v64, ils coûtent jusqu'à 6 à 8 dB aux couches extrêmes. Des valeurs propres à chaque couche ne coûtent rien.
+  - **Aucune couche ne se prédit à partir de ses voisines.** Chaque couche est une frappe enregistrée à part, avec ses propres phases de battement. Interpoler les amplitudes complexes est la pire solution : les modes s'annulent par endroits.
+  - **Décision de format.** Le profil garde les modes de chaque couche tels que mesurés. À une vélocité intermédiaire, le moteur joue la couche la plus proche, qui est une vraie frappe, et interpole le niveau de chaque partiel entre les deux couches voisines : le niveau et le timbre suivent la vélocité sans à-coup. Une vélocité continue « vraie », c'est-à-dire une frappe nouvelle à chaque vélocité, viendra du modèle physique des cordes couplées.
+  - **Ajustements ratés.** Sur les 16 couches, 0,1 % des modes (décroissance très rapide, amplitude à la frappe extrapolée de plus de 40 dB) et 1 % des partiels (erreur d'enveloppe de plus de 20 dB) sont des échecs de l'ajustement. La couche 64 n'en avait aucun. La forge les écarte (`note_modes.clean`), avant la table d'harmonie et l'export.
+
+**Moteur modal v0 (5 novembre 2026, `engine/`, `forge export`).**
+  - **Le profil** `modal-profile.bin` contient, pour chaque note et chaque couche, les modes de chaque partiel, les amplitudes des 200 résonances de la table et le résidu d'attaque (100 ms, fondu sur les 40 dernières), plus les courbes d'étouffoir. Comme le corpus, il reste local et n'est jamais publié.
+  - **Les résonateurs** sont complexes, en float32, rangés en structure de tableaux. Le noyau est écrit en AVX2 avec FMA, et deux paquets de 8 modes sont entrelacés pour recouvrir la latence de la mise à jour des phaseurs. MSVC ne vectorisait pas la version en C++ simple, qui était 7 fois plus lente.
+  - **Le moteur** joue une banque de modes par voix et une table d'harmonie partagée par toutes les notes, que chaque frappe excite. Il ajoute le résidu d'attaque et applique les courbes d'étouffoir mesurées, la pédale et la refrappe (fondu de 0,8 s, comme le lecteur de référence).
+  - **Validation.** Le rendu C++ de C4 à v64 reproduit le rendu Python de la version v3 à −58 dB près, avec les mêmes métriques. Les tests unitaires du moteur portent sur un profil synthétique. L'autotest de l'application compare le niveau de C4 au corpus et mesure la charge.
+  - **L'atelier** passe du lecteur de référence au moteur modal pendant qu'on joue, ce qui permet l'A/B au clavier. Les prises enregistrées se rendent avec le moteur choisi.
+  - **Le profil complet** compte 88 notes × 16 couches et 122 020 modes. Il pèse 33,6 Mo et se charge en 0,08 s. Deux couches sans partiel exploitable sont écartées (A2 v56, C#3 v88). Quatre corps de table aberrants sont remplacés par celui de la couche médiane de la note, mis à l'échelle de ses cordes (`export.repair_bodies`) ; le pire, A0 à v40, était 130 fois trop fort.
+  - **Le niveau** colle à Noire à ±0,5 dB près, par fenêtre de 0 à 0,1 s, de 0,1 à 1 s et de 1 à 3 s, sur 8 notes de A0 à C8 et 6 couches. Seules exceptions : les queues de C7 et C8 aux vélocités douces, qui sont à −92 à −130 dBFS, donc inaudibles.
+  - **La charge**, mesurée sur la machine au repos : le noyau coûte 0,27 ns par mode et par échantillon, soit environ 77 000 résonateurs en temps réel sur un cœur. 64 notes pédale enfoncée (5 400 résonateurs à 48 kHz, en blocs de 64) prennent 9,4 % d'un cœur, avec un pire bloc de 294 µs sur 1 333 µs. Le critère du spike C (pire cas sous 30 % d'un cœur) est tenu sans le multicœur.
+  - **Une phrase de 18 s** (`studies/ab_phrase.py`) met en jeu des notes isolées, un accord pédalé avec une mélodie, un arpège détaché, des refrappes et une octave grave forte. Entre les deux moteurs, le niveau coïncide (−37,7 dB RMS chacun). Section par section, l'écart reste sous ±1,1 dB et la distance spectrale entre 0,9 et 3,1 dB.
 
 **Phase 0 entamée.** L'application JUCE existe sous forme d'atelier d'écoute (`app/`) : clavier de 88 touches jouable à la souris, au clavier du PC (AZERTY ou QWERTY) et au clavier MIDI ; pédale forte ; choix de la sortie audio. Elle joue le corpus de référence derrière l'interface `pf::Engine` (`engine/`), celle que le moteur modal implémentera, ce qui permettra l'A/B. Un autotest sans interface (`PianoForge --selftest`) contrôle la fidélité de lecture, le rééchantillonnage, le relâchement et la charge.
 

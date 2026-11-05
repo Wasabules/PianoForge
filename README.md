@@ -4,14 +4,15 @@ A concert grand piano simulator played from a MIDI keyboard: a calibrated hybrid
 recording of every take and technician-level settings. Cross-platform (Windows first, Linux compatible),
 low latency (key to sound <= 10 ms, jitter <= 1 ms).
 
-Status: proof of concept. The modal engine is not written yet; the application currently plays a
-reference corpus rendered from a sampled grand piano, which the modal engine will be compared with.
+Status: proof of concept. The modal engine plays modes measured on a reference corpus rendered from a sampled
+grand piano (unison strings and their beating, the soundboard body, a short attack residual); the listening lab
+switches between that reference and the modal engine while playing.
 
 ## Layout
 
 | Folder | Content |
 |---|---|
-| `engine/` | Core, pure C++20 without framework. For now the `pf::Engine` interface shared by every engine. |
+| `engine/` | Core, pure C++20 without framework: the `pf::Engine` interface, the modal engine (complex resonator banks, AVX2), the profile loader; `modal_render` (offline renders, CPU measurements). |
 | `app/` | Standalone application (JUCE 9): listening lab with an 88-key keyboard, MIDI input, audio device selection. |
 | `tools/bench/` | Reference bench (Python): renders a VST3 instrument through measurement sessions and checks the takes. |
 | `tools/forge/` | Forge (Python): analysis and calibration, from the reference corpus to engine data. |
@@ -29,10 +30,18 @@ cmake --build --preset windows-release
 build/windows-msvc/app/PianoForgeApp_artefacts/Release/PianoForge.exe
 ```
 
-Headless self-test of the reference player:
+Engine tests (no corpus needed) and headless self-test of the application (reference player, and the modal
+engine when the corpus state has a profile):
 
 ```
+ctest --test-dir build/windows-msvc -C Release
 PianoForge.exe --selftest corpus/reference/noire-dry/single-notes selftest.txt
+```
+
+Offline render of a MIDI file, through the reference player or the modal engine:
+
+```
+PianoForge.exe --render take.mid take.wav corpus/reference/noire-dry/single-notes [--engine modal]
 ```
 
 ## Reference bench
@@ -58,7 +67,19 @@ See `tools/bench/README.md`.
 | `forge release-curves` | Damper curves measured from the release takes (`release-curves.json`). |
 | `forge analyze` | f0, inharmonicity, stretched tuning, decays per note; first profile (`physics.toml`). |
 | `forge modes` | Every partial resolved into its modes, the unison strings and their polarisations: beating and double decay (`modes-v064.json`). |
-| `forge soundboard` | The soundboard body: resonances shared by every note, amplitudes per note (`soundboard-v064.json`). Needs `forge modes`. |
+| `forge soundboard` | The soundboard body: resonances shared by every note, amplitudes per note (`soundboard-v064.json`). Needs `forge modes`. The resonances are measured at velocity 64 and reused for the other velocities. |
+| `forge export` | The modal profile played by the engine (`modal-profile.bin`), from the modes and the soundboard of every measured velocity layer, the damper curves and the attack residuals. |
+
+The modal profile of the reference corpus takes about 1.5 hours to measure (every velocity layer), then a minute
+to export:
+
+```
+for v in 8 16 24 32 40 48 56 64 72 80 88 96 104 112 120 127; do .venv/Scripts/forge modes --velocity $v; done
+for v in 64 8 16 24 32 40 48 56 72 80 88 96 104 112 120 127; do .venv/Scripts/forge soundboard --velocity $v; done
+.venv/Scripts/forge export
+```
+
+The profile is calibrated on a commercial library: like the corpus, it stays local and is never published.
 
 ## Licences
 

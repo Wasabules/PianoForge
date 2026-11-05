@@ -1,12 +1,14 @@
 #pragma once
 
 #include "AudioHost.h"
+#include "EngineSwitch.h"
 #include "KeyboardInput.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
 #include "TakeRecorder.h"
 #include "VelocityCurveEditor.h"
 
+#include <pianoforge/modal_engine.hpp>
 #include <pianoforge/velocity_curve.hpp>
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -16,7 +18,8 @@
 
 namespace pf::app {
 
-/// Listening lab: play the reference corpus with the mouse, the computer keyboard or a MIDI keyboard.
+/// Listening lab: play the reference corpus or the modal engine (switchable while playing) with the mouse, the
+/// computer keyboard or a MIDI keyboard.
 class MainComponent final : public juce::Component,
                             private juce::Timer,
                             private juce::KeyListener,
@@ -41,6 +44,8 @@ private:
     void updateRenderedLayers();
     void chooseCorpus();
     void loadCorpus(const juce::File& folder);
+    void loadModalProfile();
+    bool modalSelected() const { return engineChoice.getSelectedId() == kEngineModal; }
     void enableMidiInputs();
     void applyKeyLayout();
     void sendSustain(bool down);
@@ -49,8 +54,11 @@ private:
 
     juce::ApplicationProperties properties;
     juce::AudioDeviceManager deviceManager;
+    static constexpr int kEngineReference = 1, kEngineModal = 2;
     ReferencePlayer player;
-    AudioHost host { player };
+    pf::ModalEngine modal;
+    EngineSwitch engines { player, modal };
+    AudioHost host { engines };
     pf::VelocityCurve velocityCurve;
     pf::VelocityCurve::Settings curveSettings;
     KeyboardInput keyboardInput { host.collector, velocityCurve }; // hardware keyboards go through the curve
@@ -60,12 +68,16 @@ private:
     std::thread takeRender;              // renders a saved take to WAV in the background
     std::atomic<bool> renderingTake { false };
     BankLoader loader;
+    std::thread modalLoader;             // loads modal-profile.bin in the background
+    juce::String modalProfileText = "Modal profile: not loaded";
     juce::MidiDeviceListConnection midiDevicesConnection;
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::File corpusFolder;
 
     juce::MidiKeyboardComponent keyboard { host.keyboardState, juce::KeyboardComponentBase::horizontalKeyboard };
-    juce::Label title, corpusStatus, audioStatus, noteStatus, engineStatus, help, takeStatus;
+    juce::Label title, corpusStatus, modalStatus, audioStatus, noteStatus, engineStatus, help, takeStatus;
+    juce::ComboBox engineChoice;
+    juce::ToggleButton bodyButton, residualButton;
     juce::TextButton audioButton, corpusButton, curveButton, saveTakeButton, takesFolderButton;
     juce::ToggleButton sustainButton, wholeTakeButton;
     juce::Slider volume, velocity, restrikeFade;

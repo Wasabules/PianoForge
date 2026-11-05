@@ -63,6 +63,29 @@ def partial_modes(note: dict) -> list[PartialModes]:
     return out
 
 
+MAX_EXTRAPOLATION = 100.0   # a mode at t = 0 at most 40 dB above its level at the start of its analysis window
+MAX_ENVELOPE_ERROR_DB = 20.0
+
+
+def clean(note: dict) -> tuple[dict, int, int]:
+    """The note without its failed fits: modes so fast that their amplitude at the note-on is extrapolated by
+    more than MAX_EXTRAPOLATION from their analysis window (they would ring on, absurdly loud, after the attack
+    residual), and partials whose envelope error shows that the fit diverged. Returns (note, modes dropped,
+    partials dropped). About 0.1 % of the modes and 1 % of the partials of the reference corpus."""
+    partials, modes_dropped, partials_dropped = [], 0, 0
+    for p in note["partials"]:
+        if p["envelope_error_db"] > MAX_ENVELOPE_ERROR_DB:
+            partials_dropped += 1
+            continue
+        kept = [m for m in p["modes"] if np.exp(m[1] * p["t0"]) <= MAX_EXTRAPOLATION]
+        modes_dropped += len(p["modes"]) - len(kept)
+        if kept:
+            partials.append({**p, "modes": kept})
+        else:
+            partials_dropped += 1
+    return {**note, "partials": partials}, modes_dropped, partials_dropped
+
+
 def _task(path: str) -> dict:
     return analyze_take(Path(path))
 

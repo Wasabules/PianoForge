@@ -44,6 +44,14 @@ def cmd_soundboard(args) -> int:
     return 0
 
 
+def cmd_export(args) -> int:
+    from forge.export import run
+
+    for path in run(Path(args.corpus), args.jobs):
+        print(f"Written: {path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -69,6 +77,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--velocity", type=int, default=64)
     p.add_argument("--jobs", type=int, default=0, help="worker processes (default: one per core)")
     p.set_defaults(func=cmd_soundboard)
+    p = sub.add_parser("export", help="write the modal profile played by the engine (modal-profile.bin), from the "
+                                      "modes and soundboard of every measured velocity layer")
+    p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"))
+    p.add_argument("--jobs", type=int, default=0, help="worker processes (default: one per core)")
+    p.set_defaults(func=cmd_export)
     args = ap.parse_args(argv)
     return args.func(args)
 

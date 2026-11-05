@@ -7,6 +7,8 @@
 #include "SampleBank.h"
 #include "TakeRecorder.h"
 
+#include <pianoforge/modal_engine.hpp>
+
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <cmath>
@@ -86,7 +88,7 @@ int runSelfTest(const juce::StringArray& arguments)
     const juce::File folder(arguments[i + 1]);
     const juce::File reportFile(arguments[i + 2].isNotEmpty() ? arguments[i + 2] : "selftest.txt");
     Report r;
-    r.line("PianoForge reference player self-test - " + juce::Time::getCurrentTime().toString(true, true));
+    r.line("PianoForge self-test - " + juce::Time::getCurrentTime().toString(true, true));
     r.line("Corpus: " + folder.getFullPathName());
 
     // 1. Load a subset: A0, C4 and C8 at every velocity, plus every note at velocity 64.
@@ -350,6 +352,90 @@ int runSelfTest(const juce::StringArray& arguments)
                 "take recorded live, saved as MIDI, re-rendered offline: " + juce::String(take.has_value() ? take->notes : 0)
                     + " notes captured, " + juce::String(notesInFile) + " in the file, largest difference with the live audio "
                     + (worstDb <= -300.0 ? juce::String("none (bit-identical)") : juce::String(worstDb, 1) + " dBFS"));
+    }
+
+    // 9. Modal engine, when the corpus state has a modal profile (forge export).
+    if (const auto path = folder.getParentDirectory().getChildFile("modal-profile.bin"); path.existsAsFile()) {
+        std::string error;
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        const auto profile = pf::loadModalProfile(path.getFullPathName().toStdString(), error);
+        const double loadS = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
+        std::size_t layers = 0, modes = 0;
+        if (profile != nullptr)
+            for (const auto& n : profile->notes) {
+                layers = std::max(layers, n.layers.size());
+                for (const auto& l : n.layers)
+                    modes += l.modes.size();
+            }
+        r.check(profile != nullptr && !profile->notes.empty(),
+                profile != nullptr ? "modal profile: " + juce::String((int) profile->notes.size()) + " notes x "
+                                         + juce::String((int) layers) + " layers, " + juce::String((int) modes)
+                                         + " modes, loaded in " + juce::String(loadS, 2) + " s"
+                                   : "modal profile: " + juce::String(error));
+        if (profile != nullptr) {
+            // C4 at velocity 64 against the reference take: level per time window.
+            const Sample* c4Take = nullptr;
+            for (const auto& s : b->samples)
+                if (s.note == 60 && s.velocity == 64)
+                    c4Take = &s;
+            pf::ModalEngine modalEngine;
+            modalEngine.install(profile);
+            modalEngine.prepare(fs, 512);
+            const int frames = (int) (5.0 * fs);
+            juce::AudioBuffer<float> out(2, frames);
+            out.clear();
+            const pf::Event on { 0, 0x90, 60, 64 };
+            for (int pos = 0; pos < frames; pos += 512) {
+                float* o[2] = { out.getWritePointer(0, pos), out.getWritePointer(1, pos) };
+                modalEngine.process(o, 2, juce::jmin(512, frames - pos), pos == 0 ? &on : nullptr, pos == 0 ? 1 : 0);
+            }
+            if (c4Take != nullptr && c4Take->length - c4Take->noteOnFrame >= frames) {
+                const float scale = c4Take->peak / 32767.0f;
+                juce::String detail;
+                double worstWindow = 0.0;
+                bool finite = true;
+                for (const auto [a, z] : { std::pair { 0.0, 0.1 }, std::pair { 0.1, 1.0 }, std::pair { 1.0, 5.0 } }) {
+                    double em = 0.0, er = 0.0;
+                    for (int k = (int) (a * fs); k < (int) (z * fs); ++k) {
+                        const auto i0 = (size_t) (c4Take->noteOnFrame + k);
+                        for (int c = 0; c < 2; ++c) {
+                            const double m = out.getSample(c, k), ref = c4Take->pcm[2 * i0 + (size_t) c] * scale;
+                            finite = finite && std::isfinite(m);
+                            em += m * m;
+                            er += ref * ref;
+                        }
+                    }
+                    const double diff = 10.0 * std::log10((em + 1e-30) / (er + 1e-30));
+                    worstWindow = juce::jmax(worstWindow, std::abs(diff));
+                    detail << (detail.isEmpty() ? "" : ", ") << juce::String(a, 1) << "-" << juce::String(z, 1) << " s "
+                           << (diff >= 0 ? "+" : "") << juce::String(diff, 1) << " dB";
+                }
+                r.check(finite && worstWindow < 2.0, "modal C4 (velocity 64) against the reference take, level per window: " + detail
+                                                   + " (threshold +-2 dB)");
+            }
+
+            // Load: sustain pedal down, 64 notes struck at once, 10 s in 128-sample blocks.
+            modalEngine.prepare(fs, 128);
+            std::vector<float> l(128), rr(128);
+            float* outputs[2] = { l.data(), rr.data() };
+            std::vector<pf::Event> events { { 0, 0xB0, 64, 127 } };
+            for (int note = 21; note <= 108 && events.size() < 65; ++note)
+                if (profile->find(note) != nullptr)
+                    events.push_back({ 0, 0x90, (std::uint8_t) note, 80 });
+            const int blocks = (int) (10.0 * fs) / 128;
+            const auto start = juce::Time::getMillisecondCounterHiRes();
+            int maxModes = 0;
+            for (int k = 0; k < blocks; ++k) {
+                modalEngine.process(outputs, 2, 128, k == 0 ? events.data() : nullptr, k == 0 ? (int) events.size() : 0);
+                maxModes = juce::jmax(maxModes, modalEngine.activeModes.load());
+            }
+            const double seconds = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
+            r.check(10.0 / seconds > 3.0, "modal load: " + juce::String((int) events.size() - 1) + " notes, sustain down, up to "
+                                              + juce::String(maxModes) + " resonators, 10 s rendered in " + juce::String(seconds, 2)
+                                              + " s, i.e. " + juce::String(10.0 / seconds, 1) + " times real time (threshold: 3)");
+        }
+    } else {
+        r.line("[----]  modal engine: no modal-profile.bin next to the corpus passes (forge export)");
     }
 
     r.line(r.passed ? "RESULT: every check passes" : "RESULT: at least one check fails");

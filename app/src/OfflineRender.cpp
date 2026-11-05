@@ -2,6 +2,8 @@
 
 #include "ReferencePlayer.h"
 
+#include <pianoforge/modal_engine.hpp>
+
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <cmath>
@@ -17,6 +19,26 @@ juce::AudioBuffer<float> renderSequence(const juce::MidiMessageSequence& sequenc
     player.outputGain = 1.0f; // unity: the render is compared with other renders, the lab volume is not applied
     player.restrikeFadeSeconds = restrikeFadeSeconds;
     player.playWholeTake = playWholeTake;
+    return renderWith(player, sequence, sampleRate, tailSeconds);
+}
+
+juce::AudioBuffer<float> renderSequenceModal(const juce::MidiMessageSequence& sequence,
+                                             std::shared_ptr<const pf::ModalProfile> profile, double sampleRate,
+                                             float restrikeFadeSeconds, bool bodyEnabled, bool residualEnabled,
+                                             double tailSeconds)
+{
+    pf::ModalEngine engine;
+    engine.install(std::move(profile));
+    engine.outputGain = 1.0f;
+    engine.restrikeFadeSeconds = restrikeFadeSeconds;
+    engine.bodyEnabled = bodyEnabled;
+    engine.residualEnabled = residualEnabled;
+    return renderWith(engine, sequence, sampleRate, tailSeconds);
+}
+
+juce::AudioBuffer<float> renderWith(pf::Engine& player, const juce::MidiMessageSequence& sequence, double sampleRate,
+                                    double tailSeconds)
+{
     constexpr int block = 512;
     player.prepare(sampleRate, block);
 
@@ -101,9 +123,21 @@ int runOfflineRender(const juce::StringArray& arguments)
         return 1;
     }
     const double fs = bank->sampleRate;
-    const float restrike = arguments[i + 4].isNotEmpty() ? (float) arguments[i + 4].getDoubleValue() : 0.8f;
+    const float restrike = arguments[i + 4].isNotEmpty() && !arguments[i + 4].startsWith("--")
+                               ? (float) arguments[i + 4].getDoubleValue() : 0.8f;
+    const bool modal = arguments.indexOf("--engine") >= 0 && arguments[arguments.indexOf("--engine") + 1] == "modal";
+    std::shared_ptr<const pf::ModalProfile> profile;
+    if (modal) {
+        const auto path = corpus.getParentDirectory().getChildFile("modal-profile.bin");
+        std::string error;
+        profile = pf::loadModalProfile(path.getFullPathName().toStdString(), error);
+        if (profile == nullptr) {
+            report.replaceWithText("Cannot load the modal profile: " + juce::String(error));
+            return 1;
+        }
+    }
     const auto start = juce::Time::getMillisecondCounterHiRes();
-    const auto out = renderSequence(sequence, bank, fs, restrike, false);
+    const auto out = modal ? renderSequenceModal(sequence, profile, fs, restrike) : renderSequence(sequence, bank, fs, restrike, false);
     const double seconds = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
     if (const auto written = writeWav(out, fs, outFile); written.failed()) {
         report.replaceWithText(written.getErrorMessage());
@@ -113,7 +147,7 @@ int runOfflineRender(const juce::StringArray& arguments)
     for (const auto* e : sequence)
         notes += e->message.isNoteOn() ? 1 : 0;
     juce::String log;
-    log << "Corpus: " << loader.status() << "\nRendered " << notes << " notes, " << juce::String(out.getNumSamples() / fs, 1)
+    log << "Corpus: " << loader.status() << "\nEngine: " << (modal ? "modal" : "reference") << "\nRendered " << notes << " notes, " << juce::String(out.getNumSamples() / fs, 1)
         << " s of audio in " << juce::String(seconds, 2) << " s; peak "
         << juce::String(juce::Decibels::gainToDecibels(out.getMagnitude(0, out.getNumSamples())), 1) << " dBFS; re-strike fade "
         << juce::String(restrike, 2) << " s\nOutput: " << outFile.getFullPathName() << "\n";

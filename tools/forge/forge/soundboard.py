@@ -30,7 +30,7 @@ import numpy as np
 import soundfile as sf
 
 from forge.modes import BandExtractor, _hankel_cov, esprit_poles, synthesize
-from forge.note_modes import partial_modes
+from forge.note_modes import clean, partial_modes
 
 BAND = (30.0, 700.0)
 T0, T1 = 0.03, 2.5
@@ -46,7 +46,7 @@ def residual_baseband(path: Path, note: dict) -> tuple[np.ndarray, float]:
     audio, fs = sf.read(path, dtype="float64", always_2d=True)
     on, off = meta["note_on_sample"], meta["note_off_sample"]
     x = audio[on:off].T
-    r = x - synthesize(partial_modes(note), x.shape[0], x.shape[1], fs)
+    r = x - synthesize(partial_modes(clean(note)[0]), x.shape[0], x.shape[1], fs)  # failed fits left out
     lo, hi = BAND
     z, fs_d = BandExtractor(r, fs).baseband((lo + hi) / 2, (hi - lo) / 2, (hi - lo) / 2 + 20)
     i0, i1 = int(round(T0 * fs_d)), min(int(round(T1 * fs_d)), z.shape[1])
@@ -100,9 +100,10 @@ def fit_note(z: np.ndarray, fs_d: float, poles: np.ndarray, partial_freqs: list[
 
 
 def _fit_task(args) -> dict:
-    path, note, poles, fs_d = args
-    z, _ = residual_baseband(Path(path), note)
-    poles = np.asarray(poles)
+    path, note, freqs, decays = args
+    z, fs_d = residual_baseband(Path(path), note)
+    lo, hi = BAND  # the poles at this take's own baseband rate (it depends on the take's length)
+    poles = np.exp((-np.asarray(decays) + 2j * np.pi * (np.asarray(freqs) - (lo + hi) / 2)) / fs_d)
     f0 = note["f0"]
     centres = [p["centre"] for p in note["partials"]]
     # Partials not analysed (too quiet) still sit on the stiff-string law: exclude their bins as well.
@@ -116,11 +117,11 @@ def _fit_task(args) -> dict:
                      for k in range(amps0.shape[1])]}
 
 
-def run(corpus: Path, velocity: int = 64, jobs: int = 0) -> list[Path]:
-    modes = json.loads((corpus / f"modes-v{velocity:03d}.json").read_text(encoding="utf-8"))
-    notes = {n["midi"]: n for n in modes["notes"]}
-    takes = {int(p.name[:3]): p for p in (corpus / "single-notes").glob(f"*_v{velocity:03d}_h*.flac")}
-    start = time.time()
+POLES_VELOCITY = 64  # the resonances are measured once, at this velocity; other velocities only fit amplitudes
+
+
+def estimate_poles(notes: dict, takes: dict) -> tuple[np.ndarray, float]:
+    """Shared resonances (poles per baseband sample) and the baseband rate, from the treble notes' residuals."""
     segments, fs_d = [], 0.0
     for midi in range(POLE_NOTES[0], POLE_NOTES[1] + 1):
         if midi in notes and midi in takes:
@@ -134,12 +135,31 @@ def run(corpus: Path, velocity: int = 64, jobs: int = 0) -> list[Path]:
     poles = poles[np.abs(poles) < 1.0]
     lo, hi = BAND
     freqs = (lo + hi) / 2 + np.angle(poles) * fs_d / (2 * np.pi)
-    decays = -np.log(np.abs(poles)) * fs_d
     inside = (freqs >= lo - 10) & (freqs <= hi + 10)
-    poles, freqs, decays = poles[inside], freqs[inside], decays[inside]
-    print(f"  {len(poles)} shared resonances from {len(segments)} treble notes ({time.time() - start:.0f} s); "
-          f"T60 median {np.median(6.91 / decays):.2f} s")
-    tasks = [(str(takes[m]), notes[m], poles.tolist(), fs_d) for m in sorted(notes) if m in takes]
+    return poles[inside], fs_d
+
+
+def run(corpus: Path, velocity: int = 64, jobs: int = 0) -> list[Path]:
+    """Amplitudes per note at `velocity`. The resonances belong to the instrument, not to the blow: they are
+    estimated at POLES_VELOCITY (written first if needed) and reused as they are for every other velocity."""
+    modes = json.loads((corpus / f"modes-v{velocity:03d}.json").read_text(encoding="utf-8"))
+    notes = {n["midi"]: n for n in modes["notes"]}
+    takes = {int(p.name[:3]): p for p in (corpus / "single-notes").glob(f"*_v{velocity:03d}_h*.flac")}
+    start = time.time()
+    lo, hi = BAND
+    reference = corpus / f"soundboard-v{POLES_VELOCITY:03d}.json"
+    if velocity != POLES_VELOCITY:
+        if not reference.exists():
+            run(corpus, POLES_VELOCITY, jobs)
+        freqs, decays, _ = load(reference)
+        print(f"  {len(freqs)} resonances from {reference.name}")
+    else:
+        poles, fs_d = estimate_poles(notes, takes)
+        freqs = (lo + hi) / 2 + np.angle(poles) * fs_d / (2 * np.pi)
+        decays = -np.log(np.abs(poles)) * fs_d
+        print(f"  {len(poles)} shared resonances from the treble notes ({time.time() - start:.0f} s); "
+              f"T60 median {np.median(6.91 / decays):.2f} s")
+    tasks = [(str(takes[m]), notes[m], freqs.tolist(), decays.tolist()) for m in sorted(notes) if m in takes]
     with ProcessPoolExecutor(max_workers=jobs or None) as pool:
         fitted = list(pool.map(_fit_task, tasks))
     print(f"  amplitudes of {len(fitted)} notes ({time.time() - start:.0f} s)")

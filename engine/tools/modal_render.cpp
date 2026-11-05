@@ -1,0 +1,143 @@
+// Offline renders and CPU measurements of the modal engine, without the application.
+//
+//   modal_render <profile> render <out.wav> <note> <velocity> <hold s> [tail s] [rate]
+//       one note: note-on at 0, note-off after <hold s>, <tail s> more (default 3), 32-bit float stereo WAV
+//   modal_render <profile> bench [voices] [rate] [block]
+//       strikes <voices> notes spread over the keyboard and times process() against the real-time budget
+#include <pianoforge/modal_engine.hpp>
+
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <string>
+#include <vector>
+
+namespace {
+
+void writeWav(const char* path, const std::vector<float>& l, const std::vector<float>& r, int rate)
+{
+    std::ofstream out(path, std::ios::binary);
+    auto u32 = [&](std::uint32_t v) { out.write(reinterpret_cast<const char*>(&v), 4); };
+    auto u16 = [&](std::uint16_t v) { out.write(reinterpret_cast<const char*>(&v), 2); };
+    const auto frames = (std::uint32_t) l.size(), bytes = frames * 8;
+    out.write("RIFF", 4);
+    u32(36 + bytes);
+    out.write("WAVEfmt ", 8);
+    u32(16);
+    u16(3); // IEEE float
+    u16(2);
+    u32((std::uint32_t) rate);
+    u32((std::uint32_t) rate * 8);
+    u16(8);
+    u16(32);
+    out.write("data", 4);
+    u32(bytes);
+    for (std::uint32_t i = 0; i < frames; ++i) {
+        out.write(reinterpret_cast<const char*>(&l[i]), 4);
+        out.write(reinterpret_cast<const char*>(&r[i]), 4);
+    }
+}
+
+void run(pf::ModalEngine& engine, std::vector<pf::Event> events, int frames, int block, std::vector<float>& l,
+         std::vector<float>& r, double* seconds = nullptr, double* worst = nullptr)
+{
+    l.assign((std::size_t) frames, 0.0f);
+    r.assign((std::size_t) frames, 0.0f);
+    std::size_t next = 0;
+    std::vector<pf::Event> local;
+    double total = 0.0, peak = 0.0;
+    for (int s = 0; s < frames; s += block) {
+        const int n = std::min(block, frames - s);
+        local.clear();
+        while (next < events.size() && (int) events[next].offset < s + n) {
+            auto e = events[next++];
+            e.offset -= (std::uint32_t) s;
+            local.push_back(e);
+        }
+        float* out[2] = { l.data() + s, r.data() + s };
+        const auto t0 = std::chrono::steady_clock::now();
+        engine.process(out, 2, n, local.data(), (int) local.size());
+        const double dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        total += dt;
+        peak = std::max(peak, dt);
+    }
+    if (seconds != nullptr)
+        *seconds = total;
+    if (worst != nullptr)
+        *worst = peak;
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    if (argc < 3) {
+        std::fprintf(stderr, "usage: modal_render <profile> render <out.wav> <note> <velocity> <hold s> [tail s] [rate]\n"
+                             "       modal_render <profile> bench [voices] [rate] [block]\n");
+        return 2;
+    }
+    std::string error;
+    auto profile = pf::loadModalProfile(argv[1], error);
+    if (profile == nullptr) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    pf::ModalEngine engine;
+    engine.install(profile);
+    const std::string mode = argv[2];
+
+    if (mode == "render" && argc >= 7) {
+        const int note = std::atoi(argv[4]), velocity = std::atoi(argv[5]);
+        const double hold = std::atof(argv[6]), tail = argc > 7 ? std::atof(argv[7]) : 3.0;
+        const int rate = argc > 8 ? std::atoi(argv[8]) : 44100, block = 64;
+        engine.prepare(rate, block);
+        const int off = (int) (hold * rate), frames = (int) ((hold + tail) * rate);
+        std::vector<pf::Event> events { { 0, 0x90, (std::uint8_t) note, (std::uint8_t) velocity },
+                                        { (std::uint32_t) off, 0x80, (std::uint8_t) note, 0 } };
+        std::vector<float> l, r;
+        run(engine, events, frames, block, l, r);
+        writeWav(argv[3], l, r, rate);
+        std::printf("%s: note %d velocity %d (layer %d), %.1f s\n", argv[3], note, velocity,
+                    engine.lastLayerVelocity.load(), (double) frames / rate);
+        return 0;
+    }
+    if (mode == "bench") {
+        const int voices = argc > 3 ? std::atoi(argv[3]) : 32, rate = argc > 4 ? std::atoi(argv[4]) : 48000;
+        const int block = argc > 5 ? std::atoi(argv[5]) : 64;
+        engine.prepare(rate, block);
+        // Sustain pedal down, then <voices> notes struck 10 ms apart, from the bass up: the worst case is the
+        // bass, with the most partials.
+        std::vector<pf::Event> events { { 0, 0xB0, 64, 127 } };
+        for (int i = 0; i < voices; ++i)
+            events.push_back({ (std::uint32_t) (i * rate / 100), 0x90, (std::uint8_t) (21 + (i * 7) % 88), 80 });
+        const int frames = (int) (4.0 * rate);
+        std::vector<float> l, r;
+        double total = 0.0, worst = 0.0;
+        run(engine, events, frames, block, l, r, &total, &worst);
+        const double audio = (double) frames / rate, budget = (double) block / rate;
+        std::printf("%d voices, %d modes at the end, %d Hz, blocks of %d: %.1f %% of real time on average, "
+                    "worst block %.0f us of %.0f us\n",
+                    voices, engine.activeModes.load(), rate, block, 100.0 * total / audio, worst * 1e6, budget * 1e6);
+        return 0;
+    }
+    if (mode == "kernel") { // the resonator bank alone: cost per mode and per sample
+        const int modes = argc > 3 ? std::atoi(argv[3]) : 2048, block = argc > 4 ? std::atoi(argv[4]) : 64;
+        pf::ModeBank bank;
+        bank.reserve(modes);
+        for (int k = 0; k < modes; ++k)
+            bank.add(pf::modePole(30.0 + 7.3 * k, 0.5, 48000.0), { 1e-3f, 0.0f }, { 0.0f, 1e-3f });
+        std::vector<float> l((std::size_t) block), r((std::size_t) block);
+        const int blocks = 48000 * 4 / block;
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int b = 0; b < blocks; ++b)
+            bank.process(l.data(), r.data(), block);
+        const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("kernel: %d modes, blocks of %d: %.3f ns per mode and sample (%.0f modes in real time at 48 kHz)\n",
+                    modes, block, 1e9 * s / ((double) blocks * block * modes), (double) modes * 4.0 / s);
+        return 0;
+    }
+    std::fprintf(stderr, "unknown mode %s\n", mode.c_str());
+    return 2;
+}
