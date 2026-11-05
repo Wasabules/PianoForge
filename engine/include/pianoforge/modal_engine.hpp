@@ -18,7 +18,11 @@ namespace pf {
 /// - Velocity: the nearest velocity layer is played, as it was measured (a real strike, with its own beating);
 ///   each partial's level is interpolated between the two layers around the velocity, so that loudness and
 ///   timbre follow the velocity continuously (studies/velocity_linearity.py).
-/// - Soundboard: one bank of resonances shared by every note; a note-on adds its excitation to it.
+///   The attack stays the nearest layer's strike: over the attack residual, everything (modes, body, residual)
+///   has the one overall gain, since the residual cancels the modes extrapolated back to the note-on and only
+///   does so at the same gain. Each partial then reaches its own level over kLevelRampSeconds.
+/// - Soundboard: one bank of resonances shared by every note; a note-on adds its excitation to it, at the
+///   overall gain (the body is in the residual too).
 /// - Key release: the measured damper curve of the note (level against the note held), applied to the voice.
 /// - Sustain pedal (CC64 >= 64): the dampers stay up. Re-strike: the previous voice of the note keeps ringing and
 ///   fades to -40 dB within restrikeFadeSeconds, as in the reference player.
@@ -29,6 +33,7 @@ class ModalEngine final : public Engine {
 public:
     static constexpr int kMaxVoices = 64;
     static constexpr int kMaxVoicesPerNote = 3;
+    static constexpr double kLevelRampSeconds = 0.05; // after the residual: overall gain -> each partial's level
 
     void prepare(double sampleRate, int maxBlockSize) override;
     void release() noexcept override;
@@ -54,11 +59,22 @@ public:
     std::atomic<std::uint32_t> stolenVoices { 0 }, noteOnsReceived { 0 };
 
 private:
+    /// A partial whose level differs from the overall gain: its modes [first, first + count) in the bank (the
+    /// profile modes from profileFirst), raised by `factor` per sample during the level ramp.
+    struct PartialRamp {
+        int first = 0, count = 0, profileFirst = 0;
+        float factor = 1.0f;
+    };
+    enum class Ramp : std::uint8_t { none, waiting, running };
+
     struct Voice {
         bool active = false, keyDown = false, released = false, damperCurve = false, fadingOut = false;
         int note = -1;
         const ModalProfile::Layer* layer = nullptr;
         ModeBank bank;
+        std::vector<PartialRamp> ramps; // reserved for the largest layer
+        Ramp ramp = Ramp::none;
+        std::int64_t rampStart = 0, rampEnd = 0; // samples since the note-on
         double residualPos = 0.0;      // in residual frames
         float residualGain = 1.0f;
         float gain = 1.0f, decay = 1.0f; // exponential envelope (re-strike, fast fades)
@@ -76,6 +92,7 @@ private:
     void releaseVoice(const ModalProfile& p, Voice& v) noexcept;
     void render(const ModalProfile& p, float* const* outputs, int numChannels, int start, int n) noexcept;
     bool produce(const ModalProfile& p, Voice& v, int n) noexcept;
+    void renderBank(Voice& v, float* left, float* right, int n) noexcept;
 
     double sampleRate = 48000.0;
     int maxBlockSize = 0;

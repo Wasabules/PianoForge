@@ -69,11 +69,15 @@ void ModalEngine::release() noexcept
 void ModalEngine::allocate()
 {
     const int capacity = owned != nullptr ? owned->maxModesPerLayer : 0;
+    const int partials = owned != nullptr ? owned->maxPartialsPerLayer : 0;
     for (auto& v : voices) {
         v.active = false;
         if (v.bank.capacity() < capacity)
             v.bank.reserve(capacity);
         v.bank.clear();
+        v.ramps.clear();
+        v.ramps.reserve((std::size_t) partials);
+        v.ramp = Ramp::none;
     }
     body.reserve(owned != nullptr ? (int) owned->bodyFreq.size() : 0);
     if (owned != nullptr)
@@ -261,6 +265,12 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
 
     auto& v = *target;
     v.bank.clear();
+    v.ramps.clear();
+    // The level ramp starts once the residual is over (output samples); without a residual there is nothing to
+    // stay consistent with, and each partial starts at its own level.
+    const auto residualEnd = (std::int64_t) std::ceil((double) near.residualFrames * sampleRate / p.residualRate);
+    const bool ramped = residualEnd > 0 && overall > 1e-6f;
+    const auto rampLength = std::max<std::int64_t>(1, (std::int64_t) std::llround(kLevelRampSeconds * sampleRate));
     const double nyquist = 0.5 * sampleRate;
     std::size_t j = 0; // walks the other layer's partials (both ascending)
     for (const auto& part : near.partials) {
@@ -273,19 +283,31 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
                                        : interpolateLevel(other.partials[j].level, part.level, alpha);
             g = std::clamp(wanted / part.level, kMinGain * overall, kMaxGain * overall);
         }
+        const int first = v.bank.size();
+        bool complete = true;
+        for (int k = 0; k < part.modeCount; ++k)
+            complete = complete && near.modes[(std::size_t) (part.firstMode + k)].freq < nyquist;
+        // A partial with a mode past Nyquist (inaudible) is not ramped: its bank modes would not map back.
+        const bool ramp = ramped && complete && std::abs(g - overall) > 1e-4f * overall
+                          && v.ramps.size() < v.ramps.capacity();
+        const float start = ramp ? overall : g;
         for (int k = 0; k < part.modeCount; ++k) {
             const auto& m = near.modes[(std::size_t) (part.firstMode + k)];
             if (m.freq < nyquist)
-                v.bank.add(modePole(m.freq, m.decay, sampleRate), m.left * g, m.right * g);
+                v.bank.add(modePole(m.freq, m.decay, sampleRate), m.left * start, m.right * start);
         }
+        if (ramp)
+            v.ramps.push_back({ first, v.bank.size() - first, part.firstMode,
+                                (float) std::pow((double) g / overall, 1.0 / (double) rampLength) });
     }
+    v.ramp = v.ramps.empty() ? Ramp::none : Ramp::waiting;
+    v.rampStart = residualEnd;
+    v.rampEnd = residualEnd + rampLength;
 
     if (bodyEnabled.load(std::memory_order_relaxed) && body.size() == (int) near.bodyLeft.size()) {
-        float gb = overall;
-        if (&near != &other && near.bodyLevel > 0.0f)
-            gb = std::clamp(interpolateLevel(la.bodyLevel, lb.bodyLevel, alpha) / near.bodyLevel, kMinGain, kMaxGain);
-        if (velocity < layers.front().velocity)
-            gb = overall;
+        // The overall gain, like the residual: the fast resonances extrapolated back to the note-on are cancelled
+        // by the residual only at the same gain. (Against the strings, the body hardly changes between layers.)
+        const float gb = overall;
         if (bodyDecay < 1.0f) { // the body was fading out (all sound off): start again from silence
             body.silence();
             bodyDecay = bodyGain = 1.0f;
@@ -385,13 +407,43 @@ void ModalEngine::render(const ModalProfile& p, float* const* outputs, int numCh
     }
 }
 
+void ModalEngine::renderBank(Voice& v, float* left, float* right, int n) noexcept
+{
+    // Split at the level ramp's start and end, to the sample: in between, the ramped partials' poles are raised
+    // (or lowered) by their factor; at the end, the exact poles are put back.
+    int done = 0;
+    while (done < n) {
+        const std::int64_t at = v.sinceOn + done;
+        if (v.ramp == Ramp::waiting && at >= v.rampStart) {
+            for (const auto& ramp : v.ramps)
+                v.bank.scalePoles(ramp.first, ramp.count, ramp.factor);
+            v.ramp = Ramp::running;
+        }
+        if (v.ramp == Ramp::running && at >= v.rampEnd) {
+            for (const auto& ramp : v.ramps)
+                for (int k = 0; k < ramp.count; ++k) {
+                    const auto& m = v.layer->modes[(std::size_t) (ramp.profileFirst + k)];
+                    v.bank.setPole(ramp.first + k, modePole(m.freq, m.decay, sampleRate));
+                }
+            v.ramp = Ramp::none;
+        }
+        std::int64_t chunk = n - done;
+        if (v.ramp == Ramp::waiting)
+            chunk = std::min(chunk, v.rampStart - at);
+        else if (v.ramp == Ramp::running)
+            chunk = std::min(chunk, v.rampEnd - at);
+        v.bank.process(left + done, right + done, (int) chunk);
+        done += (int) chunk;
+    }
+}
+
 bool ModalEngine::produce(const ModalProfile& p, Voice& v, int m) noexcept
 {
     float* l = bufferL.data();
     float* r = bufferR.data();
     std::fill(l, l + m, 0.0f);
     std::fill(r, r + m, 0.0f);
-    v.bank.process(l, r, m);
+    renderBank(v, l, r, m);
 
     const auto& layer = *v.layer;
     bool residualLeft = false;

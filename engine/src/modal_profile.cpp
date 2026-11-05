@@ -222,6 +222,7 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
             }
             layer.level = (float) std::sqrt(level);
             p->maxModesPerLayer = std::max(p->maxModesPerLayer, (int) modes);
+            p->maxPartialsPerLayer = std::max(p->maxPartialsPerLayer, (int) layer.partials.size());
             p->bytes += layer.modes.size() * sizeof(ModalProfile::Mode) + layer.residual.size() * sizeof(float)
                         + 2 * poles * sizeof(std::complex<float>);
             note.layers.push_back(std::move(layer));

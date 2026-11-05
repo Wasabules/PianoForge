@@ -7,8 +7,11 @@ the attack residuals.
 Per note and per layer, the profile holds:
   - the modes of every partial (frequency, decay, complex amplitude per channel at the note-on);
   - the soundboard body: the complex amplitude of each shared resonance;
-  - the attack residual: what neither the strings nor the body explain over the first RESIDUAL_S (the hammer,
-    the knock, the first instants before the modes settle), faded out over its last RESIDUAL_FADE_S.
+  - the attack residual: what neither the strings nor the body explain (the hammer, the knock, the first instants
+    before the modes settle), up to the start of the partials' analysis window and at least RESIDUAL_S, then faded
+    out over RESIDUAL_FADE_S. Before that start, the modes are extrapolated back to the note-on, not measured: the
+    residual is what keeps the attack exact. The window starts later in the bass, where the partials are close
+    (0.19 s for A0, 0.08 s from C2 up).
 The layers are kept as they were measured: each one is a real strike, with its own beating phases. Interpolating
 amplitudes between two strikes gives neither (studies/velocity_linearity.py); the engine plays the nearest layer
 with the levels interpolated per partial.
@@ -58,11 +61,17 @@ def velocities(corpus: Path) -> list[int]:
     return found
 
 
+def residual_seconds(note: dict) -> float:
+    """Length of the attack residual: the fade starts once every partial is inside its analysis window."""
+    start = max((p["t0"] for p in note["partials"] if p["modes"]), default=0.0)
+    return max(RESIDUAL_S, start + RESIDUAL_FADE_S)
+
+
 def residual(path: Path, note: dict, body_freqs, body_decays, body_amps) -> tuple[np.ndarray, int]:
     """Attack residual of one take (frames x channels), faded out, at the take's sample rate."""
     meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     audio, fs = sf.read(path, dtype="float64", always_2d=True)
-    n = int(round(RESIDUAL_S * fs))
+    n = int(round(residual_seconds(note) * fs))
     on = meta["note_on_sample"]
     x = audio[on:on + n].T
     model = synthesize(partial_modes(note), x.shape[0], n, fs)

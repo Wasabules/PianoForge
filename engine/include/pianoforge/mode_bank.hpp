@@ -110,12 +110,26 @@ public:
     }
 
     /// Multiplies the magnitude of every pole by `factor` (< 1: extra damping, e.g. a damper landing).
-    void scalePoles(float factor) noexcept
+    void scalePoles(float factor) noexcept { scalePoles(0, count, factor); }
+
+    /// Same for the modes [first, first + n) only. A factor slightly above 1 for N samples raises their level
+    /// by factor^N, smoothly (an exponential ramp, no step in the waveform).
+    void scalePoles(int first, int n, float factor) noexcept
     {
-        for (std::size_t k = 0; k < (std::size_t) count; ++k) {
+        const auto end = (std::size_t) std::min(first + n, count);
+        for (auto k = (std::size_t) std::max(first, 0); k < end; ++k) {
             pr[k] *= factor;
             pi[k] *= factor;
         }
+    }
+
+    /// Replaces the pole of mode k (for instance, the exact pole back after a ramp).
+    void setPole(int k, std::complex<double> pole) noexcept
+    {
+        if (k < 0 || k >= count)
+            return;
+        pr[(std::size_t) k] = (float) pole.real();
+        pi[(std::size_t) k] = (float) pole.imag();
     }
 
     /// Accumulates numSamples into left and right (adds, does not overwrite).
@@ -220,10 +234,12 @@ private:
         // Each phasor update waits for the previous one (a multiply then a fused multiply-add, about 8 cycles):
         // several groups are interleaved in the sample loop so that their updates overlap.
         std::size_t g = 0;
-        for (; PF_INTERLEAVE >= 4 && g + 4 <= groups; g += 4)
-            renderGroupsAvx<4>(g * kLanes, accL, accR, n);
-        for (; PF_INTERLEAVE >= 2 && g + 2 <= groups; g += 2)
-            renderGroupsAvx<2>(g * kLanes, accL, accR, n);
+        if constexpr (PF_INTERLEAVE >= 4)
+            for (; g + 4 <= groups; g += 4)
+                renderGroupsAvx<4>(g * kLanes, accL, accR, n);
+        if constexpr (PF_INTERLEAVE >= 2)
+            for (; g + 2 <= groups; g += 2)
+                renderGroupsAvx<2>(g * kLanes, accL, accR, n);
         for (; g < groups; ++g)
             renderGroupsAvx<1>(g * kLanes, accL, accR, n);
 #else

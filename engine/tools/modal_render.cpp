@@ -1,7 +1,8 @@
 // Offline renders and CPU measurements of the modal engine, without the application.
 //
 //   modal_render <profile> render <out.wav> <note> <velocity> <hold s> [tail s] [rate]
-//       one note: note-on at 0, note-off after <hold s>, <tail s> more (default 3), 32-bit float stereo WAV
+//       one note: note-on at 0, note-off after <hold s>, <tail s> more (default 3), 32-bit float stereo WAV;
+//       --no-body / --no-residual (anywhere on the line) leave out the soundboard or the attack residual
 //   modal_render <profile> bench [voices] [rate] [block]
 //       strikes <voices> notes spread over the keyboard and times process() against the real-time budget
 #include <pianoforge/modal_engine.hpp>
@@ -73,8 +74,20 @@ void run(pf::ModalEngine& engine, std::vector<pf::Event> events, int frames, int
 
 int main(int argc, char** argv)
 {
+    bool body = true, residual = true; // options, taken out of the positional arguments
+    int kept = 1;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--no-body") == 0)
+            body = false;
+        else if (std::strcmp(argv[i], "--no-residual") == 0)
+            residual = false;
+        else
+            argv[kept++] = argv[i];
+    }
+    argc = kept;
     if (argc < 3) {
         std::fprintf(stderr, "usage: modal_render <profile> render <out.wav> <note> <velocity> <hold s> [tail s] [rate]\n"
+                             "                    [--no-body] [--no-residual]\n"
                              "       modal_render <profile> bench [voices] [rate] [block]\n");
         return 2;
     }
@@ -86,6 +99,8 @@ int main(int argc, char** argv)
     }
     pf::ModalEngine engine;
     engine.install(profile);
+    engine.bodyEnabled = body;
+    engine.residualEnabled = residual;
     const std::string mode = argv[2];
 
     if (mode == "render" && argc >= 7) {

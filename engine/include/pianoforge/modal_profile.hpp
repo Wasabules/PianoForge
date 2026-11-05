@@ -61,6 +61,7 @@ struct ModalProfile {
     std::vector<Note> notes;
     std::array<int, 128> noteIndex {};           // index in notes, -1 when the note is missing
     int maxModesPerLayer = 0;
+    int maxPartialsPerLayer = 0;
     std::uint64_t bytes = 0;
 
     const Note* find(int midi) const noexcept
