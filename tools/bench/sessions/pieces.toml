@@ -2,7 +2,7 @@
 
 [session]
 name = "pieces"
-sample_rate = 48000
+sample_rate = 44100  # Kontakt hosted by pedalboard always runs at 44.1 kHz (see bench/kontakt.py)
 
 [[pass]]
 name = "pieces"

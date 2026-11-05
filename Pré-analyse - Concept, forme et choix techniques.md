@@ -399,6 +399,7 @@ séance.toml ──► protocole ──► prises (événements MIDI datés à l
 
 - **Le chargement** de Kontakt prend de 45 à 130 s.
 - **Une remise à zéro** du plugin coûte exactement le délai d'initialisation passé à pedalboard : 60 s pour un délai de 60 s, 1,1 s pour un délai de 1 s. Le banc ne remet donc jamais Kontakt à zéro. Entre deux prises, il coupe le son (CC120, CC123) et attend le silence numérique.
+- **Hébergé par pedalboard, Kontakt tourne toujours à 44,1 kHz**, quelle que soit la fréquence demandée (mesure du 5 novembre 2026 : un C4 rendu à 48 kHz sort à 284,7 Hz, à 96 kHz à 569,4 Hz). Le premier corpus, rendu à 48 kHz, était donc **1,47 demi-ton trop aigu**, avec des décroissances 8,8 % trop rapides. Les séances sont désormais à 44,1 kHz, et le banc refuse toute autre fréquence avec Kontakt. Il vérifie aussi la hauteur de A4 avant chaque rendu, et s'arrête si elle s'écarte de plus de 30 cents.
 - **Sans instrument chargé**, le rendu va à plus de 1 000 fois le temps réel, et les longueurs de rendu sont exactes à l'échantillon près.
 - **Avec Noire** (état « noire-dry » = snapshot Basic Pure, séance d'essai de 20 prises, 4 novembre 2026) :
   - le rendu va de **47 à 78 fois le temps réel**, si bien que la séance de référence complète (10 h 47 d'audio) se rend en un quart d'heure environ ;

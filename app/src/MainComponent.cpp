@@ -59,9 +59,10 @@ MainComponent::MainComponent()
     properties.setStorageParameters(options);
     auto* settings = properties.getUserSettings();
 
-    // Audio: ask for 48 kHz (the corpus rate) and a small buffer; the saved setting takes precedence.
+    // Audio: ask for 44.1 kHz (the corpus rate) and a small buffer; the saved setting takes precedence, and the
+    // device is switched to the corpus rate once the corpus is loaded, when the device offers it.
     juce::AudioDeviceManager::AudioDeviceSetup preferred;
-    preferred.sampleRate = 48000.0;
+    preferred.sampleRate = 44100.0;
     preferred.bufferSize = 128;
     const auto savedAudio = settings->getXmlValue("audio");
     deviceManager.initialise(0, 2, savedAudio.get(), true, {}, &preferred);
@@ -334,9 +335,18 @@ void MainComponent::timerCallback()
                              juce::dontSendNotification);
     } else if (!bankInstalled) {
         if (auto bank = loader.takeResult()) {
+            // Run the device at the corpus rate when it can: no resampling at all, hence no interpolation loss.
+            const double corpusRate = bank->sampleRate;
             player.installBank(std::move(bank));
             bankInstalled = true;
             updateRenderedLayers();
+            if (auto* device = deviceManager.getCurrentAudioDevice();
+                device != nullptr && std::abs(device->getCurrentSampleRate() - corpusRate) > 0.5
+                && device->getAvailableSampleRates().contains(corpusRate)) {
+                auto setup = deviceManager.getAudioDeviceSetup();
+                setup.sampleRate = corpusRate;
+                deviceManager.setAudioDeviceSetup(setup, true);
+            }
             progressBar.setVisible(false);
             resized();
             corpusStatus.setText("Corpus: " + corpusFolder.getFullPathName() + "  -  " + loader.status(),

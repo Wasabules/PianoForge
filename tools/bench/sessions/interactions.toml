@@ -7,7 +7,7 @@
 
 [session]
 name = "interactions"
-sample_rate = 48000
+sample_rate = 44100  # Kontakt hosted by pedalboard always runs at 44.1 kHz (see bench/kontakt.py)
 
 # Comparable pairs: the same note with the pedal down (key released at 4 s, pedal held until 10 s) and
 # with the pedal up (key held for 10 s). The difference isolates the sympathetic resonance.

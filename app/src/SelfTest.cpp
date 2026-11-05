@@ -137,17 +137,19 @@ int runSelfTest(const juce::StringArray& arguments)
         if (s->note == 60 && std::abs(s->velocity - 64) < std::abs(c4->velocity - 64))
             c4 = s;
     {
-        player.prepare(44100.0, 512);
-        flush(player, 44100.0);
-        const auto rendered = renderNote(player, c4->note, c4->velocity, 2 * 44100, 512);
+        const double device = std::abs(fs - 48000.0) < 1.0 ? 44100.0 : 48000.0; // any rate other than the corpus'
+        player.prepare(device, 512);
+        flush(player, device);
+        const auto rendered = renderNote(player, c4->note, c4->velocity, (int) (2 * device), 512);
         const auto reference = decodeFile(c4->file);
-        const double levelDiff = rmsDb(rendered, 0, 2 * 44100) - rmsDb(reference, (int) c4->noteOnFrame, (int) (2 * fs));
+        const double levelDiff = rmsDb(rendered, 0, (int) (2 * device)) - rmsDb(reference, (int) c4->noteOnFrame, (int) (2 * fs));
         bool finite = true;
         for (int c = 0; c < 2; ++c)
             for (int k = 0; k < rendered.getNumSamples(); ++k)
                 finite = finite && std::isfinite(rendered.getSample(c, k));
         r.check(finite && std::abs(levelDiff) < 0.2,
-                "resampling 48 -> 44.1 kHz: level difference " + juce::String(levelDiff, 3) + " dB (threshold +-0.2 dB)");
+                "resampling " + juce::String(fs / 1000.0, 1) + " -> " + juce::String(device / 1000.0, 1)
+                    + " kHz: level difference " + juce::String(levelDiff, 3) + " dB (threshold +-0.2 dB)");
     }
 
     // 4. Key release. With the measured damper curves, the release of A0 (velocity 80, held 0.5 s) must follow

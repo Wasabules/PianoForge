@@ -23,6 +23,11 @@ from bench.protocol import Take, cc, note_off, note_on
 
 KONTAKT_VST3 = r"C:\Program Files\Common Files\VST3\Kontakt 8.vst3"
 SILENCE_DBFS = -120.0
+# Hosted by pedalboard, Kontakt 8 always runs at 44.1 kHz whatever the sample rate requested (measured: a C4
+# rendered at 48 kHz came out at 284.7 Hz, i.e. 48000/44100 too high; at 96 kHz, 569.4 Hz). Sessions rendered
+# with Kontakt must therefore use 44.1 kHz, and every run checks the pitch of A4 before rendering anything.
+KONTAKT_SAMPLE_RATE = 44100
+MAX_PITCH_ERROR_CENTS = 30.0
 
 Log = Callable[[str], None]
 
@@ -32,7 +37,10 @@ def fingerprint(data: bytes) -> str:
 
 
 class KontaktHost:
-    def __init__(self, fs: int = 48000, block: int = 512, path: str = KONTAKT_VST3, log: Log = print):
+    def __init__(self, fs: int = KONTAKT_SAMPLE_RATE, block: int = 512, path: str = KONTAKT_VST3, log: Log = print):
+        if fs != KONTAKT_SAMPLE_RATE:
+            raise ValueError(f"Kontakt hosted by pedalboard runs at {KONTAKT_SAMPLE_RATE} Hz whatever the requested "
+                             f"rate: render sessions at sample_rate = {KONTAKT_SAMPLE_RATE} (requested: {fs})")
         self.fs, self.block, self.log = fs, block, log
         start = time.monotonic()
         log("Loading Kontakt (one to two minutes)...")
@@ -98,6 +106,18 @@ class KontaktHost:
             quiet = quiet + 1 if peak_dbfs(audio) < SILENCE_DBFS else 0
         return rendered / self.fs
 
+    def measure_a4(self) -> float:
+        """Fundamental of A4 (velocity 64), from a zero-padded spectrum of one second of the sustain."""
+        n = round(1.5 * self.fs)
+        audio = self._render([(0, note_on(69, 64)), (round(1.3 * self.fs), note_off(69))], n)
+        self.silence()
+        x = audio.mean(axis=0)[round(0.2 * self.fs): round(1.2 * self.fs)]
+        size = 1 << 21
+        spectrum = np.abs(np.fft.rfft(x * np.hanning(len(x)), size))
+        freqs = np.fft.rfftfreq(size, 1 / self.fs)
+        band = (freqs > 300) & (freqs < 600)
+        return float(freqs[band][np.argmax(spectrum[band])])
+
     def wait_until_loaded(self, max_s: float = 900.0) -> dict:
         """Kontakt loads its samples in the background: wait until probe notes sound, consistently."""
         probes = [(21, 40), (21, 120), (60, 64), (108, 40), (108, 120)]
@@ -113,8 +133,14 @@ class KontaktHost:
             if sounding and previous is not None and max(abs(a - b) for a, b in zip(peaks, previous)) < 0.1:
                 self.silence()
                 waited = time.monotonic() - start
-                self.log(f"Instrument ready after {waited:.0f} s; probe peaks (dBFS): {peaks}")
-                return {"wait_s": round(waited, 1), "probe_peaks_dbfs": peaks}
+                a4 = self.measure_a4()
+                cents = 1200 * np.log2(a4 / 440.0)
+                self.log(f"Instrument ready after {waited:.0f} s; probe peaks (dBFS): {peaks}; A4 at {a4:.2f} Hz "
+                         f"({cents:+.1f} cents)")
+                if abs(cents) > MAX_PITCH_ERROR_CENTS:
+                    raise RuntimeError(f"A4 sounds at {a4:.2f} Hz ({cents:+.1f} cents): sample-rate mismatch between "
+                                       f"the host and the plugin, renders would be off pitch")
+                return {"wait_s": round(waited, 1), "probe_peaks_dbfs": peaks, "a4_hz": round(a4, 3)}
             previous = peaks if sounding else None
             self.log(f"  still loading... probe peaks: {peaks}")
             time.sleep(3.0)
