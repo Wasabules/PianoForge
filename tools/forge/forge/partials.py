@@ -129,11 +129,10 @@ def two_slope_fit(env_db: np.ndarray, hop_s: float) -> tuple[float, float, float
     return float(best[1]), float(best[2]), float(best[3]), float(np.sqrt(best[0]))
 
 
-def analyze_note(audio: np.ndarray, fs: int, midi: int, note_on: int, hold_s: float, a4: float = 440.0,
-                 max_partials: int = 40) -> NoteAnalysis:
-    mono = audio.mean(axis=0)
+def discover_partials(mono: np.ndarray, fs: int, midi: int, note_on: int,
+                      a4: float = 440.0) -> tuple[float, float, list[Partial]]:
+    """(f0, B, partials) of a note from a segment after the attack, long enough to separate the partials."""
     f_et = et_frequency(midi, a4)
-    # Frequency analysis: skip the attack, long enough to separate the partials.
     seg_len = float(np.clip(40.0 / f_et, 0.4, 3.0))
     start = note_on + int(0.05 * fs)
     seg = mono[start: start + int(seg_len * fs)]
@@ -147,6 +146,15 @@ def analyze_note(audio: np.ndarray, fs: int, midi: int, note_on: int, hold_s: fl
         if peak is not None:
             f0, B = peak[0], 0.0
             partials = [Partial(1, peak[0], 0.0)] + [p for p in partials if p.n > 1]
+    return f0, B, partials
+
+
+def analyze_note(audio: np.ndarray, fs: int, midi: int, note_on: int, hold_s: float, a4: float = 440.0,
+                 max_partials: int = 40) -> NoteAnalysis:
+    mono = audio.mean(axis=0)
+    f_et = et_frequency(midi, a4)
+    start = note_on + int(0.05 * fs)
+    f0, B, partials = discover_partials(mono, fs, midi, note_on, a4)
     first = partials[0].freq if partials and partials[0].n == 1 else f0 * np.sqrt(1 + B)
     result = NoteAnalysis(midi, f0, B, 1200 * np.log2(first / f_et), partials[:max_partials])
 

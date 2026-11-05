@@ -14,7 +14,8 @@ reference corpus rendered from a sampled grand piano, which the modal engine wil
 | `engine/` | Core, pure C++20 without framework. For now the `pf::Engine` interface shared by every engine. |
 | `app/` | Standalone application (JUCE 9): listening lab with an 88-key keyboard, MIDI input, audio device selection. |
 | `tools/bench/` | Reference bench (Python): renders a VST3 instrument through measurement sessions and checks the takes. |
-| `studies/` | Small standalone computations behind design decisions (resonator precision, CPU budget). |
+| `tools/forge/` | Forge (Python): analysis and calibration, from the reference corpus to engine data. |
+| `studies/` | Standalone computations and spikes behind design decisions (resonator precision, CPU budget, resynthesis). |
 | `corpus/` | Rendered takes and plugin states. Local only, never committed (commercial sample library licences). |
 
 ## Build the application
@@ -44,6 +45,20 @@ python -m venv .venv
 ```
 
 See `tools/bench/README.md`.
+
+## Forge
+
+```
+.venv\Scripts\python -m pip install -e tools\forge
+.venv\Scripts\python -m unittest discover -s tools\forge\tests
+```
+
+| Command | Output (in the corpus state folder) |
+|---|---|
+| `forge release-curves` | Damper curves measured from the release takes (`release-curves.json`). |
+| `forge analyze` | f0, inharmonicity, stretched tuning, decays per note; first profile (`physics.toml`). |
+| `forge modes` | Every partial resolved into its modes, the unison strings and their polarisations: beating and double decay (`modes-v064.json`). |
+| `forge soundboard` | The soundboard body: resonances shared by every note, amplitudes per note (`soundboard-v064.json`). Needs `forge modes`. |
 
 ## Licences
 

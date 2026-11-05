@@ -27,6 +27,23 @@ def cmd_analyze(args) -> int:
     return 0
 
 
+def cmd_modes(args) -> int:
+    from forge.note_modes import run
+
+    lo, _, hi = args.notes.partition("-")
+    for path in run(Path(args.corpus), args.velocity, (int(lo), int(hi or lo)), args.jobs):
+        print(f"Written: {path}")
+    return 0
+
+
+def cmd_soundboard(args) -> int:
+    from forge.soundboard import run
+
+    for path in run(Path(args.corpus), args.velocity, args.jobs):
+        print(f"Written: {path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -40,6 +57,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"))
     p.add_argument("--velocity", type=int, default=64)
     p.set_defaults(func=cmd_analyze)
+    p = sub.add_parser("modes", help="resolve every partial into its modes (unison strings, polarisations)")
+    p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"))
+    p.add_argument("--velocity", type=int, default=64)
+    p.add_argument("--notes", default="21-108", help="MIDI range, e.g. 21-108 or 60")
+    p.add_argument("--jobs", type=int, default=0, help="worker processes (default: one per core)")
+    p.set_defaults(func=cmd_modes)
+    p = sub.add_parser("soundboard", help="fit the soundboard body: shared resonances, amplitudes per note "
+                                          "(needs forge modes first)")
+    p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"))
+    p.add_argument("--velocity", type=int, default=64)
+    p.add_argument("--jobs", type=int, default=0, help="worker processes (default: one per core)")
+    p.set_defaults(func=cmd_soundboard)
     args = ap.parse_args(argv)
     return args.func(args)
 
