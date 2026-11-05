@@ -19,6 +19,14 @@ def cmd_release_curves(args) -> int:
     return 0
 
 
+def cmd_analyze(args) -> int:
+    from forge.analysis import run
+
+    for path in run(Path(args.corpus), args.velocity):
+        print(f"Written: {path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -28,6 +36,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"),
                    help="folder of one corpus state, with releases/ and single-notes/")
     p.set_defaults(func=cmd_release_curves)
+    p = sub.add_parser("analyze", help="analyze every note: f0, inharmonicity, tuning, partial decays; write the profile")
+    p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"))
+    p.add_argument("--velocity", type=int, default=64)
+    p.set_defaults(func=cmd_analyze)
     args = ap.parse_args(argv)
     return args.func(args)
 

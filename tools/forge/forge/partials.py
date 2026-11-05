@@ -34,10 +34,14 @@ class NoteAnalysis:
     midi: int
     f0: float
     inharmonicity: float
-    cents_vs_et: float
+    cents_vs_et: float  # tuning of the first partial (what is heard), against equal temperament
     partials: list[Partial] = field(default_factory=list)
     b1: float = 0.0  # frequency-independent damping (1/s), sigma = b1 + b3 omega^2
     b3: float = 0.0  # frequency-dependent damping (s)
+    # Broadband level of the whole note, more robust than any single partial (beating between strings).
+    level_early_db_s: float = 0.0
+    level_late_db_s: float = 0.0
+    level_knee_s: float = 0.0
 
 
 def et_frequency(midi: int, a4: float = 440.0) -> float:
@@ -134,10 +138,26 @@ def analyze_note(audio: np.ndarray, fs: int, midi: int, note_on: int, hold_s: fl
     start = note_on + int(0.05 * fs)
     seg = mono[start: start + int(seg_len * fs)]
     f0, B, partials = find_partials(seg, fs, midi, a4)
-    result = NoteAnalysis(midi, f0, B, 1200 * np.log2(f0 / f_et), partials[:max_partials])
+    if len(partials) < 3:
+        # Top notes: too few partials to fit f0 and B. The pitch is the strongest peak within a semitone of the
+        # nominal note; B stays unknown here (the keyboard-wide model fills it in).
+        n_fft = 1 << int(np.ceil(np.log2(len(seg) * 8)))
+        spec_db = 20 * np.log10(np.maximum(np.abs(np.fft.rfft(seg * np.hanning(len(seg)), n_fft)), 1e-12))
+        peak = _peak(spec_db, np.fft.rfftfreq(n_fft, 1 / fs), f_et * 2 ** (-1 / 12), f_et * 2 ** (1 / 12))
+        if peak is not None:
+            f0, B = peak[0], 0.0
+            partials = [Partial(1, peak[0], 0.0)] + [p for p in partials if p.n > 1]
+    first = partials[0].freq if partials and partials[0].n == 1 else f0 * np.sqrt(1 + B)
+    result = NoteAnalysis(midi, f0, B, 1200 * np.log2(first / f_et), partials[:max_partials])
 
     # Decay analysis over the hold (key down), until the partial sinks into the noise floor.
     body = mono[start: note_on + int(hold_s * fs)]
+    hop = int(0.01 * fs)
+    count = len(body) // hop
+    level = 10 * np.log10(np.maximum(np.mean(body[: count * hop].reshape(count, hop) ** 2, axis=1), 1e-24))
+    level = level[: np.flatnonzero(level > level.max() - 60)[-1] + 1]
+    if len(level) > 20:
+        result.level_early_db_s, result.level_late_db_s, result.level_knee_s, _ = two_slope_fit(level, 0.01)
     for p in result.partials:
         env = partial_envelope(body, fs, p.freq, f0)
         usable = np.flatnonzero(env > env.max() - 50)
