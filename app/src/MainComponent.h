@@ -79,6 +79,7 @@ private:
     void setKeyLayout(int layout);
     void shiftOctave(int delta);
     void sendSustain(bool down);
+    void sendSostenuto(bool down);
     void enableMidiInputs();
     void saveSettings();
     void showMessage(const juce::String& text, juce::Colour colour = theme::text);
@@ -142,7 +143,7 @@ private:
     juce::String recordingStem, lastSaved;
     double messageUntil = 0.0;
     int octave = 4;             // scientific octave of the first computer-keyboard note (C4 = middle C)
-    bool spaceDown = false, pedalFromSpace = false, focusGiven = false, bankInstalled = false;
+    bool spaceDown = false, pedalFromSpace = false, sostenutoKeyDown = false, focusGiven = false, bankInstalled = false;
     bool constructed = false;   // no saving while the settings are being read back
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)

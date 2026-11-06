@@ -415,7 +415,7 @@ int main()
     // 9. Sympathetic resonance: a free string (A3, its second partial on the A4 played) rings with the pedal down,
     //    or under its key held; with the pedal up and no key held, the output is the note's alone.
     {
-        auto withString = std::make_shared<pf::ModalProfile>(*profile);
+        std::shared_ptr<pf::ModalProfile> withString = std::make_shared<pf::ModalProfile>(*profile);
         pf::ModalProfile::Note a3;
         a3.midi = 57;
         a3.layers.push_back(makeLayer(100, 1e-4f)); // its voice is nearly silent: a key held without a sound
@@ -456,6 +456,18 @@ int main()
         const auto heldOn = run(true, true, held), heldOff = run(true, false, held), none = run(false, true, held);
         check(difference(heldOn, none, 24000, 48000) > 1e-3 * rms(none, 24000, 48000), "a key held: its string rings");
         check(difference(heldOff, none, 0, 96000) == 0.0, "heldKeysResonate off: only the pedal frees the strings");
+
+        // The drive's decay (profile): the string is driven less and less, its resonance comes out weaker late.
+        const auto plain = withString;
+        auto fading = std::make_shared<pf::ModalProfile>(*withString);
+        fading->stringDriveDecaySeconds = 0.25f;
+        withString = fading;
+        const auto faded = run(true, true, pedal);
+        withString = plain;
+        const double ringFaded = difference(faded, off, 48000, 96000);
+        std::printf("      drive decaying in 0.25 s: the free string %.1f dB under the steady drive, 1 to 2 s after the note\n",
+                    20.0 * std::log10(ringFaded / ring));
+        check(ringFaded < 0.5 * ring && ringFaded > 0.0, "a decaying drive: the free string rings, weaker late");
     }
 
     // 10. Damper groups: the high partials die faster than the overall curve says.
@@ -522,5 +534,60 @@ int main()
     }
 
     std::printf(failures ? "%d failure(s)\n" : "All modal engine tests passed\n", failures);
+    // 12. Sostenuto (CC66): it catches the dampers raised when it is pressed, and only those.
+    {
+        auto run = [&](std::vector<pf::Event> events) {
+            pf::ModalEngine e;
+            e.install(profile);
+            e.bodyEnabled = false;
+            e.prepare(kRate, 64);
+            std::vector<float> out, unused;
+            render(e, std::move(events), 48000, out, unused);
+            return out;
+        };
+        const int off = 4800;
+        const double natural = 0.2 * std::exp(-1.0 * (off + 10000) / kRate) / std::sqrt(2.0);
+        // A key held when it is pressed: released, it rings on; the sostenuto up, its damper lands.
+        const auto caught = run({ { 0, 0x90, 69, 100 }, { 2400, 0xB0, 66, 127 }, { (std::uint32_t) off, 0x80, 69, 0 },
+                                  { 24000, 0xB0, 66, 0 } });
+        const double held = rms(caught, off + 9600, off + 10560), free = rms(caught, 24000 + 9600, 24000 + 10560);
+        check(std::abs(20.0 * std::log10(held / natural)) < 1.5, "sostenuto: the key held when it was pressed rings on, released");
+        check(20.0 * std::log10(free / held) < -50.0, "sostenuto up: that damper lands");
+        // A key struck after it: damped at its release as usual.
+        const auto later = run({ { 0, 0xB0, 66, 127 }, { 100, 0x90, 69, 100 }, { (std::uint32_t) off, 0x80, 69, 0 } });
+        check(20.0 * std::log10(rms(later, off + 9600, off + 10560) / rms(later, off - 960, off)) < -50.0,
+              "sostenuto: a key struck after it is damped at its release");
+        // Pressed under the sustain pedal, it catches every damper: the pedal up, the released note rings on.
+        const auto all = run({ { 0, 0xB0, 64, 127 }, { 0, 0x90, 69, 100 }, { 2400, 0x80, 69, 0 }, { (std::uint32_t) off, 0xB0, 66, 127 },
+                               { 7200, 0xB0, 64, 0 } });
+        const double afterPedal = rms(all, 7200 + 9600, 7200 + 10560);
+        const double naturalThere = 0.2 * std::exp(-1.0 * (7200 + 10080) / kRate) / std::sqrt(2.0);
+        check(std::abs(20.0 * std::log10(afterPedal / naturalThere)) < 1.5,
+              "sostenuto pressed under the sustain pedal: everything raised stays up once the pedal is released");
+    }
+
+    // 13. Settings: another engine given this one's settings sounds the same, sample for sample.
+    {
+        pf::ModalEngine a;
+        a.restrikeFadeSeconds = 0.3f;
+        a.pedalCatch = false;
+        a.referenceA4 = 442.0f;
+        a.pitchClassCents[9] = -6.0f;
+        a.sympatheticGain = 0.5f;
+        a.install(profile);
+        a.prepare(kRate, 64);
+        pf::ModalEngine b;
+        b.applySettings(a.settings());
+        b.install(profile);
+        b.prepare(kRate, 64);
+        const std::vector<pf::Event> events { { 0, 0xB0, 64, 127 }, { 10, 0x90, 69, 90 }, { 4800, 0x80, 69, 0 },
+                                              { 9600, 0x90, 69, 60 }, { 12000, 0xB0, 64, 0 } };
+        std::vector<float> la, lb, unused;
+        render(a, events, 24000, la, unused);
+        render(b, events, 24000, lb, unused);
+        check(la == lb && a.settings().referenceA4 == 442.0f && b.pedalCatch.load() == false,
+              "settings copied to another engine: the same sound, sample for sample");
+    }
+
     return failures ? 1 : 0;
 }

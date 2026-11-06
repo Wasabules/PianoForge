@@ -63,7 +63,8 @@ def cmd_release_noise(args) -> int:
 def cmd_sympathetic(args) -> int:
     from forge.sympathetic import run
 
-    for path in run(Path(args.corpus), Path(args.interactions) if args.interactions else None, args.jobs):
+    for path in run(Path(args.corpus), Path(args.interactions) if args.interactions else None, args.jobs,
+                    Path(args.decays_from) if args.decays_from else None):
         print(f"Written: {path}")
     return 0
 
@@ -118,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--interactions", help="the same state in the interactions session (default: "
                                           "corpus/interactions/<state>)")
     p.add_argument("--jobs", type=int, default=0, help="worker processes (default: one per core)")
+    p.add_argument("--decays-from", help="keep the extra decays of this sympathetic.json (skips the first, longest "
+                                         "stage)")
     p.set_defaults(func=cmd_sympathetic)
     p = sub.add_parser("export", help="write the modal profile played by the engine (modal-profile.bin), from the "
                                       "modes and soundboard of every measured velocity layer")

@@ -274,6 +274,52 @@ int runSelfTest(const juce::StringArray& arguments)
                     + juce::String(two_seconds_later) + " two seconds later (expected 1)");
     }
 
+    // 7b. Sostenuto in the reference player: C4 held when it is pressed rings on after its release (E4, struck
+    //     after it, is damped as usual), and its damper lands when the sostenuto is released. Levels against the
+    //     same playing without the sostenuto.
+    {
+        auto play = [&](bool sostenuto) {
+            player.prepare(fs, 512);
+            player.playWholeTake = false;
+            flush(player, fs);
+            std::vector<float> out;
+            std::vector<float> l(512), rr(512);
+            float* outputs[2] = { l.data(), rr.data() };
+            const int at[] = { 0, (int) (0.2 * fs) / 512, (int) (0.25 * fs) / 512, (int) (0.45 * fs) / 512, (int) (2.0 * fs) / 512 };
+            for (int k = 0; k < (int) (3.5 * fs) / 512; ++k) {
+                std::vector<pf::Event> events;
+                if (k == at[0])
+                    events.push_back({ 0, 0x90, 60, 80 });
+                if (k == at[1] && sostenuto)
+                    events.push_back({ 0, 0xB0, 66, 127 });
+                if (k == at[2]) {
+                    events.push_back({ 0, 0x80, 60, 64 });
+                    events.push_back({ 10, 0x90, 64, 80 });
+                }
+                if (k == at[3])
+                    events.push_back({ 0, 0x80, 64, 64 });
+                if (k == at[4] && sostenuto)
+                    events.push_back({ 0, 0xB0, 66, 0 });
+                player.process(outputs, 2, 512, events.data(), (int) events.size());
+                out.insert(out.end(), l.begin(), l.end());
+            }
+            return out;
+        };
+        auto level = [&](const std::vector<float>& x, double a, double b) {
+            double e = 0.0;
+            const int i0 = (int) (a * fs), i1 = (int) (b * fs);
+            for (int i = i0; i < i1; ++i)
+                e += (double) x[(size_t) i] * x[(size_t) i];
+            return 10.0 * std::log10(e / (i1 - i0) + 1e-30);
+        };
+        const auto with = play(true), without = play(false);
+        const double kept = level(with, 1.4, 1.9) - level(without, 1.4, 1.9);
+        const double landed = level(with, 1.4, 1.9) - level(with, 3.0, 3.4);
+        r.check(kept > 20.0 && landed > 20.0,
+                "sostenuto (reference player): C4 rings on, " + juce::String(kept, 1) + " dB over the same playing without it "
+                    + "(expected > 20), and its damper lands once released (" + juce::String(landed, 1) + " dB down, expected > 20)");
+    }
+
     // 8. Takes: a session played through the audio host (notes, pedal, re-strike), saved as a take, written to a
     //    MIDI file (one tick per sample), read back and rendered offline, must give exactly the live audio.
     {

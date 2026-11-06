@@ -16,8 +16,9 @@ namespace pf::app {
 /// through a published pointer (the message thread frees the previous file once the audio thread is outside
 /// render(), and render() never touches a file it has not been handed).
 ///
-/// A seek, a pause or a stop releases the notes the file has sounding (and its sustain pedal); a seek then puts
-/// the pedals back as the file has them at the new position. Notes on, controllers (the pedals) and notes off are
+/// A seek, a pause or a stop releases the notes the file has sounding (and its sustain and sostenuto pedals); a
+/// seek then puts the sustain pedal back as the file has it at the new position (the sostenuto would catch
+/// nothing: the notes it held are not struck again). Notes on, controllers (the pedals) and notes off are
 /// played, on any channel but the General MIDI percussion one (10) when others have notes; the rest is left out.
 class MidiFilePlayer {
 public:
@@ -92,6 +93,7 @@ private:
     std::uint32_t seekSeen = 0;
     std::array<std::uint8_t, 16 * 128> sounding {}; // notes on, per channel and key
     std::array<std::uint8_t, 16> pedal {};          // CC64 per channel
+    std::array<std::uint8_t, 16> sostenuto {};      // CC66 per channel
 };
 
 } // namespace pf::app

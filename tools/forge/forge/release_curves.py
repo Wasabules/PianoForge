@@ -9,6 +9,12 @@ until the key release. After it, the power ratio between the two is exactly what
 Beating makes a single ratio irregular, so the ratios are averaged over the three velocities (in power),
 then smoothed and made non-increasing (isotonic regression): a damper only ever removes energy.
 
+The damper does not take every velocity alike, though: against that average, the loud strikes die much faster
+(v120 after a 2 s hold: 7 dB under it at 0.3 s, 11 dB at 0.6 s; v32: 1 to 3 dB over it), their energy being in
+the high partials the felt stops first. The same curves are also measured per velocity (each smoothed and made
+non-increasing alike), and the engine plays the one of the note's velocity, interpolated in dB between the
+measured ones; the average stays for what has no velocity (the dampers of the free strings).
+
 The felt does not damp every partial alike: the high partials die faster (A1 0.4 s after the release: -18 dB
 for the fundamental, -35 dB around 880 Hz). The same ratio is measured per group of partials (numbers 1, 2-3,
 4-7, 8-15, 16-31, 32 and up: the bands around each partial, BandExtractor) and kept relative to the overall
@@ -92,16 +98,15 @@ def _group_powers(audio: np.ndarray, off: int, fs: int, count: int, partials: li
     return out
 
 
-def _group_task(args) -> tuple[int, float, np.ndarray, np.ndarray]:
-    """Group powers summed over the velocities of one (note, hold): (note, hold, release, held), groups x count."""
+def _group_task(args) -> tuple[int, float, dict[int, tuple[np.ndarray, np.ndarray]]]:
+    """Group powers of the takes of one (note, hold): (note, hold, velocity -> (release, held), groups x count)."""
     note, hold, takes, count = args
-    rel_sum = held_sum = 0.0
-    for release_path, held_path, off, partials, f0 in takes:
+    out = {}
+    for velocity, release_path, held_path, off, partials, f0 in takes:
         rel, fs = _load(Path(release_path))
         held, _ = _load(Path(held_path))
-        rel_sum = rel_sum + _group_powers(rel, off, fs, count, partials, f0)
-        held_sum = held_sum + _group_powers(held, off, fs, count, partials, f0)
-    return note, hold, np.asarray(rel_sum), np.asarray(held_sum)
+        out[velocity] = (_group_powers(rel, off, fs, count, partials, f0), _group_powers(held, off, fs, count, partials, f0))
+    return note, hold, out
 
 
 def group_curves(rel: np.ndarray, held: np.ndarray, overall: np.ndarray) -> np.ndarray:
@@ -124,6 +129,14 @@ def group_curves(rel: np.ndarray, held: np.ndarray, overall: np.ndarray) -> np.n
     return out
 
 
+def _curve(ratio: np.ndarray) -> np.ndarray:
+    """dB curve (0 at the release, then count points) from a power ratio: smoothed over 50 ms, non-increasing."""
+    d = 10 * np.log10(np.maximum(ratio, 10 ** (FLOOR_DB / 10)))
+    d = np.convolve(np.pad(d, 2, mode="edge"), np.ones(5) / 5, mode="valid")
+    d = np.clip(_isotonic_decreasing(np.minimum(d, 0.0)), FLOOR_DB, 0.0)
+    return np.concatenate([[0.0], d])
+
+
 def measure(corpus: Path, log=print) -> dict:
     """corpus: folder of one state, e.g. corpus/reference/noire-dry (with releases/ and single-notes/)."""
     releases, single = corpus / "releases", corpus / "single-notes"
@@ -139,10 +152,13 @@ def measure(corpus: Path, log=print) -> dict:
     holds = sorted({h for _, h in groups})
     curves = np.zeros((len(notes), len(holds), count + 1))
     group_db = np.zeros((len(notes), len(holds), len(GROUP_FIRST), count + 1))
+    velocities = sorted({json.loads(p.read_text(encoding="utf-8"))["velocity"] for ms in groups.values() for p in ms})
+    by_velocity = np.zeros((len(velocities), len(notes), len(holds), count + 1))
+    group_by_velocity = np.zeros((len(velocities), len(notes), len(holds), len(GROUP_FIRST), count + 1))
     modes = {}  # velocity -> midi -> partials (n, centre) and f0, from forge modes
     group_tasks = []
     for (note, hold), metas in sorted(groups.items()):
-        ratios = []
+        ratios, ratio_of = [], {}
         for meta_path in metas:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             held_path = next(single.glob(f"{note:03d}-*_v{meta['velocity']:03d}_h*.flac"), None)
@@ -154,30 +170,36 @@ def measure(corpus: Path, log=print) -> dict:
             p_rel, p_held = _powers(rel, off, fs, count), _powers(held, off, fs, count)
             ratios.append(np.where(p_held > 1e-20, p_rel / np.maximum(p_held, 1e-30), 1.0))
             v = meta["velocity"]
+            ratio_of[v] = ratios[-1]
             if v not in modes and (corpus / f"modes-v{v:03d}.json").exists():
                 doc = json.loads((corpus / f"modes-v{v:03d}.json").read_text(encoding="utf-8"))
                 modes[v] = {n["midi"]: ([(p["n"], p["centre"]) for p in n["partials"]], n["f0"]) for n in doc["notes"]}
             if note in modes.get(v, {}):
                 partials, f0 = modes[v][note]
-                group_tasks.append(((note, hold), (str(releases / Path(meta["file"]).name), str(held_path), off,
+                group_tasks.append(((note, hold), (v, str(releases / Path(meta["file"]).name), str(held_path), off,
                                                    partials, f0)))
         if not ratios:
             continue
-        d = 10 * np.log10(np.maximum(np.mean(ratios, axis=0), 10 ** (FLOOR_DB / 10)))
-        d = np.convolve(np.pad(d, 2, mode="edge"), np.ones(5) / 5, mode="valid")  # 50 ms smoothing
-        d = np.clip(_isotonic_decreasing(np.minimum(d, 0.0)), FLOOR_DB, 0.0)
-        curves[notes.index(note), holds.index(hold)] = np.concatenate([[0.0], d])  # 0 dB at the release
-        log(f"  note {note:3d} hold {hold:4.1f} s: -{-d[9]:.1f} dB at 0.1 s, -{-d[29]:.1f} dB at 0.3 s, "
-            f"-{-d[min(99, count - 1)]:.1f} dB at 1 s ({len(ratios)} velocities)")
+        i, j = notes.index(note), holds.index(hold)
+        curves[i, j] = d = _curve(np.mean(ratios, axis=0))  # 0 dB at the release
+        for k, v in enumerate(velocities):  # a velocity not measured here takes the average
+            by_velocity[k, i, j] = _curve(ratio_of[v]) if v in ratio_of else d
+        log(f"  note {note:3d} hold {hold:4.1f} s: -{-d[10]:.1f} dB at 0.1 s, -{-d[30]:.1f} dB at 0.3 s, "
+            f"-{-d[min(100, count)]:.1f} dB at 1 s ({len(ratios)} velocities; at 0.6 s per velocity "
+            + ", ".join(f"v{v} {by_velocity[k, i, j, 60]:.1f}" for k, v in enumerate(velocities)) + ")")
 
     # Per group of partials, against the overall curve (the bands of every partial: in parallel).
     by_key: dict[tuple[int, float], list] = defaultdict(list)
     for key, take in group_tasks:
         by_key[key].append(take)
     with ProcessPoolExecutor() as pool:
-        for note, hold, rel, held in pool.map(_group_task, [(k[0], k[1], t, count) for k, t in sorted(by_key.items())]):
+        for note, hold, powers in pool.map(_group_task, [(k[0], k[1], t, count) for k, t in sorted(by_key.items())]):
             i, j = notes.index(note), holds.index(hold)
-            group_db[i, j] = group_curves(rel, held, curves[i, j])
+            group_db[i, j] = group_curves(sum(p[0] for p in powers.values()), sum(p[1] for p in powers.values()),
+                                          curves[i, j])
+            for k, v in enumerate(velocities):  # against that velocity's own overall curve
+                group_by_velocity[k, i, j] = (group_curves(*powers[v], by_velocity[k, i, j]) if v in powers
+                                              else group_db[i, j])
     at = round(0.3 / STEP_S)
     for i, note in enumerate(notes):
         log(f"  note {note:3d}, against the overall curve at 0.3 s (hold {holds[-1]:.1f} s), groups "
@@ -195,7 +217,9 @@ def measure(corpus: Path, log=print) -> dict:
             "source": str(corpus), "step_s": STEP_S, "notes": [notes[i] for i in keep], "holds_s": holds,
             "dropped_notes": [notes[i] for i in sorted(set(range(len(notes))) - set(keep))],
             "curves_db": np.round(curves[keep], 2).tolist(),
-            "group_first": list(GROUP_FIRST), "group_db": np.round(group_db[keep], 2).tolist()}
+            "group_first": list(GROUP_FIRST), "group_db": np.round(group_db[keep], 2).tolist(),
+            "velocities": velocities, "curves_db_by_velocity": np.round(by_velocity[:, keep], 2).tolist(),
+            "group_db_by_velocity": np.round(group_by_velocity[:, keep], 2).tolist()}
 
 
 def write(corpus: Path, log=print) -> Path:

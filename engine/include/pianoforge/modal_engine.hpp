@@ -25,7 +25,8 @@ namespace pf {
 ///   overall gain (the body is in the residual too).
 /// - Past its analysis window, where the forge found the recording far under the modes, a partial is faded out
 ///   (profile fade time, an extra -60 dB per kPartialFadeSeconds).
-/// - Key release: the measured damper curve of the note (level against the note held), applied to the voice, and
+/// - Key release: the measured damper curve of the note and velocity (level against the note held), applied to the
+///   voice, and
 ///   per group of partials the measured level against it, applied to their poles (the high partials die faster
 ///   under the felt). The
 ///   pedal sets how fast the curve runs: not at all with the dampers lifted, fully with them resting on the
@@ -33,8 +34,12 @@ namespace pf {
 ///   the curve where it is, and what is left of the note rings on, as on a piano (the reference library lets the
 ///   release run to its end).
 /// - Release noise: when a damper lands, the soundboard gets the knock measured on the reference for the nearest
-///   note and velocity (forge release-noise), scaled by how firmly the damper lands.
-/// - Sympathetic resonance: every string whose damper is up (sustain pedal, or its key held when
+///   note and velocity (forge release-noise), weaker the longer the key was held, and scaled by how firmly the
+///   damper lands.
+/// - Sostenuto (CC66): pressing it catches every damper raised at that instant (keys held, and all of them when
+///   the sustain pedal is down, as the rod of a grand does); they stay up until it is released, whatever the keys
+///   and the sustain pedal do. Dampers raised later are not caught.
+/// - Sympathetic resonance: every string whose damper is up (sustain pedal, sostenuto, or its key held when
 ///   heldKeysResonate) is a bank of resonators, its measured modes, driven by the voices of the other notes
 ///   (forge sympathetic). A damper landing on a string adds the note's damping to its resonators.
 /// - Tuning: the profile plays as recorded at referenceA4 = 440 Hz; another reference and a temperament (cents
@@ -79,10 +84,24 @@ public:
     /// Frequency ratio of a note against the profile: (referenceA4 / 440) x 2^(cents / 1200).
     double tuningRatio(int note) const noexcept;
 
+    /// Every setting above but the output gain, as one value: for another engine (the offline render of a take) to
+    /// sound exactly as this one does.
+    struct Settings {
+        float restrikeFadeSeconds = 0.8f;
+        bool body = true, residual = true, sympathetic = true, heldKeys = true;
+        float sympatheticGain = 1.0f;
+        bool pedalCatch = true, releaseNoise = true;
+        float referenceA4 = 440.0f;
+        std::array<float, 12> pitchClassCents {};
+    };
+    Settings settings() const noexcept;
+    /// Applies `s` (the free strings are retuned on the next block).
+    void applySettings(const Settings& s) noexcept;
+
     // Information for the user interface.
     std::atomic<int> lastNote { -1 }, lastVelocity { 0 }, lastLayerVelocity { 0 };
     std::atomic<int> activeVoices { 0 }, activeModes { 0 }, ringingStrings { 0 };
-    std::atomic<bool> sustainDown { false };
+    std::atomic<bool> sustainDown { false }, sostenutoDown { false };
     std::atomic<float> pedalPosition { 0.0f }; // damper lift, 0 to 1
     std::atomic<float> outputPeak { 0.0f };
     std::atomic<std::uint32_t> stolenVoices { 0 }, noteOnsReceived { 0 };
@@ -123,6 +142,7 @@ private:
         std::array<float, DamperCurves::kMaxGroups> groupFactor {}; // pole factor per sample over this block
         bool groupDamping = false;               // the poles carry group factors
         float driveGain = 0.0f, driveOnset = 0.0f; // drive of the free strings: velocity factor, rise so far
+        float driveFade = 1.0f;                    // and its decay so far
         double residualPos = 0.0;      // in residual frames
         double residualStep = 1.0;     // residual frames per output sample (rates and tuning)
         float residualGain = 1.0f;
@@ -141,6 +161,8 @@ private:
     void noteOn(const ModalProfile& p, int note, int velocity) noexcept;
     void noteOff(const ModalProfile& p, int note) noexcept;
     void updateDamping(const ModalProfile& p, Voice& v) noexcept;
+    void updateAllDampers(const ModalProfile& p) noexcept; // a pedal moved: the dampers of the keys up follow
+    bool damperRaised(const Voice& v) const noexcept { return v.keyDown || sostenutoHeld[(std::size_t) v.note]; }
     void dampGroups(const ModalProfile& p, Voice& v, int n) noexcept;
     void releaseKnock(const ModalProfile& p, const Voice& v, float strength) noexcept;
     void render(const ModalProfile& p, float* const* outputs, int numChannels, int start, int n) noexcept;
@@ -152,6 +174,7 @@ private:
     int maxBlockSize = 0;
     float fadeFactor = 1.0f; // pole magnitude factor of a partial fade, per sample
     float onsetFactor = 0.0f; // per sample: what is left of the drive's rise (exp(-1 / (onset fs)))
+    float driveFadeFactor = 1.0f; // per sample: the drive's decay (exp(-1 / (driveDecay fs)))
     std::array<Voice, kMaxVoices> voices;
     ModeBank body;
     float bodyGain = 1.0f, bodyDecay = 1.0f;
@@ -159,6 +182,8 @@ private:
     std::vector<float> bufferL, bufferR, bufferD, mixL, mixR; // bufferD: a voice's drive of the free strings
     std::uint64_t ageCounter = 0;
     float pedalLift = 0.0f; // 0: dampers resting, 1: lifted
+    bool sostenuto = false;                       // CC66 down
+    std::array<bool, 128> sostenutoHeld {};       // dampers caught by the sostenuto
     float knockScale = 1.0f; // release noise of dampers landing together (see apply)
 
     // Sympathetic resonance: one group of the bank per string; the drive of a string is every voice but its own.

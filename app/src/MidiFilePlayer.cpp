@@ -76,6 +76,8 @@ void MidiFilePlayer::note(const Event& e) noexcept
         count = count > 0 ? (std::uint8_t) (count - 1) : (std::uint8_t) 0;
     else if (type == 0xB0 && e.data1 == 64)
         pedal[(std::size_t) channel] = e.data2;
+    else if (type == 0xB0 && e.data1 == 66)
+        sostenuto[(std::size_t) channel] = e.data2;
 }
 
 void MidiFilePlayer::releaseAll(juce::MidiBuffer& midi, int at) noexcept
@@ -89,6 +91,10 @@ void MidiFilePlayer::releaseAll(juce::MidiBuffer& midi, int at) noexcept
         if (pedal[(std::size_t) channel] != 0) {
             midi.addEvent(juce::MidiMessage::controllerEvent(channel + 1, 64, 0), at);
             pedal[(std::size_t) channel] = 0;
+        }
+        if (sostenuto[(std::size_t) channel] != 0) {
+            midi.addEvent(juce::MidiMessage::controllerEvent(channel + 1, 66, 0), at);
+            sostenuto[(std::size_t) channel] = 0;
         }
     }
 }

@@ -5,7 +5,8 @@
 //       --no-body / --no-residual (anywhere on the line) leave out the soundboard or the attack residual
 //   modal_render <profile> events <out.wav> <events.txt> <seconds> [rate]
 //       a sequence: one event per line, "<sample> <status> <data1> <data2>" (a take's MIDI, at the given rate);
-//       --no-sympathetic, --no-held-keys, --no-catch (anywhere on the line) switch those engine settings off;
+//       --no-sympathetic, --no-held-keys, --no-catch, --no-release-noise (anywhere on the line) switch those engine
+//       settings off;
 //       --restrike <s>: the re-strike fade (seconds to -40 dB)
 //   modal_render <profile> bench [voices] [rate] [block]
 //       strikes <voices> notes spread over the keyboard and times process() against the real-time budget
@@ -79,7 +80,7 @@ void run(pf::ModalEngine& engine, std::vector<pf::Event> events, int frames, int
 
 int main(int argc, char** argv)
 {
-    bool body = true, residual = true, sympathetic = true, heldKeys = true, pedalCatch = true; // options
+    bool body = true, residual = true, sympathetic = true, heldKeys = true, pedalCatch = true, releaseNoise = true; // options
     double restrike = -1.0;
     int kept = 1;
     for (int i = 1; i < argc; ++i) {
@@ -95,6 +96,8 @@ int main(int argc, char** argv)
             heldKeys = false;
         else if (std::strcmp(argv[i], "--no-catch") == 0)
             pedalCatch = false;
+        else if (std::strcmp(argv[i], "--no-release-noise") == 0)
+            releaseNoise = false;
         else
             argv[kept++] = argv[i];
     }
@@ -103,7 +106,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "usage: modal_render <profile> render <out.wav> <note> <velocity> <hold s> [tail s] [rate]\n"
                              "                    [--no-body] [--no-residual]\n"
                              "       modal_render <profile> events <out.wav> <events.txt> <seconds> [rate]\n"
-                             "                    [--no-sympathetic] [--no-held-keys] [--no-catch] [--restrike <s>]\n"
+                             "                    [--no-sympathetic] [--no-held-keys] [--no-catch] [--no-release-noise] [--restrike <s>]\n"
                              "       modal_render <profile> bench [voices] [rate] [block]\n");
         return 2;
     }
@@ -120,6 +123,7 @@ int main(int argc, char** argv)
     engine.sympatheticEnabled = sympathetic;
     engine.heldKeysResonate = heldKeys;
     engine.pedalCatch = pedalCatch;
+    engine.releaseNoiseEnabled = releaseNoise;
     if (restrike > 0.0)
         engine.restrikeFadeSeconds = (float) restrike;
     const std::string mode = argv[2];

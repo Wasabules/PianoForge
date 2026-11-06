@@ -18,43 +18,6 @@ int SampleBank::pick(int note, int velocity) const noexcept
     return best;
 }
 
-namespace {
-/// Index `lo` and weight `w` such that x lies between axis[lo] and axis[lo + 1] (clamped at both ends).
-template <typename T>
-void bracket(const std::vector<T>& axis, double x, int& lo, double& w) noexcept
-{
-    lo = 0;
-    w = 0.0;
-    if (axis.size() < 2 || x <= (double) axis.front())
-        return;
-    if (x >= (double) axis.back()) {
-        lo = (int) axis.size() - 2;
-        w = 1.0;
-        return;
-    }
-    while (lo + 2 < (int) axis.size() && (double) axis[(size_t) lo + 1] <= x)
-        ++lo;
-    w = (x - (double) axis[(size_t) lo]) / ((double) axis[(size_t) lo + 1] - (double) axis[(size_t) lo]);
-}
-} // namespace
-
-void ReleaseCurves::evaluate(int note, double holdSeconds, float* gains) const noexcept
-{
-    // Called on the audio thread at each key release: no allocation here.
-    int n0, h0;
-    double wn, wh;
-    bracket(notes, (double) note, n0, wn);
-    bracket(logHolds, std::log(std::max(holdSeconds, 1.0e-3)), h0, wh);
-
-    const int numHolds = (int) holds.size();
-    const int n1 = std::min(n0 + 1, (int) notes.size() - 1), h1 = std::min(h0 + 1, numHolds - 1);
-    auto at = [&](int n, int h, int k) { return db[((size_t) n * (size_t) numHolds + (size_t) h) * (size_t) length + (size_t) k]; };
-    for (int k = 0; k < length; ++k) {
-        const double low = at(n0, h0, k) * (1 - wh) + at(n0, h1, k) * wh;
-        const double high = at(n1, h0, k) * (1 - wh) + at(n1, h1, k) * wh;
-        gains[k] = (float) std::pow(10.0, (low * (1 - wn) + high * wn) / 20.0);
-    }
-}
 
 std::uint64_t SampleBank::bytes() const noexcept
 {
@@ -244,16 +207,31 @@ void BankLoader::run()
         if (perNote != nullptr && !perNote->isEmpty() && (*perNote)[0].getArray() != nullptr
             && !(*perNote)[0].getArray()->isEmpty())
             rc.length = juce::jmin(ReleaseCurves::kMaxPoints, (*(*perNote)[0].getArray())[0].getArray()->size());
-        if (perNote != nullptr && rc.length > 0 && perNote->size() == (int) rc.notes.size()) {
-            for (const auto& noteCurves : *perNote)
-                for (const auto& curve : *noteCurves.getArray())
-                    for (int k = 0; k < rc.length; ++k)
-                        rc.db.push_back((float) (double) (*curve.getArray())[k]);
-        }
+        auto readTable = [&](const juce::var& table, std::vector<float>& out) { // [note][hold][point]
+            if (const auto* rows = table.getArray(); rows != nullptr && rc.length > 0 && rows->size() == (int) rc.notes.size())
+                for (const auto& noteCurves : *rows)
+                    for (const auto& curve : *noteCurves.getArray())
+                        for (int k = 0; k < rc.length; ++k)
+                            out.push_back((float) (double) (*curve.getArray())[k]);
+        };
+        readTable(json["curves_db"], rc.db);
+        // Per velocity (forge release-curves): the loud strikes die faster.
+        if (const auto* vels = json["velocities"].getArray(); vels != nullptr)
+            if (const auto* tables = json["curves_db_by_velocity"].getArray(); tables != nullptr && tables->size() == vels->size()) {
+                for (const auto& v : *vels)
+                    rc.velocities.push_back((int) v);
+                for (const auto& t : *tables)
+                    readTable(t, rc.dbByVelocity);
+                if (!rc.byVelocity()) {
+                    rc.velocities.clear();
+                    rc.dbByVelocity.clear();
+                }
+            }
         if (rc.db.size() != rc.notes.size() * rc.holds.size() * (size_t) rc.length || rc.stepSeconds <= 0.0)
             rc = {}; // malformed file: keep the fallback
         else
-            damperInfo = "damper curves for " + juce::String((int) rc.notes.size()) + " measured notes";
+            damperInfo = "damper curves for " + juce::String((int) rc.notes.size()) + " measured notes"
+                       + (rc.byVelocity() ? " and " + juce::String((int) rc.velocities.size()) + " velocities" : juce::String());
     }
 
     int notes = 0;

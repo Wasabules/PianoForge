@@ -49,7 +49,11 @@ class SympatheticTest(unittest.TestCase):
         env = sympathetic.onset_envelope(1000, 1000.0, 0.3)
         self.assertAlmostEqual(env[300], 1 - np.exp(-1), places=3)
         self.assertTrue(np.all(sympathetic.onset_envelope(10, 1000.0, 0.0) == 1.0))
-        scale = sympathetic.velocity_scale([{"take": "a", "velocity": 128}], 0.5)
+        fading = sympathetic.onset_envelope(3000, 1000.0, 0.0, 1.0)  # no rise, decay 1 s
+        self.assertAlmostEqual(fading[1000], np.exp(-1), places=3)
+        both = sympathetic.onset_envelope(3000, 1000.0, 0.3, 1.0)
+        self.assertAlmostEqual(both[300], (1 - np.exp(-1)) * np.exp(-0.3), places=3)
+        scale =sympathetic.velocity_scale([{"take": "a", "velocity": 128}], 0.5)
         self.assertAlmostEqual(scale["a"], 2.0)
 
 

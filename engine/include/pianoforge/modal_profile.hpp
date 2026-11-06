@@ -15,6 +15,9 @@ namespace pf {
 /// between hold durations, clamped at both ends.
 /// Per group of partials (by partial number: groupFirst[g] up to groupFirst[g + 1] - 1), the level against that
 /// overall curve: the high partials die faster under the felt.
+/// The same per measured velocity (the loud strikes die faster: their energy is in the high partials): with a
+/// velocity, the curves are interpolated in dB between the measured velocities around it (clamped); without one,
+/// or without curves per velocity, the average over the velocities.
 struct DamperCurves {
     static constexpr int kMaxPoints = 512;
     static constexpr int kMaxGroups = 8;
@@ -26,6 +29,9 @@ struct DamperCurves {
     std::vector<float> db;         // [note][hold][point]
     std::vector<int> groupFirst;   // first partial number of each group (empty: no curves per group)
     std::vector<float> groupDb;    // [note][hold][group][point], against the overall curve
+    std::vector<int> velocities;   // ascending (empty: no curves per velocity)
+    std::vector<float> dbByVelocity;      // [velocity][note][hold][point]
+    std::vector<float> groupDbByVelocity; // [velocity][note][hold][group][point], against that velocity's overall
 
     bool empty() const noexcept { return notes.empty() || holds.empty() || length == 0; }
     int groups() const noexcept { return (int) groupFirst.size(); }
@@ -36,10 +42,14 @@ struct DamperCurves {
             ++g;
         return g;
     }
-    /// Writes `length` linear gains. No allocation (audio thread).
-    void evaluate(int note, double holdSeconds, float* gains) const noexcept;
-    /// Writes groups() x `length` linear gains, against the overall curve. No allocation (audio thread).
-    void evaluateGroups(int note, double holdSeconds, float* gains) const noexcept;
+    bool byVelocity() const noexcept
+    {
+        return !velocities.empty() && dbByVelocity.size() == velocities.size() * notes.size() * holds.size() * (std::size_t) length;
+    }
+    /// Writes `length` linear gains (velocity < 0: the average). No allocation (audio thread).
+    void evaluate(int note, double holdSeconds, float* gains, int velocity = -1) const noexcept;
+    /// Writes groups() x `length` linear gains, against the overall curve of the same velocity. No allocation.
+    void evaluateGroups(int note, double holdSeconds, float* gains, int velocity = -1) const noexcept;
 };
 
 /// The modal profile written by `forge export` (modal-profile.bin): per note and velocity layer, the modes of
@@ -89,18 +99,22 @@ struct ModalProfile {
     std::vector<Note> notes;
     std::array<int, 128> noteIndex {};           // index in notes, -1 when the note is missing
     /// The knock of the key release on the soundboard (forge release-noise), per measured note and velocity:
-    /// complex amplitudes per resonance at the instant the damper lands, and their level.
+    /// complex amplitudes per resonance at the instant the damper lands, and their level; and the level against
+    /// the hold (the longer the key was held, the weaker the knock), interpolated in log(hold), clamped.
     struct ReleaseNoise {
         std::vector<int> notes, velocities;      // ascending
         std::vector<float> levelDb;              // [note][velocity]
         std::vector<std::complex<float>> left, right; // [note][velocity][resonance]
+        std::vector<float> holds, holdDb;        // seconds (ascending), dB against the amplitudes (empty: none)
         bool empty() const noexcept { return notes.empty() || velocities.empty(); }
     };
     ReleaseNoise releaseNoise;
     std::vector<String> strings;                 // sympathetic resonance (empty: none)
     int stringResonators = 0;
-    // Each voice drives the free strings with (1 - exp(-t / onset)) (velocity / reference) ^ exponent.
+    // Each voice drives the free strings with (1 - exp(-t / onset)) exp(-t / driveDecay) (velocity / reference) ^
+    // exponent (driveDecay 0: no decay).
     float stringOnsetSeconds = 0.0f, stringVelocityExponent = 0.0f, stringReferenceVelocity = 64.0f;
+    float stringDriveDecaySeconds = 0.0f;
     /// How far the sustain pedal lifts the dampers, per CC64 value: 1 lifted, 0 resting on the strings.
     /// Without a measured curve: a switch at 64.
     std::array<float, 128> pedalLift = switchPedal();

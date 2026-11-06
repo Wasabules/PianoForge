@@ -3,6 +3,7 @@
 #include "SampleBank.h"
 
 #include <pianoforge/engine.hpp>
+#include <pianoforge/modal_engine.hpp>
 #include <pianoforge/modal_profile.hpp>
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -23,11 +24,10 @@ juce::AudioBuffer<float> renderSequence(const juce::MidiMessageSequence& sequenc
                                         double sampleRate, float restrikeFadeSeconds, bool playWholeTake,
                                         double tailSeconds = 4.0);
 
-/// The same through the modal engine on `profile`.
+/// The same through the modal engine on `profile`, with `settings` (those of the engine heard live, for a take).
 juce::AudioBuffer<float> renderSequenceModal(const juce::MidiMessageSequence& sequence,
                                              std::shared_ptr<const pf::ModalProfile> profile, double sampleRate,
-                                             float restrikeFadeSeconds, bool bodyEnabled = true,
-                                             bool residualEnabled = true, double tailSeconds = 4.0);
+                                             const pf::ModalEngine::Settings& settings, double tailSeconds = 4.0);
 
 /// Writes a 32-bit float WAV file (creating the folder when needed).
 juce::Result writeWav(const juce::AudioBuffer<float>& audio, double sampleRate, const juce::File& file);

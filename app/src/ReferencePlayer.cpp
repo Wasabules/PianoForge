@@ -22,7 +22,8 @@ void ReferencePlayer::prepare(double newSampleRate, int newMaxBlockSize)
     rawR.assign(raw, 0.0f);
     for (auto& v : voices)
         v.active = false;
-    sustain = false;
+    sustain = sostenuto = false;
+    sostenutoHeld.fill(false);
     audioRunning = true;
 }
 
@@ -116,8 +117,26 @@ void ReferencePlayer::apply(const SampleBank& b, const pf::Event& e) noexcept
             sustainDown.store(sustain, std::memory_order_relaxed);
             if (!sustain && !playWholeTake.load(std::memory_order_relaxed))
                 for (auto& v : voices)
-                    if (v.active && !v.keyDown)
+                    if (v.active && !damperRaised(v))
                         releaseVoice(b, v);
+        } else if (e.data1 == 66) {
+            const bool down = e.data2 >= 64;
+            if (down && !sostenuto) { // every damper raised now: keys held, all of them under the sustain pedal
+                if (sustain)
+                    sostenutoHeld.fill(true);
+                else
+                    for (const auto& v : voices)
+                        if (v.active && v.keyDown)
+                            sostenutoHeld[(size_t) v.note] = true;
+            } else if (!down && sostenuto) {
+                sostenutoHeld.fill(false);
+                if (!playWholeTake.load(std::memory_order_relaxed))
+                    for (auto& v : voices)
+                        if (v.active && !damperRaised(v))
+                            releaseVoice(b, v);
+            }
+            sostenuto = down;
+            sostenutoDown.store(down, std::memory_order_relaxed);
         } else if (e.data1 == 120 || e.data1 == 123)
             allSoundOff();
     }
@@ -176,6 +195,7 @@ void ReferencePlayer::noteOn(const SampleBank& b, int note, int velocity) noexce
     v.released = false;
     v.sample = index;
     v.note = note;
+    v.velocity = velocity;
     v.position = b.samples[(size_t) index].noteOnFrame; // skip the take's pre-roll: no added latency
     v.sinceOn = 0;
     v.gain = 1.0f;
@@ -193,7 +213,7 @@ void ReferencePlayer::noteOff(const SampleBank& b, int note) noexcept
     for (auto& v : voices)
         if (v.active && v.keyDown && v.note == note) {
             v.keyDown = false;
-            if (!whole && !sustain)
+            if (!whole && !damperRaised(v))
                 releaseVoice(b, v);
         }
 }
@@ -203,7 +223,7 @@ void ReferencePlayer::releaseVoice(const SampleBank& b, Voice& v) noexcept
     if (v.released)
         return;
     if (!b.releaseCurves.empty()) { // measured damper: depends on the note and on how long it was held
-        b.releaseCurves.evaluate(v.note, (double) v.sinceOn / sampleRate, v.releaseGains.data());
+        b.releaseCurves.evaluate(v.note, (double) v.sinceOn / sampleRate, v.releaseGains.data(), v.velocity);
         v.curvePoints = b.releaseCurves.length;
         v.sinceRelease = 0;
         v.damperCurve = true;

@@ -19,9 +19,12 @@ Model, per resonator k (a mode of a free string: frequency f_k, decay sigma_k):
     seconds, where the measured string modes would ring for tens of seconds. Each band's extra decay is picked on
     a grid, with the gain refitted for it, as the one whose response follows the library's best over the time
     windows (median over the takes, in dB).
-  - two traits of the library, not of a piano, fitted next: its resonance builds up later than the strings would
+  - three traits of the library, not of a piano, fitted next: its resonance builds up later than the strings would
     answer (the drive of each voice rises as 1 - exp(-t / onset) from the note-on, onset on a grid; it also keeps
-    the hammer's knock from setting every string ringing at once), and it is
+    the hammer's knock from setting every string ringing at once); it fades on its own, where strings driven by a
+    long bass note would go on being driven for as long as the note sounds (the drive also falls as
+    exp(-t / drive_decay), on a grid; without it, the bass resonance came out 6 to 9 dB too weak over the first
+    0.2 s and 5 to 14 dB too strong after 1.5 s); and it is
     weaker at low velocity than the note itself is (the drive scales as (velocity / REFERENCE_VELOCITY) ^ exponent,
     from the v40 / v100 pairs). (Driving the fit with the modes alone instead does worse: back-extrapolated to the
     note-on, they overstate the first instants, which the bass strings integrate for seconds.)
@@ -29,7 +32,8 @@ Model, per resonator k (a mode of a free string: frequency f_k, decay sigma_k):
 The strings are those of the layer nearest SYMPATHETIC_VELOCITY: a free string rings with its own modes, whatever
 the strike that measured them.
 
-sympathetic.json: bands_hz (edges), gains, extra_decays, onset_s, velocity_exponent, reference_velocity, f_max_hz,
+sympathetic.json: bands_hz (edges), gains, extra_decays, onset_s, drive_decay_s (0: none), velocity_exponent,
+reference_velocity, f_max_hz,
 windows_s, fit (per take and window: model and library power, dB), notes[]: midi, resonators [[freq Hz, decay 1/s (extra decay included), gain, wl re, wl im,
 wr re, wr im]].
 """
@@ -55,6 +59,7 @@ DRIVE_S = 9.5             # the key is held (pedal-up take) or the pedal holds t
 DECIMATIONS = (4, 8, 16, 32)  # each band is computed at the lowest rate that holds it (2.6 x its upper edge)
 EXTRA_DECAYS = (0.0, 0.25, 0.5, 1.0, 2.0, 4.0)  # 1/s, the grid of the extra decay
 ONSETS_S = (0.0, 0.1, 0.2, 0.3, 0.5)              # the grid of the drive's rise time
+DRIVE_DECAYS_S = (0.0, 4.0, 2.0, 1.0, 0.5)         # the grid of the drive's fading time constant (0: none)
 REFERENCE_VELOCITY = 64                            # where the velocity factor is 1
 MIN_SHARE = 1e-3          # a mode carrying less of its partial's energy than this is left out (CPU)
 FLOOR = 1e-15             # library band powers below this (it is denoised) carry no measurement
@@ -142,14 +147,17 @@ def _load_pair(down: Path, up: Path) -> tuple[np.ndarray, np.ndarray, float, int
     return u.mean(axis=0), d - u, float(fs), md["note"]
 
 
-def onset_envelope(n: int, fs: float, onset: float) -> np.ndarray:
-    """The drive's rise from the note-on: 1 - exp(-t / onset) (1 throughout for onset 0)."""
-    return np.ones(n) if onset <= 0 else 1.0 - np.exp(-np.arange(n) / (onset * fs))
+def onset_envelope(n: int, fs: float, onset: float, decay: float = 0.0) -> np.ndarray:
+    """The drive's envelope from the note-on: 1 - exp(-t / onset) (1 throughout for onset 0), times exp(-t / decay)
+    (none for decay 0)."""
+    t = np.arange(n) / fs
+    rise = np.ones(n) if onset <= 0 else 1.0 - np.exp(-t / onset)
+    return rise if decay <= 0 else rise * np.exp(-t / decay)
 
 
 def _measure_task(args) -> dict:
     """For one pair: the library's power per window and band, and the model's for each configuration (extra decay
-    per band, onset), with unit coupling, each band alone at its own rate."""
+    per band, onset, drive decay), with unit coupling, each band alone at its own rate."""
     down, up, res_by_note, configs = Path(args[0]), Path(args[1]), args[2], args[3]
     drive, diff, fs, note = _load_pair(down, up)
     meta = json.loads(down.with_suffix(".json").read_text(encoding="utf-8"))
@@ -158,15 +166,15 @@ def _measure_task(args) -> dict:
     others = np.concatenate([r for m, r in res_by_note.items() if m != note])  # the struck string is the voice
     bands = band_of(others[:, 0])
     model = np.zeros((len(configs), len(WINDOWS_S), len(BANDS) - 1))
-    for onset in sorted({c[1] for c in configs}):
-        drives = {1: drive * onset_envelope(len(drive), fs, onset)}
+    for shape in sorted({(c[1], c[2]) for c in configs}):
+        drives = {1: drive * onset_envelope(len(drive), fs, *shape)}
         for d in DECIMATIONS:  # successive halvings from the nearest rate already computed
             prev = max(k for k in drives if d % k == 0)
             drives[d] = decimate(drives[prev], d // prev, ftype="fir", zero_phase=True)
         for b in np.unique(bands):
             dec = decimation_of(int(b), fs)
-            for i, (extra, o) in enumerate(configs):
-                if o != onset:
+            for i, (extra, o, fade) in enumerate(configs):
+                if (o, fade) != shape:
                     continue
                 y = response(drives[dec], fs / dec, others[bands == b], extra=extra)
                 model[i, :, b] = [power(y, fs / dec, a, c) for a, c in WINDOWS_S]
@@ -244,8 +252,9 @@ def fit_gains(measures: list[dict], i: int, scale: dict[str, float]) -> tuple[np
     return 10 ** (_fill_smooth(gains_db) / 20), spread
 
 
-def run(corpus: Path, interactions: Path | None = None, jobs: int = 0) -> list[Path]:
-    """corpus: the reference state folder (modes); interactions: the same state in the interactions session."""
+def run(corpus: Path, interactions: Path | None = None, jobs: int = 0, decays_from: Path | None = None) -> list[Path]:
+    """corpus: the reference state folder (modes); interactions: the same state in the interactions session;
+    decays_from: a sympathetic.json whose extra decays are kept (the first, longest stage skipped)."""
     interactions = interactions or corpus.parent.parent / "interactions" / corpus.name
     start = time.time()
     modes = json.loads((corpus / f"modes-v{SYMPATHETIC_VELOCITY:03d}.json").read_text(encoding="utf-8"))
@@ -261,22 +270,29 @@ def run(corpus: Path, interactions: Path | None = None, jobs: int = 0) -> list[P
         with ProcessPoolExecutor(max_workers=jobs or None) as pool:
             return list(pool.map(_measure_task, [(str(d), str(u), res_by_note, configs) for d, u in pairs]))
 
-    # 1. The extra decay per band (no onset).
-    measures = measure([(np.full(nb, e), 0.0) for e in EXTRA_DECAYS])
-    extra = fit_decays(measures)
-    print("  extra decay per band (1/s): " + " ".join(f"{e:g}" for e in extra) + f" ({time.time() - start:.0f} s)")
-    # 2. The onset, with those decays: the one whose gains leave the least scatter, the velocity factor included.
-    measures = measure([(extra, o) for o in ONSETS_S])
+    # 1. The extra decay per band (no onset, no drive decay).
+    if decays_from is not None:
+        extra = np.asarray(json.loads(decays_from.read_text(encoding="utf-8"))["extra_decays"], dtype=np.float64)
+        print("  extra decay per band (1/s), from " + decays_from.name + ": " + " ".join(f"{e:g}" for e in extra))
+    else:
+        measures = measure([(np.full(nb, e), 0.0, 0.0) for e in EXTRA_DECAYS])
+        extra = fit_decays(measures)
+        print("  extra decay per band (1/s): " + " ".join(f"{e:g}" for e in extra) + f" ({time.time() - start:.0f} s)")
+    # 2. The drive's shape (onset, decay), with those decays: the one whose gains leave the least scatter, the
+    #    velocity factor included.
+    shapes = [(o, fade) for o in ONSETS_S if o > 0 for fade in DRIVE_DECAYS_S]
+    measures = measure([(extra, o, fade) for o, fade in shapes])
     best = None
-    for i, onset in enumerate(ONSETS_S):
+    for i, (onset, fade) in enumerate(shapes):
         exponent = fit_exponent(measures, i)
         gains, spread = fit_gains(measures, i, velocity_scale(measures, exponent))
-        print(f"  onset {onset:.2f} s: velocity exponent {exponent:.2f}, scatter {spread:.2f} dB")
+        print(f"  onset {onset:.2f} s, drive decay {fade:.1f} s: velocity exponent {exponent:.2f}, scatter {spread:.2f} dB")
         if best is None or spread < best[0]:
-            best = (spread, i, onset, exponent, gains)
-    _, i, onset, exponent, gains = best
+            best = (spread, i, onset, fade, exponent, gains)
+    _, i, onset, fade, exponent, gains = best
     scale = velocity_scale(measures, exponent)
-    print(f"  kept: onset {onset:.2f} s, velocity exponent {exponent:.2f} ({time.time() - start:.0f} s)")
+    print(f"  kept: onset {onset:.2f} s, drive decay {fade:.1f} s, velocity exponent {exponent:.2f} "
+          f"({time.time() - start:.0f} s)")
     # The fit's own check: the model with the values kept against the library.
     report, errors = [], []
     for m in measures:
@@ -301,7 +317,8 @@ def run(corpus: Path, interactions: Path | None = None, jobs: int = 0) -> list[P
     out.write_text(json.dumps({
         "source": str(interactions), "velocity": SYMPATHETIC_VELOCITY, "f_max_hz": F_MAX,
         "bands_hz": [round(float(b), 3) for b in BANDS], "gains": [float(f"{g:.6e}") for g in gains],
-        "extra_decays": [float(e) for e in extra], "onset_s": onset, "velocity_exponent": round(exponent, 4),
+        "extra_decays": [float(e) for e in extra], "onset_s": onset, "drive_decay_s": fade,
+        "velocity_exponent": round(exponent, 4),
         "reference_velocity": REFERENCE_VELOCITY, "windows_s": WINDOWS_S, "fit": report, "notes": notes},
         separators=(",", ":")), encoding="utf-8")
     return [out]
@@ -309,8 +326,8 @@ def run(corpus: Path, interactions: Path | None = None, jobs: int = 0) -> list[P
 
 def load(path: Path) -> tuple[dict[int, np.ndarray], dict]:
     """(midi -> resonators (k x 7: freq, decay, gain, wl re, wl im, wr re, wr im), the drive's shape: onset_s,
-    velocity_exponent, reference_velocity)."""
+    drive_decay_s, velocity_exponent, reference_velocity)."""
     data = json.loads(path.read_text(encoding="utf-8"))
-    shape = {k: float(data.get(k, d)) for k, d in (("onset_s", 0.0), ("velocity_exponent", 0.0),
+    shape = {k: float(data.get(k, d)) for k, d in (("onset_s", 0.0), ("drive_decay_s", 0.0), ("velocity_exponent", 0.0),
                                                    ("reference_velocity", REFERENCE_VELOCITY))}
     return {n["midi"]: np.asarray(n["resonators"], dtype=np.float64) for n in data["notes"]}, shape

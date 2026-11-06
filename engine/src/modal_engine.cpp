@@ -61,6 +61,8 @@ void ModalEngine::prepare(double newSampleRate, int newMaxBlockSize)
     driveOwn.assign((std::size_t) 128 * (std::size_t) maxBlockSize, 0.0f);
     allocate();
     pedalLift = 0.0f;
+    sostenuto = false;
+    sostenutoHeld.fill(false);
     audioRunning = true;
 }
 
@@ -109,6 +111,8 @@ void ModalEngine::allocate()
     stringsTuning = tuningVersion.load(std::memory_order_relaxed);
     onsetFactor = owned != nullptr && owned->stringOnsetSeconds > 0.0f
                       ? (float) std::exp(-1.0 / ((double) owned->stringOnsetSeconds * sampleRate)) : 0.0f;
+    driveFadeFactor = owned != nullptr && owned->stringDriveDecaySeconds > 0.0f
+                          ? (float) std::exp(-1.0 / ((double) owned->stringDriveDecaySeconds * sampleRate)) : 1.0f;
     strings.reserve(owned != nullptr ? owned->stringResonators : 0, count);
     std::array<float, DamperCurves::kMaxPoints> curve {};
     for (int s = 0; s < count; ++s) {
@@ -138,6 +142,39 @@ double ModalEngine::tuningRatio(int note) const noexcept
     const double cents = std::clamp((double) pitchClassCents[(std::size_t) (((note % 12) + 12) % 12)].load(std::memory_order_relaxed),
                                     -100.0, 100.0);
     return a4 / 440.0 * std::pow(2.0, cents / 1200.0);
+}
+
+ModalEngine::Settings ModalEngine::settings() const noexcept
+{
+    Settings s;
+    s.restrikeFadeSeconds = restrikeFadeSeconds.load();
+    s.body = bodyEnabled.load();
+    s.residual = residualEnabled.load();
+    s.sympathetic = sympatheticEnabled.load();
+    s.heldKeys = heldKeysResonate.load();
+    s.sympatheticGain = sympatheticGain.load();
+    s.pedalCatch = pedalCatch.load();
+    s.releaseNoise = releaseNoiseEnabled.load();
+    s.referenceA4 = referenceA4.load();
+    for (std::size_t pc = 0; pc < 12; ++pc)
+        s.pitchClassCents[pc] = pitchClassCents[pc].load();
+    return s;
+}
+
+void ModalEngine::applySettings(const Settings& s) noexcept
+{
+    restrikeFadeSeconds = s.restrikeFadeSeconds;
+    bodyEnabled = s.body;
+    residualEnabled = s.residual;
+    sympatheticEnabled = s.sympathetic;
+    heldKeysResonate = s.heldKeys;
+    sympatheticGain = s.sympatheticGain;
+    pedalCatch = s.pedalCatch;
+    releaseNoiseEnabled = s.releaseNoise;
+    referenceA4 = s.referenceA4;
+    for (std::size_t pc = 0; pc < 12; ++pc)
+        pitchClassCents[pc] = s.pitchClassCents[pc];
+    tuningVersion.fetch_add(1);
 }
 
 void ModalEngine::retuneStrings() noexcept
@@ -260,16 +297,26 @@ void ModalEngine::apply(const ModalProfile& p, const Event& e) noexcept
             pedalLift = std::clamp(p.pedalLift[(std::size_t) std::min<int>(e.data2, 127)], 0.0f, 1.0f);
             sustainDown.store(pedalLift >= 0.5f, std::memory_order_relaxed);
             pedalPosition.store(pedalLift, std::memory_order_relaxed);
-            // Dampers landing together (the pedal lifted on many notes): one knock of the damper rail, their
-            // levels summed in energy rather than in amplitude (the nearby notes share one measured knock).
-            int landing = 0;
-            for (const auto& v : voices)
-                landing += v.active && !v.keyDown && !v.restruck && !v.damperCurve && pedalLift < 1.0f ? 1 : 0;
-            knockScale = landing > 1 ? 1.0f / std::sqrt((float) landing) : 1.0f;
-            for (auto& v : voices)
-                if (v.active && !v.keyDown)
-                    updateDamping(p, v);
-            knockScale = 1.0f;
+            updateAllDampers(p);
+        } else if (e.data1 == 66) {
+            const bool down = e.data2 >= 64;
+            if (down && !sostenuto) {
+                // The rod catches every damper raised now: those of the keys held, all of them under the sustain
+                // pedal (a damper on its way down is not raised any more, and is not caught).
+                if (pedalLift >= 0.5f)
+                    sostenutoHeld.fill(true);
+                else
+                    for (const auto& v : voices)
+                        if (v.active && v.keyDown)
+                            sostenutoHeld[(std::size_t) v.note] = true;
+            } else if (!down && sostenuto) {
+                sostenutoHeld.fill(false);
+            }
+            if (down != sostenuto) {
+                sostenuto = down;
+                sostenutoDown.store(down, std::memory_order_relaxed);
+                updateAllDampers(p);
+            }
         } else if (e.data1 == 120 || e.data1 == 123)
             allSoundOff();
     }
@@ -439,6 +486,7 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     v.damperSpeed = 0.0f;
     v.driveGain = (float) std::pow((double) velocity / (double) p.stringReferenceVelocity, (double) p.stringVelocityExponent);
     v.driveOnset = 0.0f;
+    v.driveFade = 1.0f;
     v.sinceOn = 0;
     v.age = ++ageCounter;
 }
@@ -452,17 +500,31 @@ void ModalEngine::noteOff(const ModalProfile& p, int note) noexcept
         }
 }
 
+void ModalEngine::updateAllDampers(const ModalProfile& p) noexcept
+{
+    // Dampers landing together (the pedal lifted on many notes): one knock of the damper rail, their levels summed
+    // in energy rather than in amplitude (the nearby notes share one measured knock).
+    int landing = 0;
+    for (const auto& v : voices)
+        landing += v.active && !damperRaised(v) && !v.restruck && !v.damperCurve && pedalLift < 1.0f ? 1 : 0;
+    knockScale = landing > 1 ? 1.0f / std::sqrt((float) landing) : 1.0f;
+    for (auto& v : voices)
+        if (v.active && !v.keyDown)
+            updateDamping(p, v);
+    knockScale = 1.0f;
+}
+
 void ModalEngine::updateDamping(const ModalProfile& p, Voice& v) noexcept
 {
     if (!v.active || v.restruck || p.dampers.empty())
         return; // re-struck: fading out anyway; no damper data: the string keeps ringing
-    float speed = v.keyDown ? 0.0f : 1.0f - pedalLift;
+    float speed = damperRaised(v) ? 0.0f : 1.0f - pedalLift;
     if (v.damperCurve && !pedalCatch.load(std::memory_order_relaxed))
         speed = std::max(speed, v.damperSpeed); // the reference: a release, once started, runs to its end
     if (speed > 0.0f && !v.damperCurve) { // the damper reaches the string: its curves for the time held
-        p.dampers.evaluate(v.note, (double) v.sinceOn / sampleRate, v.releaseGains.data());
+        p.dampers.evaluate(v.note, (double) v.sinceOn / sampleRate, v.releaseGains.data(), v.velocity);
         if (p.dampers.groups() > 0)
-            p.dampers.evaluateGroups(v.note, (double) v.sinceOn / sampleRate, v.groupGains.data());
+            p.dampers.evaluateGroups(v.note, (double) v.sinceOn / sampleRate, v.groupGains.data(), v.velocity);
         v.curvePoints = p.dampers.length;
         v.curvePos = 0.0;
         v.damperCurve = true;
@@ -494,6 +556,19 @@ void ModalEngine::releaseKnock(const ModalProfile& p, const Voice& v, float stre
     double db = level(lo) * (1.0 - w) + level(hi) * w - level(near);
     if (v.velocity < vel.front()) // below the softest measured velocity: proportional to the velocity
         db += 20.0 * std::log10(std::max(1.0, (double) v.velocity) / vel.front());
+    // The longer the key was held, the weaker the knock (interpolated in log(hold), clamped at both ends).
+    if (const auto& h = noise.holds; !h.empty() && noise.holdDb.size() == h.size()) {
+        const double x = std::log(std::max((double) v.sinceOn / sampleRate, 1e-3));
+        std::size_t i = 0;
+        while (i + 1 < h.size() && std::log((double) h[i + 1]) <= x)
+            ++i;
+        double offset = noise.holdDb[i];
+        if (i + 1 < h.size() && x > std::log((double) h[i])) {
+            const double a = std::log((double) h[i]), b = std::log((double) h[i + 1]);
+            offset += (noise.holdDb[i + 1] - noise.holdDb[i]) * (x - a) / (b - a);
+        }
+        db += offset;
+    }
     const auto g = (float) (std::clamp((double) strength, 0.0, 1.0) * std::pow(10.0, std::clamp(db, -60.0, 12.0) / 20.0));
     if (g <= 0.0f)
         return;
@@ -608,8 +683,8 @@ void ModalEngine::renderStrings(int m) noexcept
         const int g = stringGroup[(std::size_t) note];
         if (g < 0)
             continue;
-        // The damper's lift on this string: the pedal's, or fully lifted under a held key.
-        const float lift = !enabled ? 0.0f : keyHeld[(std::size_t) note] ? 1.0f : pedalLift;
+        // The damper's lift on this string: the pedal's, or fully lifted under a held key or by the sostenuto.
+        const float lift = !enabled ? 0.0f : keyHeld[(std::size_t) note] || sostenutoHeld[(std::size_t) note] ? 1.0f : pedalLift;
         const float damper = stringDamper[(std::size_t) note];
         const float want = stringsCut ? fast
                          : lift >= 1.0f ? 1.0f
@@ -749,16 +824,18 @@ bool ModalEngine::produce(const ModalProfile& p, Voice& v, int m) noexcept
     }
 
     // The drive of the free strings: the voice's sound (strings and attack residual, as calibrated), rising from
-    // the note-on (forge sympathetic: the reference's resonance builds up later, and the rise keeps the hammer's
-    // knock from setting every string ringing at once), times the velocity factor.
+    // the note-on and fading (forge sympathetic: the reference's resonance builds up later and fades on its own;
+    // the rise also keeps the hammer's knock from setting every string ringing at once), times the velocity factor.
     float* d = bufferD.data();
     if (strings.groups() > 0) {
-        float rise = v.driveOnset;
+        float rise = v.driveOnset, fade = v.driveFade;
         for (int k = 0; k < m; ++k) {
             rise = 1.0f - (1.0f - rise) * onsetFactor;
-            d[k] = 0.5f * (l[k] + r[k]) * v.driveGain * rise;
+            fade *= driveFadeFactor;
+            d[k] = 0.5f * (l[k] + r[k]) * v.driveGain * rise * fade;
         }
         v.driveOnset = rise;
+        v.driveFade = fade;
     } else {
         std::fill(d, d + m, 0.0f);
     }

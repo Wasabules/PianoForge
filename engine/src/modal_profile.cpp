@@ -89,45 +89,67 @@ float partialLevel(const ModalProfile::Mode* modes, int count, double seconds) n
 
 } // namespace
 
-void DamperCurves::evaluate(int note, double holdSeconds, float* gains) const noexcept
+void DamperCurves::evaluate(int note, double holdSeconds, float* gains, int velocity) const noexcept
 {
-    int n0, h0;
-    double wn, wh;
+    int n0, h0, v0 = 0;
+    double wn, wh, wv = 0.0;
     bracket(notes, (double) note, n0, wn);
     bracket(logHolds, std::log(std::max(holdSeconds, 1.0e-3)), h0, wh);
     const int numHolds = (int) holds.size();
     const int n1 = std::min(n0 + 1, (int) notes.size() - 1), h1 = std::min(h0 + 1, numHolds - 1);
-    auto at = [&](int n, int h, int k) {
-        return db[((std::size_t) n * (std::size_t) numHolds + (std::size_t) h) * (std::size_t) length + (std::size_t) k];
-    };
-    for (int k = 0; k < length; ++k) {
-        const double low = at(n0, h0, k) * (1 - wh) + at(n0, h1, k) * wh;
-        const double high = at(n1, h0, k) * (1 - wh) + at(n1, h1, k) * wh;
-        gains[k] = (float) std::pow(10.0, (low * (1 - wn) + high * wn) / 20.0);
+    // The table of the average, or those of the two measured velocities around the voice's.
+    const std::size_t table = notes.size() * holds.size() * (std::size_t) length;
+    const float* t0 = db.data();
+    const float* t1 = db.data();
+    if (velocity >= 0 && byVelocity()) {
+        bracket(velocities, (double) velocity, v0, wv);
+        t0 = dbByVelocity.data() + (std::size_t) v0 * table;
+        t1 = dbByVelocity.data() + (std::size_t) std::min(v0 + 1, (int) velocities.size() - 1) * table;
     }
+    auto at = [&](const float* t, int n, int h, int k) {
+        return (double) t[((std::size_t) n * (std::size_t) numHolds + (std::size_t) h) * (std::size_t) length + (std::size_t) k];
+    };
+    auto value = [&](const float* t, int k) {
+        const double low = at(t, n0, h0, k) * (1 - wh) + at(t, n0, h1, k) * wh;
+        const double high = at(t, n1, h0, k) * (1 - wh) + at(t, n1, h1, k) * wh;
+        return low * (1 - wn) + high * wn;
+    };
+    for (int k = 0; k < length; ++k)
+        gains[k] = (float) std::pow(10.0, (value(t0, k) * (1 - wv) + value(t1, k) * wv) / 20.0);
 }
 
-void DamperCurves::evaluateGroups(int note, double holdSeconds, float* gains) const noexcept
+void DamperCurves::evaluateGroups(int note, double holdSeconds, float* gains, int velocity) const noexcept
 {
     const int count = groups();
-    if (count == 0 || groupDb.size() != notes.size() * holds.size() * (std::size_t) count * (std::size_t) length)
+    const std::size_t table = notes.size() * holds.size() * (std::size_t) count * (std::size_t) length;
+    if (count == 0 || groupDb.size() != table)
         return;
-    int n0, h0;
-    double wn, wh;
+    int n0, h0, v0 = 0;
+    double wn, wh, wv = 0.0;
     bracket(notes, (double) note, n0, wn);
     bracket(logHolds, std::log(std::max(holdSeconds, 1.0e-3)), h0, wh);
     const int numHolds = (int) holds.size();
     const int n1 = std::min(n0 + 1, (int) notes.size() - 1), h1 = std::min(h0 + 1, numHolds - 1);
-    auto at = [&](int n, int h, int g, int k) {
-        return groupDb[(((std::size_t) n * (std::size_t) numHolds + (std::size_t) h) * (std::size_t) count + (std::size_t) g)
-                           * (std::size_t) length + (std::size_t) k];
+    const float* t0 = groupDb.data();
+    const float* t1 = groupDb.data();
+    if (velocity >= 0 && byVelocity() && groupDbByVelocity.size() == velocities.size() * table) {
+        bracket(velocities, (double) velocity, v0, wv);
+        t0 = groupDbByVelocity.data() + (std::size_t) v0 * table;
+        t1 = groupDbByVelocity.data() + (std::size_t) std::min(v0 + 1, (int) velocities.size() - 1) * table;
+    }
+    auto at = [&](const float* t, int n, int h, int g, int k) {
+        return (double) t[(((std::size_t) n * (std::size_t) numHolds + (std::size_t) h) * (std::size_t) count + (std::size_t) g)
+                              * (std::size_t) length + (std::size_t) k];
+    };
+    auto value = [&](const float* t, int g, int k) {
+        const double low = at(t, n0, h0, g, k) * (1 - wh) + at(t, n0, h1, g, k) * wh;
+        const double high = at(t, n1, h0, g, k) * (1 - wh) + at(t, n1, h1, g, k) * wh;
+        return low * (1 - wn) + high * wn;
     };
     for (int g = 0; g < count; ++g)
-        for (int k = 0; k < length; ++k) {
-            const double low = at(n0, h0, g, k) * (1 - wh) + at(n0, h1, g, k) * wh;
-            const double high = at(n1, h0, g, k) * (1 - wh) + at(n1, h1, g, k) * wh;
-            gains[(std::size_t) g * (std::size_t) length + (std::size_t) k] = (float) std::pow(10.0, (low * (1 - wn) + high * wn) / 20.0);
-        }
+        for (int k = 0; k < length; ++k)
+            gains[(std::size_t) g * (std::size_t) length + (std::size_t) k]
+                = (float) std::pow(10.0, (value(t0, g, k) * (1 - wv) + value(t1, g, k) * wv) / 20.0);
 }
 
 std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path& path, std::string& error)
@@ -310,6 +332,8 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
                 p->stringResonators += (int) resonators;
                 p->strings.push_back(std::move(string));
             }
+            if (r.position() + sizeof(float) <= end) // added after the strings: older profiles end here
+                p->stringDriveDecaySeconds = std::max(0.0f, r.get<float>());
         } else if (std::memcmp(tag, "PEDL", 4) == 0) {
             r.bytes(p->pedalLift.data(), p->pedalLift.size() * sizeof(float));
         } else if (std::memcmp(tag, "RELN", 4) == 0) {
@@ -336,6 +360,17 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
                 noise.left[k] = { a[0], a[1] };
                 noise.right[k] = { a[2], a[3] };
             }
+            if (r.position() + sizeof(std::uint32_t) <= end) { // added later: older profiles end here
+                const auto holds = r.get<std::uint32_t>();
+                if (holds > 64) {
+                    error = "corrupt release noise holds";
+                    return nullptr;
+                }
+                noise.holds.resize(holds);
+                noise.holdDb.resize(holds);
+                r.bytes(noise.holds.data(), holds * sizeof(float));
+                r.bytes(noise.holdDb.data(), holds * sizeof(float));
+            }
         } else if (std::memcmp(tag, "DAMP", 4) == 0) {
             auto& curves = p->dampers;
             const auto groups = r.get<std::uint32_t>();
@@ -348,6 +383,28 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
                 first = (int) r.get<std::uint32_t>();
             curves.groupDb.resize(curves.notes.size() * curves.holds.size() * groups * (std::size_t) curves.length);
             r.bytes(curves.groupDb.data(), curves.groupDb.size() * sizeof(float));
+        } else if (std::memcmp(tag, "DAMV", 4) == 0) {
+            auto& curves = p->dampers;
+            const auto count = r.get<std::uint32_t>();
+            if (count > 128) {
+                error = "corrupt damper curves per velocity";
+                return nullptr;
+            }
+            curves.velocities.resize(count);
+            for (auto& v : curves.velocities)
+                v = r.get<std::int32_t>();
+            const std::size_t table = curves.notes.size() * curves.holds.size() * (std::size_t) curves.length;
+            curves.dbByVelocity.resize(count * table);
+            r.bytes(curves.dbByVelocity.data(), curves.dbByVelocity.size() * sizeof(float));
+            const auto groups = r.get<std::uint32_t>();
+            if (groups > 0) {
+                if (groups != (std::uint32_t) curves.groups()) { // the groups come from DAMP, before this section
+                    error = "damper groups per velocity without the same groups";
+                    return nullptr;
+                }
+                curves.groupDbByVelocity.resize(count * table * groups);
+                r.bytes(curves.groupDbByVelocity.data(), curves.groupDbByVelocity.size() * sizeof(float));
+            }
         }
         if (r.position() > end) {
             error = "section longer than declared in " + path.string();

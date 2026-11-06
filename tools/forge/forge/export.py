@@ -38,17 +38,24 @@ Binary format (little endian), modal-profile.bin:
   sections    (version 3) until the end of the file: char[4] tag, u32 payload bytes, payload; a reader skips the
               tags it does not know.
                 SYMP  free strings of the sympathetic resonance (forge sympathetic): f32 drive onset s, f32 velocity
-                      exponent, f32 reference velocity (each voice drives the strings with
-                      (1 - exp(-t / onset)) (velocity / reference) ^ exponent), u32 strings, then per string
-                      u32 midi, u32 resonators, resonators x (f64 freq Hz, f64 decay 1/s, f32 coupling gain 1/s,
-                      f32 left re, f32 left im, f32 right re, f32 right im)
+                      exponent, f32 reference velocity, u32 strings, then per string u32 midi, u32 resonators,
+                      resonators x (f64 freq Hz, f64 decay 1/s, f32 coupling gain 1/s, f32 left re, f32 left im,
+                      f32 right re, f32 right im); then f32 drive decay s (0: none; absent from older profiles).
+                      Each voice drives the strings with (1 - exp(-t / onset)) exp(-t / decay) (velocity /
+                      reference) ^ exponent.
                 PEDL  damper lift per CC64 value (half pedal): 128 x f32, 1 lifted, 0 resting on the strings
                 DAMP  damper curves per group of partials (forge release-curves): u32 groups, groups x u32 first
                       partial number, notes x holds x groups x points x f32 dB against the overall curve (the
                       notes, holds and points of the dampers above)
+                DAMV  damper curves per velocity (forge release-curves): u32 velocities, velocities x i32 velocity,
+                      velocities x notes x holds x points x f32 dB (overall, as the dampers above), u32 groups
+                      (0: none), velocities x notes x holds x groups x points x f32 dB (against that velocity's
+                      overall curve); the engine interpolates between velocities in dB
                 RELN  knock of the key release on the soundboard (forge release-noise): u32 notes, u32 velocities,
                       notes x i32 midi, velocities x i32 velocity, notes x velocities x f32 level dB, notes x
-                      velocities x P x (f32 left re, left im, right re, right im) amplitudes at the release
+                      velocities x P x (f32 left re, left im, right re, right im) amplitudes at the release; then
+                      u32 holds, holds x f32 hold s, holds x f32 dB (the level after that hold against the one kept;
+                      absent from older profiles)
 Convention: x_c(t) = Re(a_c exp((-decay + 2 pi i freq) t)), t in seconds from the note-on.
 The profile is calibrated on a commercial library: it stays in the corpus folder and is never published.
 """
@@ -313,6 +320,7 @@ def sections(corpus: Path) -> list[bytes]:
             rec = np.zeros(len(res), dtype=[("f", "<f8"), ("d", "<f8"), ("a", "<f4", (5,))])
             rec["f"], rec["d"], rec["a"] = res[:, 0], res[:, 1], res[:, 2:7]
             payload += [struct.pack("<2I", midi, len(res)), rec.tobytes()]
+        payload.append(struct.pack("<f", shape["drive_decay_s"]))
         out.append(section(b"SYMP", b"".join(payload)))
         print(f"  sympathetic resonance: {sum(len(r) for r in strings.values())} resonators on {len(strings)} strings")
     else:
@@ -323,12 +331,25 @@ def sections(corpus: Path) -> list[bytes]:
         out.append(section(b"DAMP", struct.pack("<I", groups.shape[2])
                            + np.asarray(curves["group_first"], dtype="<u4").tobytes() + groups.tobytes()))
         print(f"  damper curves per group of partials: {groups.shape[2]} groups")
+    if "curves_db_by_velocity" in curves:
+        overall = np.asarray(curves["curves_db_by_velocity"], dtype="<f4")  # velocities x notes x holds x points
+        groups = np.asarray(curves.get("group_db_by_velocity", []), dtype="<f4")
+        payload = [struct.pack("<I", len(curves["velocities"])), np.asarray(curves["velocities"], dtype="<i4").tobytes(),
+                   overall.tobytes(), struct.pack("<I", groups.shape[3] if groups.ndim == 5 else 0)]
+        if groups.ndim == 5:
+            payload.append(groups.tobytes())
+        out.append(section(b"DAMV", b"".join(payload)))
+        print(f"  damper curves per velocity: {curves['velocities']}")
     path = corpus / "release-noise.json"
     if path.exists():
         notes, velocities, amps = release_noise.load(path)
         levels = np.asarray(json.loads(path.read_text(encoding="utf-8"))["level_db"], dtype="<f4")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        holds, hold_db = data.get("hold_s", []), data.get("hold_db", [])
         payload = [struct.pack("<2I", len(notes), len(velocities)), np.asarray(notes, dtype="<i4").tobytes(),
-                   np.asarray(velocities, dtype="<i4").tobytes(), levels.tobytes(), amps.astype("<f4").tobytes()]
+                   np.asarray(velocities, dtype="<i4").tobytes(), levels.tobytes(), amps.astype("<f4").tobytes(),
+                   struct.pack("<I", len(holds)), np.asarray(holds, dtype="<f4").tobytes(),
+                   np.asarray(hold_db, dtype="<f4").tobytes()]
         out.append(section(b"RELN", b"".join(payload)))
         print(f"  release noise: {len(notes)} notes x {len(velocities)} velocities")
     path = corpus / "pedal-curve.json"

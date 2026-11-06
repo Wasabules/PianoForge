@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pianoforge/modal_profile.hpp>
+
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <array>
@@ -26,22 +28,9 @@ struct Sample {
 };
 
 /// Damper curves measured by the forge (release-curves.json next to the corpus passes): level after the key
-/// release relative to the same note held, in dB, for a few measured notes and hold durations.
-struct ReleaseCurves {
-    static constexpr int kMaxPoints = 512;
-    double stepSeconds = 0.01;
-    std::vector<int> notes;      // measured notes, ascending
-    std::vector<double> holds;   // hold durations (s), ascending
-    std::vector<double> logHolds; // log of the hold durations, computed at load time
-    int length = 0;              // points per curve (<= kMaxPoints)
-    std::vector<float> db;       // [note][hold][point]
-
-    bool empty() const noexcept { return notes.empty() || holds.empty() || length == 0; }
-
-    /// Writes `length` linear gains for `note` released after `holdSeconds`: linear interpolation between
-    /// measured notes, logarithmic between hold durations, clamped at both ends.
-    void evaluate(int note, double holdSeconds, float* gains) const noexcept;
-};
+/// release relative to the same note held, in dB, for a few measured notes, hold durations and velocities. The
+/// modal engine's (its overall curves; the groups of partials have no meaning for a recording).
+using ReleaseCurves = pf::DamperCurves;
 
 class SampleBank {
 public:

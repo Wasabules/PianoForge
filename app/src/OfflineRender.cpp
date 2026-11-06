@@ -24,15 +24,12 @@ juce::AudioBuffer<float> renderSequence(const juce::MidiMessageSequence& sequenc
 
 juce::AudioBuffer<float> renderSequenceModal(const juce::MidiMessageSequence& sequence,
                                              std::shared_ptr<const pf::ModalProfile> profile, double sampleRate,
-                                             float restrikeFadeSeconds, bool bodyEnabled, bool residualEnabled,
-                                             double tailSeconds)
+                                             const pf::ModalEngine::Settings& settings, double tailSeconds)
 {
     pf::ModalEngine engine;
+    engine.applySettings(settings); // before the profile: the free strings are tuned when it is installed
     engine.install(std::move(profile));
     engine.outputGain = 1.0f;
-    engine.restrikeFadeSeconds = restrikeFadeSeconds;
-    engine.bodyEnabled = bodyEnabled;
-    engine.residualEnabled = residualEnabled;
     return renderWith(engine, sequence, sampleRate, tailSeconds);
 }
 
@@ -137,7 +134,9 @@ int runOfflineRender(const juce::StringArray& arguments)
         }
     }
     const auto start = juce::Time::getMillisecondCounterHiRes();
-    const auto out = modal ? renderSequenceModal(sequence, profile, fs, restrike) : renderSequence(sequence, bank, fs, restrike, false);
+    pf::ModalEngine::Settings settings; // the engine's defaults
+    settings.restrikeFadeSeconds = restrike;
+    const auto out = modal ? renderSequenceModal(sequence, profile, fs, settings) : renderSequence(sequence, bank, fs, restrike, false);
     const double seconds = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
     if (const auto written = writeWav(out, fs, outFile); written.failed()) {
         report.replaceWithText(written.getErrorMessage());

@@ -49,7 +49,7 @@ public:
     // Information for the user interface.
     std::atomic<int> lastNote { -1 }, lastVelocity { 0 }, lastRenderedVelocity { 0 };
     std::atomic<int> activeVoices { 0 };
-    std::atomic<bool> sustainDown { false };
+    std::atomic<bool> sustainDown { false }, sostenutoDown { false };
     std::atomic<float> outputPeak { 0.0f }; // maximum since the last read (exchanged by the UI)
     std::atomic<std::uint32_t> stolenVoices { 0 };
     std::atomic<std::uint32_t> noteOnsReceived { 0 }; // every note-on reaching the engine, for diagnostics
@@ -57,7 +57,7 @@ public:
 private:
     struct Voice {
         bool active = false, keyDown = false, released = false;
-        int sample = -1, note = -1;
+        int sample = -1, note = -1, velocity = 0;
         std::int64_t position = 0;   // in corpus frames
         std::int64_t sinceOn = 0;    // output frames since the note-on
         float gain = 1.0f, decay = 1.0f; // exponential envelope (re-strike, fallback damper, fast fades)
@@ -83,7 +83,9 @@ private:
     int maxBlockSize = 0;
     std::vector<float> bufferL, bufferR, rawL, rawR;
     std::uint64_t ageCounter = 0;
-    bool sustain = false;
+    bool sustain = false, sostenuto = false;
+    std::array<bool, 128> sostenutoHeld {}; // dampers caught by the sostenuto (CC66), as in the modal engine
+    bool damperRaised(const Voice& v) const noexcept { return v.keyDown || sustain || sostenutoHeld[(size_t) v.note]; }
 
     std::atomic<const SampleBank*> publishedBank { nullptr };
     std::atomic<const SampleBank*> bankSeenByAudio { nullptr };

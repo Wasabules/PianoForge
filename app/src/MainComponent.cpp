@@ -380,7 +380,7 @@ void MainComponent::showShortcuts()
         juce::String("Playing\n")
             + (azerty ? "  Q Z S E D F T G Y H U J K O L P M: the keys from C to E\n  W / X: octave down / up\n"
                       : "  A W S E D F T G Y H U J K O L P ;: the keys from C to E\n  Z / X: octave down / up\n")
-            + "  C / V: velocity -10 / +10\n  Space: sustain pedal\n\n"
+            + "  C / V: velocity -10 / +10\n  Space: sustain pedal\n  B: sostenuto pedal (held)\n\n"
               "MIDI file player\n  Ctrl+O: open a MIDI file (or drop it on the window)\n  Ctrl+Space: play / pause\n"
               "  Ctrl+Home: stop, back to the start\n  Ctrl+Left / Ctrl+Right: 5 s back / forward\n  Ctrl+L: loop\n\n"
               "Application\n  Ctrl+R: record / stop\n  Ctrl+S: save the last take\n  Ctrl+1 / Ctrl+2: reference / modal engine\n"
@@ -418,7 +418,7 @@ void MainComponent::setKeyLayout(int layout)
     keyboard.setKeyPressBaseOctave(octave + 1); // JUCE: octave n -> C = 12 * n; C4 (60) = octave 5
     hint.setText(juce::String("Computer keyboard from C") + juce::String(octave) + ": "
                      + (keyLayout == kLayoutAzerty ? "Q Z S E D F T G Y H U J K...   W / X octave" : "A W S E D F T G Y H U J K...   Z / X octave")
-                     + "   C / V velocity   Space pedal   Ctrl+R record   F1 all the shortcuts",
+                     + "   C / V velocity   Space pedal   B sostenuto   Ctrl+R record   F1 all the shortcuts",
                  juce::dontSendNotification);
     saveSettings();
 }
@@ -473,7 +473,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
         velocity.setValue(velocity.getValue() + (c == 'v' ? 10.0 : -10.0));
         return true;
     }
-    return key == juce::KeyPress::spaceKey; // the pedal is handled in keyStateChanged
+    return key == juce::KeyPress::spaceKey || c == 'b'; // the pedals are handled in keyStateChanged
 }
 
 bool MainComponent::keyStateChanged(bool, juce::Component*)
@@ -490,12 +490,23 @@ bool MainComponent::keyStateChanged(bool, juce::Component*)
             pedalFromSpace = false;
         }
     }
+    // B held: the sostenuto pedal (a keyboard without the three-pedal unit can try it).
+    const bool b = juce::KeyPress::isKeyCurrentlyDown('b') && !juce::ModifierKeys::getCurrentModifiersRealtime().isCommandDown();
+    if (b != sostenutoKeyDown) {
+        sostenutoKeyDown = b;
+        sendSostenuto(b);
+    }
     return false; // let the on-screen keyboard handle the other keys
 }
 
 void MainComponent::sendSustain(bool down)
 {
     host.send(juce::MidiMessage::controllerEvent(1, 64, down ? 127 : 0));
+}
+
+void MainComponent::sendSostenuto(bool down)
+{
+    host.send(juce::MidiMessage::controllerEvent(1, 66, down ? 127 : 0));
 }
 
 void MainComponent::enableMidiInputs()
@@ -647,12 +658,12 @@ void MainComponent::saveLastTake()
         takeRender.join();
     renderingTake = true;
     // Same engine and settings as heard live, at the rate it was played: the WAV is the take as heard.
+    // Every setting of the engine heard (tuning, sympathetic resonance, pedal catch, release noise...), as it is now.
     takeRender = std::thread([sequence = TakeRecorder::toSequence(*take), bank = std::move(bank), profile = std::move(profile),
-                              withModal, body = enginePanel->isOn(EnginePanel::Option::body),
-                              residual = enginePanel->isOn(EnginePanel::Option::residual), rate = take->sampleRate,
+                              withModal, settings = modal.settings(), rate = take->sampleRate,
                               restrike = enginePanel->restrikeSeconds(), whole = enginePanel->isOn(EnginePanel::Option::wholeTake),
                               wavFile, summary, safe = juce::Component::SafePointer<MainComponent>(this)] {
-        const auto audio = withModal ? renderSequenceModal(sequence, profile, rate, restrike, body, residual)
+        const auto audio = withModal ? renderSequenceModal(sequence, profile, rate, settings)
                                      : renderSequence(sequence, bank, rate, restrike, whole);
         const auto written = writeWav(audio, rate, wavFile);
         juce::MessageManager::callAsync([safe, written, wavFile, summary] {
@@ -825,10 +836,11 @@ juce::StringArray MainComponent::engineLines() const
         return { juce::String(modal.activeVoices.load()) + " voices of " + juce::String(pf::ModalEngine::kMaxVoices) + ", "
                      + thousands(modal.activeModes.load()) + " resonators",
                  juce::String(modal.ringingStrings.load()) + " free strings ringing, pedal "
-                     + juce::String(juce::roundToInt(modal.pedalPosition.load() * 100.0f)) + " %, "
+                     + juce::String(juce::roundToInt(modal.pedalPosition.load() * 100.0f)) + " %"
+                     + (modal.sostenutoDown.load() ? ", sostenuto" : "") + ", "
                      + juce::String((int) modal.stolenVoices.load()) + " voices stolen" };
     return { juce::String(player.activeVoices.load()) + " voices of " + juce::String(ReferencePlayer::kMaxVoices),
-             juce::String((int) player.stolenVoices.load()) + " voices stolen" };
+             juce::String((int) player.stolenVoices.load()) + " voices stolen" + (player.sostenutoDown.load() ? ", sostenuto" : "") };
 }
 
 juce::StringArray MainComponent::deviceLines() const
