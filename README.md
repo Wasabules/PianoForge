@@ -50,8 +50,10 @@ encoder), Opus 192 kbit/s; plus the MIDI, aligned to the sample. Recordings go t
 When the device runs faster than 50 kHz (the Windows mixer can impose 192 kHz), the engine runs at the device's
 rate divided by 2, 4 or 8 (44.1 or 48 kHz) and its sound is brought up to the device's: Audio > Engine rate.
 
-A room around the piano (algorithmic reverberation, no latency on the direct sound): the Room button in the
-toolbar, its settings in Engine > Room settings (Ctrl+M). Heard, recorded, streamed and in take renders alike.
+A room around the piano, heard from a listening position (the engine's sound is the piano heard from the keyboard,
+1 m away; further, the direct sound falls as 1/r, loses its highs to the air and narrows, and the room's energy
+follows Barron's revised theory): the Room button in the toolbar, its settings in Engine > Room settings (Ctrl+M).
+No latency on the direct sound. Heard, recorded, streamed and in take renders alike.
 
 In a browser (WebAssembly, the modal engine and the room, Web MIDI): see `web/README.md`.
 

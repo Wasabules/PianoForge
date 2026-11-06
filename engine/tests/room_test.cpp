@@ -34,7 +34,8 @@ pf::Room::Settings hall()
     s.size = 0.65f;
     s.decaySeconds = 2.0f;
     s.brightness = 1.0f;
-    s.predelayMs = 20.0f;
+    s.distance = 1.0f; // at the keyboard: the direct sound is the input
+    s.keepLoudness = false;
     s.width = 1.0f;
     return s;
 }
@@ -134,6 +135,26 @@ std::vector<double> band(const Signal& x, double lo, double hi)
     return out;
 }
 
+/// The energy of x[from, to) in [lo, hi] Hz, by Parseval: the bins of that band in the spectrum of that part alone
+/// (a band-passed signal cut to the input's length would lose the ringing before an impulse at its start).
+double bandEnergy(const Signal& x, std::size_t from, std::size_t to, double lo, double hi)
+{
+    std::size_t n = 1;
+    while (n < x.size())
+        n <<= 1;
+    std::vector<std::complex<double>> a(n);
+    for (std::size_t i = from; i < std::min(to, x.size()); ++i)
+        a[i] = x[i];
+    fft(a);
+    double e = 0.0;
+    for (std::size_t k = 0; k < n; ++k) {
+        const double f = (double) std::min(k, n - k) * kRate / (double) n;
+        if (f >= lo && f <= hi)
+            e += std::norm(a[k]);
+    }
+    return e / (double) n;
+}
+
 /// T60 from the Schroeder energy decay curve, fitted between -5 and -35 dB (T30), from `from` seconds.
 double t60(const std::vector<double>& x, double from)
 {
@@ -180,6 +201,7 @@ double energy(const Signal& x, double from = 0.0, double to = 1e9)
 int main()
 {
     Signal l, r;
+
 
     // 1. Off: the input passes through bit for bit; switched off while ringing, it fades out, then is bypassed.
     {
@@ -250,21 +272,18 @@ int main()
         check(high < 0.7 * low && low > 1.6, "low brightness: the highs die faster, the lows keep the decay set");
     }
 
-    // 4. Level: in the piano's band (100 Hz - 4 kHz), the wet energy of an impulse is the early energy (1) plus the
-    //    late one (3 sqrt(T60 / 2 s)), against the impulse's own energy in that band.
+    // 4. Level: in the mid band (250 Hz - 2 kHz: where the decay set holds, and Barron's figures are), the wet energy
+    //    of an impulse is the early energy plus the late one his theory gives at the keyboard, against the impulse's
+    //    own energy in that band.
     {
         for (const float decay : { 2.0f, 4.0f }) {
             auto s = hall();
             s.decaySeconds = decay;
             impulse(s, decay * 3.0, l, r);
-            const double want = 1.0 + 3.0 * std::sqrt(decay / 2.0), in = 2.0 * (4000.0 - 100.0) / kRate;
-            auto bandEnergy = [&](const Signal& x) {
-                double e = 0.0;
-                for (const double v : band(x, 100.0, 4000.0))
-                    e += v * v;
-                return e;
-            };
-            const double got = 0.5 * (bandEnergy(l) + bandEnergy(r)) / in;
+            const auto ac = pf::Room::acoustics(s);
+            const double want = std::pow(10.0, ac.earlyDb / 10.0) + std::pow(10.0, ac.lateDb / 10.0);
+            const double in = 2.0 * (2000.0 - 250.0) / kRate;
+            const double got = 0.5 * (bandEnergy(l, 0, l.size(), 250.0, 2000.0) + bandEnergy(r, 0, r.size(), 250.0, 2000.0)) / in;
             std::printf("      decay %.0f s: wet energy %.2f (%.1f dB against the estimate %.2f)\n", decay, got,
                         10 * std::log10(got / want), want);
             check(std::abs(10 * std::log10(got / want)) < 1.5, "the reverberation's level follows its normalization (1.5 dB)");
@@ -371,7 +390,7 @@ int main()
         check(near / all > 0.95, "the modulation does not spread the pitch (no chorus)");
     }
 
-    // 9. A change of size while ringing: no click (no jump larger than the tail's own).
+    // 9. A change of size while ringing: no click (no jump larger than the tail's own, before or after).
     {
         pf::Room room;
         room.applySettings(hall());
@@ -402,9 +421,11 @@ int main()
                 m = std::max(m, std::abs(v[i] - v[i - 1]));
             return m;
         };
-        const float before = jump(x2, change - 9600, change - 1000), around = jump(x2, change - 1000, change + 2400);
-        std::printf("      size changed while ringing: largest step %.4f around the change, %.4f before it\n", around, before);
-        check(around <= before, "a change of size: no click");
+        // (Around: the fade out and in, 20 ms. A smaller room is louder: its tail after the change is compared too.)
+        const float before = jump(x2, change - 9600, change - 1000), around = jump(x2, change - 1000, change + 1000),
+                    after = jump(x2, change + 1000, change + 8000);
+        std::printf("      size changed while ringing: largest step %.4f around the change, %.4f before it, %.4f after\n", around, before, after);
+        check(around <= std::max(before, after), "a change of size: no click");
     }
 
     // 10. Extreme settings and rates: finite, and silent again after the tail.
@@ -418,7 +439,7 @@ int main()
                         s.size = sz;
                         s.decaySeconds = decay;
                         s.brightness = bright;
-                        s.predelayMs = sz > 0.5f ? 100.0f : 0.0f;
+                        s.distance = sz > 0.5f ? 30.0f : 1.0f;
                         pf::Room room;
                         room.applySettings(s);
                         room.prepare(rate);
@@ -460,6 +481,160 @@ int main()
         run(fresh, c, d, 128);
         std::printf("      60 s of silence after the tail in %.4f s\n", asleep);
         check(asleep < 0.01 && a == c && b == d, "asleep after the tail: silence costs nothing, the next note starts clean");
+    }
+
+    // 12. The listening position (a concert hall: 15 000 m3, T60 2.2 s). An impulse on both channels.
+    {
+        auto at = [](float distance, bool keep) {
+            auto s = hall();
+            s.size = 0.85f;
+            s.decaySeconds = 2.2f;
+            s.brightness = 0.5f;
+            s.distance = distance;
+            s.keepLoudness = keep;
+            return s;
+        };
+        auto response = [&](const pf::Room::Settings& s, float left, float right, Signal& l, Signal& r) {
+            pf::Room room;
+            room.applySettings(s);
+            room.prepare(kRate);
+            l.assign((std::size_t) (s.decaySeconds * 3.0 * kRate), 0.0f);
+            r.assign(l.size(), 0.0f);
+            l[0] = left;
+            r[0] = right;
+            run(room, l, r, 64);
+        };
+        // Energies in the mid band (250 Hz - 2 kHz), where the decay set holds and Barron's figures are.
+        auto mid = [&](const Signal& x, std::size_t from, std::size_t to) { return bandEnergy(x, from, to, 250.0, 2000.0); };
+
+        // At the keyboard: the input, bit for bit, until the first reflection.
+        {
+            const auto s = at(1.0f, true);
+            const auto ac = pf::Room::acoustics(s);
+            response(s, 1.0f, 1.0f, l, r);
+            const auto first = (std::size_t) (ac.firstReflectionMs / 1000.0 * kRate);
+            bool exact = l[0] == 1.0f && r[0] == 1.0f;
+            for (std::size_t i = 1; i < first; ++i)
+                exact = exact && l[i] == 0.0f && r[i] == 0.0f;
+            std::printf("      at the keyboard: first reflection after %.1f ms, critical distance %.1f m, the room %.1f dB under the direct sound\n",
+                        ac.firstReflectionMs, ac.criticalDistance, -ac.reflectionsOverDirectDb);
+            check(exact && first > 0, "at the keyboard, the direct sound is the input, bit for bit");
+        }
+
+        // Further: the direct sound in 1 / r (its sum: the air takes only highs), and the energies of Barron's theory,
+        // in four rooms (as the presets have them), the listener 2 to 16 m away (the studio is shorter).
+        double worstLevel = 0.0, worstRatio = 0.0, worstSplit = 0.0;
+        struct Kind {
+            const char* name;
+            float size, decay;
+        };
+        for (const Kind kind : { Kind { "studio", 0.15f, 0.6f }, Kind { "chamber", 0.5f, 1.4f }, Kind { "concert hall", 0.85f, 2.2f },
+                                 Kind { "cathedral", 1.0f, 5.5f } })
+            for (const float distance : { 2.0f, 4.0f, 8.0f, 16.0f }) {
+                auto s = at(distance, false);
+                s.size = kind.size;
+                s.decaySeconds = kind.decay;
+                const auto ac = pf::Room::acoustics(s);
+                if (ac.distance < distance - 0.01)
+                    continue; // the room is shorter
+                response(s, 1.0f, 1.0f, l, r);
+                const auto first = (std::size_t) (ac.firstReflectionMs / 1000.0 * kRate);
+                const auto split = (std::size_t) (0.08 * kRate);
+                double sum = 0.0;
+                for (std::size_t i = 0; i < first; ++i)
+                    sum += l[i];
+                const double direct = mid(l, 0, first), early = mid(l, first, split), late = mid(l, split, l.size());
+                const double ratio = 10 * std::log10((early + late) / direct) - ac.reflectionsOverDirectDb;
+                const double earlyErr = 10 * std::log10(early / direct) - (ac.earlyDb - ac.directDb);
+                const double lateErr = 10 * std::log10(late / direct) - (ac.lateDb - ac.directDb);
+                std::printf("      %-12s %4.1f m: direct %.4f (1/r %.4f); reflections over direct %+5.1f dB (theory %+5.1f), early %+.1f, late %+.1f dB off\n",
+                            kind.name, distance, sum, 1.0 / distance, 10 * std::log10((early + late) / direct), ac.reflectionsOverDirectDb, earlyErr,
+                            lateErr);
+                worstLevel = std::max(worstLevel, std::abs(sum * distance - 1.0));
+                worstRatio = std::max(worstRatio, std::abs(ratio));
+                worstSplit = std::max({ worstSplit, std::abs(earlyErr), std::abs(lateErr) });
+            }
+        check(worstLevel < 0.01, "the direct sound falls as 1 / r");
+        check(worstRatio < 1.5, "the reflections against the direct sound: Barron's theory (1.5 dB)");
+        check(worstSplit < 2.5, "early (first 80 ms) and late energies: Barron's theory (2.5 dB)");
+
+        // Keep loudness: the total energy at 16 m is the keyboard's.
+        {
+            response(at(1.0f, true), 1.0f, 1.0f, l, r);
+            const double near = mid(l, 0, l.size());
+            response(at(16.0f, true), 1.0f, 1.0f, l, r);
+            const double far = mid(l, 0, l.size());
+            std::printf("      keep loudness: 16 m against 1 m, %+.2f dB\n", 10 * std::log10(far / near));
+            check(std::abs(10 * std::log10(far / near)) < 1.0, "keep loudness: as loud at 16 m as at the keyboard (1 dB)");
+        }
+
+        // The air: ISO 9613-1 (4.66 dB/km at 1 kHz), and the direct sound's response at 20 m.
+        {
+            const double at1k = 1000.0 * pf::Room::airAbsorptionDbPerMetre(1000.0);
+            const auto s = at(20.0f, false);
+            const auto ac = pf::Room::acoustics(s);
+            response(s, 1.0f, 1.0f, l, r);
+            const auto first = (std::size_t) (ac.firstReflectionMs / 1000.0 * kRate);
+            double worst = 0.0; // up to 10 kHz (above, first-order sections fall short of the air's f^2: 16 kHz shown)
+            std::printf("      air at 20 m (ISO 9613-1, %.2f dB/km at 1 kHz):", at1k);
+            for (const double f : { 2000.0, 4000.0, 8000.0, 10000.0, 16000.0 }) {
+                std::complex<double> h = 0.0;
+                for (std::size_t i = 0; i < first; ++i)
+                    h += (double) l[i] * std::polar(1.0, -2 * kPi * f * (double) i / kRate);
+                const double got = -20 * std::log10(std::abs(h) * ac.distance), want = pf::Room::airAbsorptionDbPerMetre(f) * (ac.distance - 1.0);
+                std::printf(" %.0f kHz %.1f dB (ISO %.1f)", f / 1000, got, want);
+                if (f <= 10000.0)
+                    worst = std::max(worst, std::abs(got - want));
+            }
+            std::printf("\n");
+            check(std::abs(at1k - 4.66) < 0.1 && worst < 0.5, "the air's absorption: ISO 9613-1, within 0.5 dB from 2 to 10 kHz at 20 m");
+        }
+
+        // The width: a left-only impulse at 8 m; the direct sound's side against its mid, the piano's angle.
+        {
+            const auto s = at(8.0f, false);
+            const auto ac = pf::Room::acoustics(s);
+            response(s, 1.0f, 0.0f, l, r);
+            const auto first = (std::size_t) (ac.firstReflectionMs / 1000.0 * kRate);
+            double sl = 0.0, sr = 0.0;
+            for (std::size_t i = 0; i < first; ++i)
+                sl += l[i], sr += r[i];
+            const double width = (sl - sr) / (sl + sr), want = std::atan(0.75 / 8.0) / std::atan(0.75);
+            std::printf("      width of the direct sound at 8 m: %.3f (the piano's angle: %.3f)\n", width, want);
+            check(std::abs(width - want) < 0.005, "the direct sound narrows as the piano's angle");
+        }
+
+        // A short room: the listener goes no further than its end.
+        {
+            auto s = at(30.0f, false);
+            s.size = 0.15f;
+            const auto ac = pf::Room::acoustics(s);
+            std::printf("      a studio (%.0f m3, %.1f m long), 30 m asked: the listener at %.1f m\n", ac.volume, ac.length, ac.distance);
+            check(ac.distance < ac.length - 1.0 && ac.distance > 1.0, "a short room: the listener stays inside it");
+        }
+
+        // A change of distance while playing: no click.
+        {
+            pf::Room room;
+            room.applySettings(at(1.0f, true));
+            room.prepare(kRate);
+            Signal x((std::size_t) kRate), y(x.size());
+            for (std::size_t i = 0; i < x.size(); ++i)
+                x[i] = y[i] = (float) (0.3 * std::sin(2 * kPi * 440.0 * (double) i / kRate));
+            const std::size_t change = (std::size_t) (0.5 * kRate);
+            for (std::size_t s = 0; s < x.size(); s += 128) {
+                if (s == change - change % 128)
+                    room.distance = 8.0f;
+                room.process(x.data() + s, y.data() + s, 128);
+            }
+            float before = 0.0f, around = 0.0f;
+            for (std::size_t i = 1; i < x.size(); ++i) {
+                const float step = std::abs(x[i] - x[i - 1]);
+                (i < change - 1000 ? before : around) = std::max(i < change - 1000 ? before : around, step);
+            }
+            std::printf("      distance changed while playing: largest step %.4f around the change, %.4f before it\n", around, before);
+            check(around <= before * 1.05f, "a change of distance: no click");
+        }
     }
 
     // 11. Cost: 10 s of stereo noise at 48 kHz, blocks of 128.

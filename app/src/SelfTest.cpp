@@ -645,29 +645,37 @@ int runSelfTest(const juce::StringArray& arguments)
         }
     }
 
-    // 8e. Room: a note through the audio host, the room on then off. With it, a tail rings on after the note is
-    //     damped; the dry sound is the same (the reverberation is only added), and the room off leaves it untouched.
+    // 8e. Room: a chord through the audio host, in a concert hall (what the physics gives), the room off, heard from
+    //     the keyboard, then from the front row with keep loudness. From the keyboard, the room is only added (the
+    //     direct sound is the engine's) and rings on once the chord is damped; from the front row, the chord is as loud
+    //     over its 3 s (keep loudness keeps the total energy: the room has not built up in the first moments) but the
+    //     room dominates its tail.
     {
-        auto play = [&](bool roomOn) {
+        auto play = [&](bool roomOn, float distance) {
             player.playWholeTake = false;
             AudioHost host { player };
             pf::Room::Settings s;
             s.enabled = roomOn;
-            s.levelDb = -15.0f;
-            s.size = 0.65f;
+            s.levelDb = 0.0f;
+            s.size = 0.85f;
             s.decaySeconds = 2.2f;
+            s.distance = distance;
+            s.keepLoudness = true;
             host.room.applySettings(s);
             host.start(fs, 512);
             std::vector<float> l(512), rr(512), out;
             float* outputs[2] = { l.data(), rr.data() };
             const int blocks = (int) (3.0 * fs) / 512;
             for (int k = 0; k < blocks; ++k) {
-                if (k == 2)
-                    host.send(juce::MidiMessage::noteOn(1, 60, (juce::uint8) 90));
-                if (k == (int) (0.5 * fs) / 512)
-                    host.send(juce::MidiMessage::noteOff(1, 60));
+                for (const int note : { 48, 64, 67, 72 }) { // a chord: many partials (one note's few would leave the
+                    if (k == 2)                               // room's response at them to chance, +-1 to 2 dB)
+                        host.send(juce::MidiMessage::noteOn(1, note, (juce::uint8) 90));
+                    if (k == (int) (0.5 * fs) / 512)
+                        host.send(juce::MidiMessage::noteOff(1, note));
+                }
                 host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, 512, {});
-                out.insert(out.end(), l.begin(), l.end());
+                for (int i = 0; i < 512; ++i) // both channels' energy (a narrower image moves it between them)
+                    out.push_back(std::sqrt(l[(size_t) i] * l[(size_t) i] + rr[(size_t) i] * rr[(size_t) i]));
             }
             return out;
         };
@@ -677,12 +685,16 @@ int runSelfTest(const juce::StringArray& arguments)
                 e += (double) x[(size_t) i] * x[(size_t) i];
             return 10.0 * std::log10(e / ((b - a) * fs) + 1e-30);
         };
-        const auto dry = play(false), wet = play(true);
-        const double during = level(wet, 0.05, 0.45) - level(dry, 0.05, 0.45);
-        const double tail = level(wet, 1.5, 2.5) - level(dry, 1.5, 2.5);
-        r.check(during < 1.5 && tail > 6.0,
-                "room: during the note " + juce::String(during, 1) + " dB over the dry sound (expected < 1.5), "
-                    + juce::String(tail, 1) + " dB over it 1 to 2 s after the release (expected > 6)");
+        const auto dry = play(false, 1.0f), keyboard = play(true, 1.0f), front = play(true, 6.0f);
+        const double during = level(keyboard, 0.05, 0.45) - level(dry, 0.05, 0.45);
+        const double tail = level(keyboard, 1.5, 2.5) - level(dry, 1.5, 2.5);
+        const double frontDuring = level(front, 0.05, 2.95) - level(dry, 0.05, 2.95);
+        const double frontTail = level(front, 1.5, 2.5) - level(dry, 1.5, 2.5);
+        r.check(during < 1.0 && tail > 0.0 && std::abs(frontDuring) < 1.5 && frontTail > 6.0,
+                "room: from the keyboard, " + juce::String(during, 1) + " dB over the dry sound during the chord (expected < 1), "
+                    + juce::String(tail, 1) + " dB 1 to 2 s after the release (the room 16.5 dB under the direct sound there: > 0); from the front row, "
+                    + juce::String(frontDuring, 1) + " dB over the 3 s (keep loudness: within 1.5), " + juce::String(frontTail, 1)
+                    + " dB after the release (expected > 6)");
     }
 
     // 8f. The engine below the device's rate: a device at 4 x 44.1 kHz (what the Windows mixer can impose) runs

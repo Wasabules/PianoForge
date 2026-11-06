@@ -115,14 +115,14 @@ if (fs.existsSync(nativeExe)) {
 // 3. Cost: the native bench's case (sustain down, 64 notes 10 ms apart from the bass up, velocity 80), 48 kHz,
 //    render quanta of 128 frames, as an AudioWorklet runs it.
 load(48000);
-pf.pf_set_room(0, -15, 0.65, 2.2, 0.5, 20, 1);
+pf.pf_set_room(0, 0, 0.85, 2.2, 0.5, 1, 1, 1);
 const events = [[0, 0xb0, 64, 127]];
 for (let i = 0; i < 64; i++) events.push([Math.floor((i * 48000) / 100), 0x90, 21 + ((i * 7) % 88), 80]);
 let t0 = performance.now();
 render(48000, 4.0, events, 128);
 const dry = (performance.now() - t0) / 1000;
 load(48000);
-pf.pf_set_room(1, -15, 0.65, 2.2, 0.5, 20, 1);
+pf.pf_set_room(1, 0, 0.85, 2.2, 0.5, 6, 1, 1); // the front row: the direct path's filters run too
 t0 = performance.now();
 render(48000, 4.0, events, 128);
 const withRoom = (performance.now() - t0) / 1000;

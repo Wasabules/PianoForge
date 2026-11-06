@@ -185,7 +185,8 @@ void pf_set_tuning(float a4)
     g_engine->tuningVersion.fetch_add(1);
 }
 
-void pf_set_room(int on, float levelDb, float size, float decaySeconds, float brightness, float predelayMs, float width)
+/// The room and the listening position (pf::Room::Settings): levelDb trims the reflections against the physics.
+void pf_set_room(int on, float levelDb, float size, float decaySeconds, float brightness, float distance, int keepLoudness, float width)
 {
     if (g_room == nullptr)
         return;
@@ -195,7 +196,8 @@ void pf_set_room(int on, float levelDb, float size, float decaySeconds, float br
     s.size = size;
     s.decaySeconds = decaySeconds;
     s.brightness = brightness;
-    s.predelayMs = predelayMs;
+    s.distance = distance;
+    s.keepLoudness = keepLoudness != 0;
     s.width = width;
     g_room->applySettings(s);
 }

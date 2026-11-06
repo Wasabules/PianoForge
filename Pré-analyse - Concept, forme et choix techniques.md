@@ -765,6 +765,47 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - un WAV à 96 kHz donne un MP3 à 48 kHz au même niveau ;
     - un travail de fond complet (FLAC et Opus) se termine en 0,1 s et efface le master.
 
+**Distance d'écoute, sur la physique (6 novembre 2026).** Jusqu'ici, on ne savait pas d'où l'on écoutait : la salle ajoutait une réverbération à un niveau choisi à l'oreille. Désormais, une position d'écoute en mètres règle tout, par la physique.
+  - *Convention.* Le son du moteur (Noire, micros proches) est le piano entendu du clavier, à 1 m. À la position par défaut, « At the keyboard (1 m) », le son direct est celui du moteur, bit pour bit.
+  - *La salle* est une boîte de proportions 10,5 : 7,5 : 4,5, dont le volume suit la taille, de 60 à 40 000 m³ en progression géométrique. Les préréglages ont de vrais volumes :
+    - Studio, 150 m³, 0,6 s ;
+    - Chamber, 1 600 m³, 1,4 s ;
+    - Concert hall, 15 000 m³ (37 × 26 × 15,7 m), 2,2 s ;
+    - Large hall, 25 000 m³, 3 s ;
+    - Cathedral, 40 000 m³, 5,5 s.
+
+    Le piano est près d'une extrémité. L'auditeur se place dans l'axe, à la distance demandée, sans sortir de la salle : dans le studio, environ 5,5 m au plus.
+  - *Énergies* : théorie révisée de Barron (le champ diffus de Sabine, diminué de la décroissance déjà écoulée quand le son direct arrive), pour une directivité Q = 2. On a A = 0,161 V/T. Les réflexions valent 16π r₀²/(Q A) × e^(−13,82 r/(c T)), à répartir entre les 80 premières ms (précoces) et la suite (tardives). Le direct vaut (r₀/r)².
+    - Dans la grande salle, la distance critique est de 6,6 m. Au clavier, la salle est 16,5 dB sous le direct ; au fond (20 m), elle le dépasse de 8 dB environ.
+    - Le réglage Level devient une correction autour de cette valeur (0 dB : la physique).
+    - Les réglages enregistrés de l'ancien modèle (un niveau contre le son sec) sont remplacés par leur préréglage, au clavier.
+  - *Réflexions précoces.* Images du premier et du second ordre, sauf celles du sol : le son du moteur a déjà la sienne. Elles vont vers deux micros espacés de 0,6 m à la position d'écoute.
+    - Chaque mur garde √(1 − ᾱ) de l'amplitude, avec ᾱ = A/S, l'absorption moyenne de Sabine pour ce temps de réverbération dans cette salle.
+    - Le pré-délai vient de la géométrie (la première réflexion, 32 ms au clavier dans la grande salle) ; le réglage Pre-delay disparaît.
+    - Le gain des réflexions et celui du réseau sont résolus ensemble (un système 2 × 2) pour respecter les deux fenêtres de Barron. Dans une grande salle, des réflexions du second ordre arrivent après 80 ms ; dans une petite, le réseau commence avant.
+  - *Son direct* plus loin :
+    - il décroît en 1/r ;
+    - l'air l'absorbe (ISO 9613-1, 20 °C, 50 % d'humidité, 4,66 dB/km à 1 kHz), par deux passe-bas du premier ordre ajustés à 10 kHz ;
+    - il se rétrécit selon l'angle sous lequel on voit le piano (1,5 m de large) : 0,145 de la largeur à 8 m.
+
+    Un piano lointain est une source ponctuelle : chaque oreille en reçoit toute la puissance. Le rétrécissement et la somme mono des réflexions gardent donc l'énergie d'une entrée stéréo peu corrélée. Le gain se calcule sur les énergies milieu/côtés de l'entrée (200 ms), 1 pour une entrée mono, √2 au plus. Sans cela, le son direct d'un accord perdait 2,8 dB au premier rang.
+  - *Keep loudness* (activé par défaut) : tout est mis à l'échelle pour garder l'énergie totale entendue au clavier. S'éloigner change l'équilibre, pas le volume.
+  - *Ce qui a été corrigé par la mesure.* L'énergie du réseau est estimée avec son T60 à 1 kHz (l'étagère des aigus le raccourcit déjà là). Mesuré, le réseau donne 0,7 dB de moins que l'estimation : l'énergie n'est pas répartie uniformément dans les lignes. La correction est appliquée et documentée dans le code.
+  - *Mesures* (`room_test`, natif et sous Node), impulsions, bande 250 Hz–2 kHz, énergies par Parseval :
+    - réflexions contre direct : à ±1,2 dB de Barron dans les quatre salles, entre 2 et 16 m (grande salle : −10,7 dB à 2 m pour −10,6 en théorie, +6,0 dB à 16 m pour +6,4) ;
+    - précoces et tardives : à ±1,2 dB, sauf le tardif du studio (T60 0,6 s), à −2 dB ;
+    - direct exactement en 1/r ;
+    - keep loudness : −0,38 dB à 16 m contre le clavier ;
+    - air à 20 m : à 0,1 dB de l'ISO jusqu'à 10 kHz. À 16 kHz, 5,3 dB au lieu de 6,9 : des filtres du premier ordre ne suivent pas la loi en f² près de Nyquist, ce qui reste inaudible sur un piano ;
+    - largeur : l'angle exact ;
+    - aucun clic quand la distance change en cours de jeu ;
+    - coût de 2,0 à 2,5 % d'un cœur.
+  - *Autotest 8e*, un accord dans la grande salle :
+    - au clavier, la salle s'ajoute seulement : 0,0 dB pendant l'accord ;
+    - au premier rang avec keep loudness, l'accord a le même volume sur ses 3 s (−0,7 dB), et la salle domine sa queue (+7,9 dB).
+  - *Dans l'atelier* : la fenêtre Room a deux cartes, la salle et la position d'écoute (cinq positions : au clavier 1 m, sur scène 3 m, premier rang 6 m, milieu de salle 12 m, fond 20 m ; la distance de 1 à 30 m ; keep loudness). Un résumé donne ce que la physique donne là : volume et dimensions, distance critique, salle contre direct, première réflexion, niveau, air et largeur du direct.
+  - *Dans la page web* : une liste des positions à côté du préréglage, keep loudness toujours actif.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

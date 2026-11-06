@@ -40,13 +40,21 @@ const profileDb = {
 };
 
 // ---- State ----
-const ROOM_PRESETS = [ // as the lab's (app/src/ui/RoomPanel.cpp): size, decay s, brightness, pre-delay ms, level dB, width
-  { name: 'Studio', size: 0.15, decay: 0.8, brightness: 0.6, predelayMs: 4, levelDb: -18, width: 0.8 },
-  { name: 'Chamber', size: 0.35, decay: 1.4, brightness: 0.55, predelayMs: 10, levelDb: -16, width: 1 },
-  { name: 'Concert hall', size: 0.65, decay: 2.2, brightness: 0.5, predelayMs: 20, levelDb: -15, width: 1 },
-  { name: 'Large hall', size: 0.85, decay: 3.0, brightness: 0.45, predelayMs: 28, levelDb: -15, width: 1 },
-  { name: 'Cathedral', size: 1.0, decay: 5.5, brightness: 0.35, predelayMs: 45, levelDb: -16, width: 1 },
+const ROOM_PRESETS = [ // as the lab's (app/src/ui/RoomPanel.cpp): size (60 to 40 000 m3), decay s, brightness, width
+  { name: 'Studio', size: 0.14, decay: 0.6, brightness: 0.6, width: 0.8 },
+  { name: 'Chamber', size: 0.5, decay: 1.4, brightness: 0.55, width: 1 },
+  { name: 'Concert hall', size: 0.85, decay: 2.2, brightness: 0.5, width: 1 },
+  { name: 'Large hall', size: 0.93, decay: 3.0, brightness: 0.45, width: 1 },
+  { name: 'Cathedral', size: 1.0, decay: 5.5, brightness: 0.35, width: 1 },
 ];
+const ROOM_POSITIONS = [ // as the lab's: metres from the piano (1 m: the engine's sound, heard from the keyboard)
+  { name: 'At the keyboard (1 m)', distance: 1 },
+  { name: 'On stage (3 m)', distance: 3 },
+  { name: 'Front row (6 m)', distance: 6 },
+  { name: 'Middle of the hall (12 m)', distance: 12 },
+  { name: 'Back of the hall (20 m)', distance: 20 },
+];
+const ROOM_MODEL = 2; // the stored settings' model: 2, the listening position (1: a level against the dry sound)
 const OPTIONS = [ // pf_set_option
   ['Soundboard body', true], ['Attack residual', true], ['Sympathetic resonance', true],
   ['Held keys resonate', true], ['Pedal catches releases', true], ['Release noise', true],
@@ -403,9 +411,10 @@ function buildPlayer() {
 // ---- Settings ----
 function settings() {
   const preset = ROOM_PRESETS[Number($('roomPreset').value)] ?? ROOM_PRESETS[2];
+  const position = ROOM_POSITIONS[Number($('roomPosition').value)] ?? ROOM_POSITIONS[0];
   return {
     volume: Number($('volume').value),
-    room: { ...preset, on: $('roomOn').checked, levelDb: Number($('roomLevel').value) },
+    room: { ...preset, on: $('roomOn').checked, levelDb: Number($('roomLevel').value), distance: position.distance, keepLoudness: true },
     options: OPTIONS.map((_, i) => $('option' + i).checked),
     sympathetic: Number($('sympathetic').value),
     a4: Number($('a4').value) || 440,
@@ -418,7 +427,7 @@ function apply() {
   $('volumeOut').textContent = `${s.volume.toFixed(1)} dB`;
   $('roomLevelOut').textContent = `${s.room.levelDb} dB`;
   $('sympatheticOut').textContent = `${s.sympathetic} dB`;
-  store.set('settings', { ...s, roomPreset: Number($('roomPreset').value) });
+  store.set('settings', { ...s, roomPreset: Number($('roomPreset').value), roomPosition: Number($('roomPosition').value), roomModel: ROOM_MODEL });
   send({ type: 'volume', db: s.volume });
   send({ type: 'room', ...s.room });
   s.options.forEach((on, option) => send({ type: 'option', option, on }));
@@ -429,6 +438,7 @@ function apply() {
 
 function buildSettings() {
   ROOM_PRESETS.forEach((p, i) => $('roomPreset').add(new Option(p.name, String(i))));
+  ROOM_POSITIONS.forEach((p, i) => $('roomPosition').add(new Option(p.name, String(i))));
   OPTIONS.forEach(([name, on], i) => {
     const label = document.createElement('label');
     label.innerHTML = `<input id="option${i}" type="checkbox"${on ? ' checked' : ''}> ${name}`;
@@ -436,19 +446,18 @@ function buildSettings() {
   });
   const saved = store.get('settings', null);
   $('roomPreset').value = String(saved?.roomPreset ?? 2);
+  $('roomPosition').value = String(saved?.roomPosition ?? 0);
   if (saved) {
     $('volume').value = saved.volume;
     $('roomOn').checked = saved.room.on;
-    $('roomLevel').value = saved.room.levelDb;
+    $('roomLevel').value = saved.roomModel === ROOM_MODEL ? saved.room.levelDb : 0; // (the earlier model's level: not a trim)
     saved.options.forEach((on, i) => { $('option' + i).checked = on; });
     $('sympathetic').value = saved.sympathetic;
     $('a4').value = saved.a4;
     $('curveMax').value = saved.curveMax;
   }
-  $('roomPreset').addEventListener('change', () => { // a preset brings its level
-    $('roomLevel').value = ROOM_PRESETS[Number($('roomPreset').value)].levelDb;
-    apply();
-  });
+  for (const id of ['roomPreset', 'roomPosition'])
+    $(id).addEventListener('change', apply);
   for (const id of ['volume', 'roomOn', 'roomLevel', 'sympathetic', 'a4', 'curveMax'])
     $(id).addEventListener('input', apply);
   $('options').addEventListener('change', apply);
