@@ -8,11 +8,14 @@
 //       --no-sympathetic, --no-held-keys, --no-catch, --no-release-noise (anywhere on the line) switch those engine
 //       settings off;
 //       --restrike <s>: the re-strike fade (seconds to -40 dB)
+//       --soft <0..1>: the soft pedal held through a render; --unison <spread>: the unison's detunings (1: measured)
 //   modal_render <profile> bench [voices] [rate] [block]
 //       strikes <voices> notes spread over the keyboard and times process() against the real-time budget
 #include <pianoforge/modal_engine.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -81,11 +84,15 @@ void run(pf::ModalEngine& engine, std::vector<pf::Event> events, int frames, int
 int main(int argc, char** argv)
 {
     bool body = true, residual = true, sympathetic = true, heldKeys = true, pedalCatch = true, releaseNoise = true; // options
-    double restrike = -1.0;
+    double restrike = -1.0, soft = 0.0, unison = 1.0;
     int kept = 1;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--restrike") == 0 && i + 1 < argc)
             restrike = std::atof(argv[++i]);
+        else if (std::strcmp(argv[i], "--soft") == 0 && i + 1 < argc)
+            soft = std::atof(argv[++i]);
+        else if (std::strcmp(argv[i], "--unison") == 0 && i + 1 < argc)
+            unison = std::atof(argv[++i]);
         else if (std::strcmp(argv[i], "--no-body") == 0)
             body = false;
         else if (std::strcmp(argv[i], "--no-residual") == 0)
@@ -104,7 +111,7 @@ int main(int argc, char** argv)
     argc = kept;
     if (argc < 3) {
         std::fprintf(stderr, "usage: modal_render <profile> render <out.wav> <note> <velocity> <hold s> [tail s] [rate]\n"
-                             "                    [--no-body] [--no-residual]\n"
+                             "                    [--no-body] [--no-residual] [--soft <0..1>] [--unison <spread>]\n"
                              "       modal_render <profile> events <out.wav> <events.txt> <seconds> [rate]\n"
                              "                    [--no-sympathetic] [--no-held-keys] [--no-catch] [--no-release-noise] [--restrike <s>]\n"
                              "       modal_render <profile> bench [voices] [rate] [block]\n");
@@ -126,6 +133,7 @@ int main(int argc, char** argv)
     engine.releaseNoiseEnabled = releaseNoise;
     if (restrike > 0.0)
         engine.restrikeFadeSeconds = (float) restrike;
+    engine.unisonSpread = (float) unison;
     const std::string mode = argv[2];
 
     if (mode == "events" && argc >= 6) {
@@ -159,7 +167,8 @@ int main(int argc, char** argv)
         const int rate = argc > 8 ? std::atoi(argv[8]) : 44100, block = 64;
         engine.prepare(rate, block);
         const int off = (int) (hold * rate), frames = (int) ((hold + tail) * rate);
-        std::vector<pf::Event> events { { 0, 0x90, (std::uint8_t) note, (std::uint8_t) velocity },
+        std::vector<pf::Event> events { { 0, 0xB0, 67, (std::uint8_t) std::lround(std::clamp(soft, 0.0, 1.0) * 127.0) },
+                                        { 0, 0x90, (std::uint8_t) note, (std::uint8_t) velocity },
                                         { (std::uint32_t) off, 0x80, (std::uint8_t) note, 0 } };
         std::vector<float> l, r;
         run(engine, events, frames, block, l, r);

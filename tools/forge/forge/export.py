@@ -41,10 +41,18 @@ Binary format (little endian), modal-profile.bin:
                       exponent, f32 reference velocity, u32 strings, then per string u32 midi, u32 resonators,
                       resonators x (f64 freq Hz, f64 decay 1/s, f32 coupling gain 1/s, f32 left re, f32 left im,
                       f32 right re, f32 right im); then f32 drive decay s (0: none), u32 registers, registers x
-                      (i32 first note, f32 onset s, f32 drive decay s) (both absent from older profiles). Each voice
-                      drives the strings with (1 - exp(-t / onset)) exp(-t / decay) (velocity / reference) ^
-                      exponent, the onset and decay of its note's register.
+                      (i32 first note, f32 onset s, f32 drive decay s) (both absent from older profiles); then u32
+                      registers, registers x (f32 gain dB, f32 velocity exponent) (absent from older profiles: 0 dB
+                      and the exponent above). Each voice drives the strings with gain x (1 - exp(-t / onset))
+                      exp(-t / decay) (velocity / reference) ^ exponent, those of its note's register (one register
+                      per exciting note measured).
                 PEDL  damper lift per CC64 value (half pedal): 128 x f32, 1 lifted, 0 resting on the strings
+                UNIS  the coupled strings of each unison (forge unison: Weinreich's model fitted to each partial's
+                      strongest modes): u32 notes, then per note u32 midi, u32 layers, then per layer u32 velocity,
+                      u32 partials (those of the layer, in order), partials x (u8 strings, 0: no model, u8 x 3 mode
+                      indices within the partial by ascending frequency, f32 x 3 string detunings Hz against their
+                      mean, f32 bridge admittance re, f32 im, 1/s); the engine moves the measured modes by what the
+                      model gives for the soft pedal and for another unison tuning
                 DAMP  damper curves per group of partials (forge release-curves): u32 groups, groups x u32 first
                       partial number, notes x holds x groups x points x f32 dB against the overall curve (the
                       notes, holds and points of the dampers above)
@@ -72,7 +80,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from forge import release_noise, soundboard, sympathetic
+from forge import release_noise, soundboard, sympathetic, unison
 from forge.modes import BandExtractor, synthesize
 from forge.note_modes import clean, partial_modes
 
@@ -244,6 +252,11 @@ def _layer_task(args) -> dict:
             "lowered": lowered, "fades": fade_times(path, note)}
 
 
+def _unison_task(args) -> tuple[int, int, list]:
+    midi, velocity, note = args
+    return midi, velocity, unison.layer_table(note)
+
+
 def _layer_bytes(note: dict, body_amps: np.ndarray, r: np.ndarray, fades: dict[int, float]) -> bytes:
     partials = [p for p in note["partials"] if p["modes"]]
     modes = [m for p in partials for m in p["modes"]]
@@ -322,7 +335,9 @@ def sections(corpus: Path) -> list[bytes]:
             rec["f"], rec["d"], rec["a"] = res[:, 0], res[:, 1], res[:, 2:7]
             payload += [struct.pack("<2I", midi, len(res)), rec.tobytes()]
         payload.append(struct.pack("<fI", shape["drive_decay_s"], len(shape["registers"])))
-        payload += [struct.pack("<iff", first, onset, decay) for first, onset, decay in shape["registers"]]
+        payload += [struct.pack("<iff", r[0], r[1], r[2]) for r in shape["registers"]]
+        payload.append(struct.pack("<I", len(shape["registers"])))  # then each register's gain and exponent
+        payload += [struct.pack("<ff", r[3], r[4]) for r in shape["registers"]]
         out.append(section(b"SYMP", b"".join(payload)))
         print(f"  sympathetic resonance: {sum(len(r) for r in strings.values())} resonators on {len(strings)} strings")
     else:
@@ -430,6 +445,17 @@ def run(corpus: Path, jobs: int = 0) -> list[Path]:
             out.append(_layer_bytes(note, layer["body"], layer["residual"], layer["fades"]))
             total_modes += sum(len(p["modes"]) for p in note["partials"])
     out += sections(corpus)
+    # The coupled strings of each unison, from the modes just written.
+    with ProcessPoolExecutor(max_workers=jobs or None) as pool:
+        tables = {(m, v): t for m, v, t in pool.map(_unison_task, [(m, v, modes[v][m]) for m, present in notes.items() for v in present])}
+    payload = [struct.pack("<I", len(midis))]
+    for m, present in notes.items():
+        payload.append(struct.pack("<2I", m, len(present)))
+        payload += [unison.layer_bytes(v, tables[(m, v)]) for v in present]
+    out.append(section(b"UNIS", b"".join(payload)))
+    fitted = [t for table in tables.values() for t in table if t is not None]
+    total = sum(1 for (m, _), table in tables.items() if unison.strings_of(m) > 1 for _ in table)
+    print(f"  coupled strings: {len(fitted)} of {total} partials of the notes with 2 or 3 strings ({time.time() - start:.0f} s)")
     path = corpus / "modal-profile.bin"
     path.write_bytes(b"".join(out))
     print(f"  {len(midis)} notes x {len(layers)} layers, {total_modes} modes, "

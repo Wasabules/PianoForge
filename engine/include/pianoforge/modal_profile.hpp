@@ -60,6 +60,15 @@ struct ModalProfile {
         double freq = 0.0, decay = 0.0;          // Hz, 1/s
         std::complex<float> left, right;         // complex amplitude per channel at the note-on
     };
+    /// The coupled strings of a partial's unison (forge unison: Weinreich's model fitted to its strongest modes):
+    /// the modes it stands for (indices within the partial, by ascending frequency), the strings' detunings against
+    /// their mean, and the bridge's admittance. strings 0: no model.
+    struct Unison {
+        int strings = 0;
+        std::array<int, 3> modes {};
+        std::array<float, 3> detuneHz {};
+        std::complex<float> bridge;              // 1/s
+    };
     struct Partial {
         int number = 0, firstMode = 0, modeCount = 0;
         float level = 0.0f;                      // RMS amplitude over the first second (interpolation weight)
@@ -76,6 +85,7 @@ struct ModalProfile {
         float bodyLevel = 0.0f;                  // RMS of the body amplitudes
         std::vector<float> residual;             // interleaved stereo, at residualRate
         int residualFrames = 0;
+        std::vector<Unison> unison;              // one per partial (empty: no model)
     };
     struct Note {
         int midi = 0;
@@ -118,6 +128,8 @@ struct ModalProfile {
     struct DriveShape {
         int firstNote = 0;
         float onsetSeconds = 0.0f, decaySeconds = 0.0f;
+        float gainDb = 0.0f;
+        float velocityExponent = -1.0f; // < 0: stringVelocityExponent
     };
     std::vector<DriveShape> stringDriveShapes; // ascending firstNote (empty: the values above for every note)
     /// How far the sustain pedal lifts the dampers, per CC64 value: 1 lifted, 0 resting on the strings.

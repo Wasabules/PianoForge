@@ -31,10 +31,19 @@ Model, per resonator k (a mode of a free string: frequency f_k, decay sigma_k):
     window) has the smallest 90th percentile of the absolute error. (Driving the fit with the modes alone instead does worse: back-extrapolated to the
     note-on, they overstate the first instants, which the bass strings integrate for seconds.)
 
+Last, per exciting note (2026-11-06, the pairs of every note): its own drive shape, gain and velocity exponent,
+on top of the band gains and the registers' fit. Each note's resonance depends on its own coincidences with the
+other strings, which neither the bands nor the registers see: with one note in six measured, a correction per note
+did not carry over to its neighbours (left out, interpolated from them: worse than the registers); with all of them
+measured, it needs no interpolation. Per note, on its two takes (v40, v100) over the five windows: for each shape of
+the grid, the gain and the exponent's change by least squares on the dB errors (the exponent's change held back a
+little: two velocities only); the shape kept is the one with the smallest mean absolute error.
+
 The strings are those of the layer nearest SYMPATHETIC_VELOCITY: a free string rings with its own modes, whatever
 the strike that measured them.
 
-sympathetic.json: bands_hz (edges), gains, extra_decays, registers [{first, onset_s, drive_decay_s (0: none)}] (and
+sympathetic.json: bands_hz (edges), gains, extra_decays, registers [{first, onset_s, drive_decay_s (0: none), gain_db,
+velocity_exponent}] (one per exciting note measured: the note's own fit; and
 onset_s, drive_decay_s: the first register's), velocity_exponent, reference_velocity, f_max_hz,
 windows_s, fit (per take and window: model and library power, dB), notes[]: midi, resonators [[freq Hz, decay 1/s (extra decay included), gain, wl re, wl im,
 wr re, wr im]].
@@ -65,6 +74,7 @@ ONSETS_S = (0.05, 0.1, 0.2, 0.3, 0.5)             # the grid of the drive's rise
 DRIVE_DECAYS_S = (0.0, 4.0, 2.0, 1.0, 0.5)         # the grid of the drive's fading time constant (0: none)
 REGISTERS = (0, 45, 69)   # first note of each register of the exciting note, which has its own drive shape
 REFERENCE_VELOCITY = 64                            # where the velocity factor is 1
+NOTE_EXPONENT_RIDGE = 50.0  # how much the per-note fit holds the exponent's change back (dB^2 per unit)
 MIN_SHARE = 1e-3          # a mode carrying less of its partial's energy than this is left out (CPU)
 FLOOR = 1e-15             # library band powers below this (it is denoised) carry no measurement
 MIN_SAMPLES = 6           # takes x windows a band needs to be fitted on its own
@@ -329,6 +339,39 @@ def choose(measures: list[dict], shapes: list[tuple[float, float]]) -> tuple[lis
     return best
 
 
+def fit_notes(measures: list[dict], shapes: list, gains: np.ndarray, exponent: float) -> dict[int, dict]:
+    """Per exciting note: the drive shape (index into shapes), gain (dB) and velocity exponent that fit its takes
+    best on top of the band gains and the global exponent, and the errors (dB) per take and window."""
+    by_note: dict[int, list[dict]] = {}
+    for m in measures:
+        by_note.setdefault(m["note"], []).append(m)
+    out = {}
+    for note, takes in sorted(by_note.items()):
+        best = None
+        for i in range(len(shapes)):
+            rows, rhs = [], []
+            for m in takes:
+                x = 20 * np.log10(m["velocity"] / REFERENCE_VELOCITY)
+                scale = (m["velocity"] / REFERENCE_VELOCITY) ** (2 * exponent)
+                for w in range(len(WINDOWS_S)):
+                    library = float(np.sum(m["library"][w]))
+                    model = float(np.sum(m["model"][i, w] * gains ** 2) * scale)
+                    if library > FLOOR and model > 0:
+                        rows.append([1.0, x])
+                        rhs.append(10 * np.log10(library) - 10 * np.log10(model))
+            if len(rows) < 3:
+                continue
+            A, b = np.asarray(rows), np.asarray(rhs)
+            sol = np.linalg.solve(A.T @ A + np.diag([0.0, NOTE_EXPONENT_RIDGE]), A.T @ b)
+            err = A @ sol - b
+            if best is None or np.mean(np.abs(err)) < best[0]:
+                best = (float(np.mean(np.abs(err))), i, sol, err)
+        if best is not None:
+            out[note] = {"shape": best[1], "gain_db": float(best[2][0]), "velocity_exponent": float(exponent + best[2][1]),
+                         "errors": best[3]}
+    return out
+
+
 def write(corpus: Path, interactions: Path, res_by_note: dict, extra: np.ndarray, shapes: list, measures: list) -> Path:
     """Chooses the shapes, reports the fit and writes sympathetic.json."""
     uniform = assess(measures, [shapes.index((0.3, 0.0))] * len(REGISTERS)) if (0.3, 0.0) in shapes else None
@@ -348,6 +391,11 @@ def write(corpus: Path, interactions: Path, res_by_note: dict, extra: np.ndarray
     e = r["errors"]
     print(f"  model against the library, per take and window: median {np.median(e):+.1f} dB, "
           f"half within {r['median']:.1f} dB, 90 % within {r['p90']:.1f} dB (velocity exponent {exponent:.2f})")
+    per_note = fit_notes(measures, shapes, gains, exponent)
+    if per_note:
+        a = np.abs(np.concatenate([f["errors"] for f in per_note.values()]))
+        print(f"  with a fit per exciting note ({len(per_note)} notes): half within {np.median(a):.1f} dB, "
+              f"90 % within {np.percentile(a, 90):.1f} dB")
     out = corpus / "sympathetic.json"
     notes = []
     for m, res in sorted(res_by_note.items()):
@@ -355,8 +403,13 @@ def write(corpus: Path, interactions: Path, res_by_note: dict, extra: np.ndarray
         rows = np.column_stack([res[:, 0], res[:, 1] + extra[bands], gains[bands], res[:, 2:6]])
         notes.append({"midi": m, "resonators": [[round(float(v[0]), 5), round(float(v[1]), 5),
                                                  *(float(f"{x:.6e}") for x in v[2:])] for v in rows]})
-    registers = [{"first": first, "onset_s": shapes[combo[g]][0], "drive_decay_s": shapes[combo[g]][1]}
-                 for g, first in enumerate(REGISTERS)]
+    registers = [{"first": first, "onset_s": shapes[combo[g]][0], "drive_decay_s": shapes[combo[g]][1], "gain_db": 0.0,
+                  "velocity_exponent": exponent} for g, first in enumerate(REGISTERS)]
+    if per_note:  # one register per note measured, from that note up
+        registers = [{"first": n, "onset_s": shapes[f["shape"]][0], "drive_decay_s": shapes[f["shape"]][1],
+                      "gain_db": round(f["gain_db"], 3), "velocity_exponent": round(f["velocity_exponent"], 4)}
+                     for n, f in sorted(per_note.items())]
+        registers[0]["first"] = 0
     out.write_text(json.dumps({
         "source": str(interactions), "velocity": SYMPATHETIC_VELOCITY, "f_max_hz": F_MAX,
         "bands_hz": [round(float(b), 3) for b in BANDS], "gains": [float(f"{g:.6e}") for g in gains],
@@ -370,10 +423,12 @@ def write(corpus: Path, interactions: Path, res_by_note: dict, extra: np.ndarray
 
 def load(path: Path) -> tuple[dict[int, np.ndarray], dict]:
     """(midi -> resonators (k x 7: freq, decay, gain, wl re, wl im, wr re, wr im), the drive's shape: onset_s,
-    drive_decay_s, velocity_exponent, reference_velocity, registers [(first note, onset s, decay s)])."""
+    drive_decay_s, velocity_exponent, reference_velocity, registers [(first note, onset s, decay s, gain dB,
+    velocity exponent)])."""
     data = json.loads(path.read_text(encoding="utf-8"))
     shape = {k: float(data.get(k, d)) for k, d in (("onset_s", 0.0), ("drive_decay_s", 0.0), ("velocity_exponent", 0.0),
                                                    ("reference_velocity", REFERENCE_VELOCITY))}
-    shape["registers"] = [(int(r["first"]), float(r["onset_s"]), float(r["drive_decay_s"])) for r in data.get("registers", [])] \
-        or [(0, shape["onset_s"], shape["drive_decay_s"])]
+    shape["registers"] = [(int(r["first"]), float(r["onset_s"]), float(r["drive_decay_s"]), float(r.get("gain_db", 0.0)),
+                           float(r.get("velocity_exponent", shape["velocity_exponent"]))) for r in data.get("registers", [])] \
+        or [(0, shape["onset_s"], shape["drive_decay_s"], 0.0, shape["velocity_exponent"])]
     return {n["midi"]: np.asarray(n["resonators"], dtype=np.float64) for n in data["notes"]}, shape

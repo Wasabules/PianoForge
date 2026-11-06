@@ -42,6 +42,16 @@ public:
             quit();
             return;
         }
+        if (arguments.contains("--audio-hold")) {
+            setApplicationReturnValue(runAudioHold(arguments));
+            quit();
+            return;
+        }
+        if (arguments.contains("--audio-restore")) {
+            setApplicationReturnValue(runAudioRestore(arguments));
+            quit();
+            return;
+        }
         if (arguments.contains("--list-audio")) {
             setApplicationReturnValue(runListAudio(arguments));
             quit();

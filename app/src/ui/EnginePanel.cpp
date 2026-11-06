@@ -59,6 +59,20 @@ EnginePanel::EnginePanel(pf::ModalEngine& m, ReferencePlayer& p, juce::Propertie
     sympatheticLevel.onDragEnd = [this] { save(); };
     modal.sympatheticGain = juce::Decibels::decibelsToGain((float) sympatheticLevel.getValue());
 
+    // The unison's tuning: the strings of each note detuned as measured (100 %), drawn together (0 %: no beating, a
+    // single decay) or apart (an old upright).
+    unisonLabel.setText("Unison tuning", juce::dontSendNotification);
+    unison.setRange(0.0, 300.0, 1.0);
+    unison.setTextValueSuffix(" %");
+    unison.setTextBoxStyle(juce::Slider::TextBoxRight, false, 64, 20);
+    unison.setDoubleClickReturnValue(true, 100.0);
+    unison.setTooltip("How far apart the strings of each note are tuned: 100 % as measured, 0 % in perfect unison (no "
+                      "beating), 200 to 300 % an old upright's. The notes struck from then on.");
+    unison.setValue(settings.getDoubleValue("unisonSpread", 1.0) * 100.0, juce::dontSendNotification);
+    unison.onValueChange = [this] { modal.unisonSpread = (float) (unison.getValue() / 100.0); };
+    unison.onDragEnd = [this] { save(); };
+    modal.unisonSpread = (float) (unison.getValue() / 100.0);
+
     restrikeLabel.setText("Re-strike: the previous note fades to -40 dB in", juce::dontSendNotification);
     restrike.setRange(0.015, 5.0, 0.005);
     restrike.setSkewFactorFromMidPoint(0.8);
@@ -98,11 +112,11 @@ EnginePanel::EnginePanel(pf::ModalEngine& m, ReferencePlayer& p, juce::Propertie
     };
     applyTuning();
 
-    for (auto* c : std::initializer_list<juce::Component*> { &sympatheticLabel, &sympatheticLevel, &restrikeLabel, &restrike,
+    for (auto* c : std::initializer_list<juce::Component*> { &sympatheticLabel, &sympatheticLevel, &unisonLabel, &unison, &restrikeLabel, &restrike,
                                                              &a4Label, &referenceA4, &temperamentLabel, &temperament, &root,
                                                              &resetTuning })
         addAndMakeVisible(*c);
-    setSize(640, 590);
+    setSize(640, 620);
 }
 
 void EnginePanel::apply(Option o)
@@ -136,6 +150,7 @@ void EnginePanel::save()
     for (size_t i = 0; i < toggles.size(); ++i)
         settings.setValue(kOptions[i].key, toggles[i].getToggleState());
     settings.setValue("sympatheticDb", sympatheticLevel.getValue());
+    settings.setValue("unisonSpread", unison.getValue() / 100.0);
     settings.setValue("restrikeFade", restrike.getValue());
     settings.setValue("referenceA4", referenceA4.getValue());
     settings.setValue("temperament", temperament.getSelectedId());
@@ -162,7 +177,7 @@ void EnginePanel::resized()
         inner.removeFromTop(18);
         return inner;
     };
-    auto inner = place(modalArea, 18 + 6 * 40 + 34);
+    auto inner = place(modalArea, 18 + 6 * 40 + 34 + 30);
     for (int i = 0; i < (int) Option::wholeTake; ++i) {
         auto row = inner.removeFromTop(40);
         toggles[(size_t) i].setBounds(row.removeFromTop(22));
@@ -171,6 +186,10 @@ void EnginePanel::resized()
     auto row = inner.removeFromTop(28);
     sympatheticLabel.setBounds(row.removeFromLeft(150).withTrimmedLeft(26));
     sympatheticLevel.setBounds(row.removeFromLeft(300));
+    inner.removeFromTop(2);
+    row = inner.removeFromTop(28);
+    unisonLabel.setBounds(row.removeFromLeft(150).withTrimmedLeft(26));
+    unison.setBounds(row.removeFromLeft(300));
 
     inner = place(voicesArea, 18 + 36);
     row = inner.removeFromTop(28);

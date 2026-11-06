@@ -10,11 +10,12 @@ name = "interactions"
 sample_rate = 44100  # Kontakt hosted by pedalboard always runs at 44.1 kHz (see bench/kontakt.py)
 
 # Comparable pairs: the same note with the pedal down (key released at 4 s, pedal held until 10 s) and
-# with the pedal up (key held for 10 s). The difference isolates the sympathetic resonance.
+# with the pedal up (key held for 10 s). The difference isolates the sympathetic resonance. Every note (2026-11-06:
+# one note in six left the resonance to chance between them, each note's own coincidences ruling its level).
 [[pass]]
 name = "pedal-down"
 type = "note"
-notes = "A0..C8:6"
+notes = "A0..C8"
 velocities = [40, 100]
 pedal = "down"
 preroll = 1.0
@@ -25,7 +26,7 @@ tail = 3.0
 [[pass]]
 name = "pedal-up"
 type = "note"
-notes = "A0..C8:6"
+notes = "A0..C8"
 velocities = [40, 100]
 preroll = 1.0
 hold = 10.0
@@ -75,4 +76,20 @@ takes = [
   { name = "A3v100-pedal-up-3000ms_repedal-3300ms", duration = 9.0, events = [[0.0, "cc", 64, 127], [1.0, "on", "A3", 100], [1.5, "off", "A3"], [3.0, "cc", 64, 0], [3.3, "cc", 64, 127], [8.0, "cc", 64, 0]] },
   { name = "A1v100-pedal-up-3000ms", duration = 9.0, events = [[0.0, "cc", 64, 127], [1.0, "on", "A1", 100], [1.5, "off", "A1"], [3.0, "cc", 64, 0]] },
   { name = "A1v100-pedal-up-3000ms_repedal-3100ms", duration = 9.0, events = [[0.0, "cc", 64, 127], [1.0, "on", "A1", 100], [1.5, "off", "A1"], [3.0, "cc", 64, 0], [3.1, "cc", 64, 127], [8.0, "cc", 64, 0]] },
+]
+
+# The soft pedal (una corda, CC67 held from the start), against the same note without it: does the library shift
+# the action? (2026-11-06)
+[[pass]]
+name = "soft-pedal"
+type = "sequence"
+takes = [
+  { name = "A1v100", duration = 8.0, events = [[1.0, "on", "A1", 100], [6.0, "off", "A1"]] },
+  { name = "A1v100-soft", duration = 8.0, events = [[0.0, "cc", 67, 127], [1.0, "on", "A1", 100], [6.0, "off", "A1"]] },
+  { name = "C4v40", duration = 8.0, events = [[1.0, "on", "C4", 40], [6.0, "off", "C4"]] },
+  { name = "C4v40-soft", duration = 8.0, events = [[0.0, "cc", 67, 127], [1.0, "on", "C4", 40], [6.0, "off", "C4"]] },
+  { name = "C4v100", duration = 8.0, events = [[1.0, "on", "C4", 100], [6.0, "off", "C4"]] },
+  { name = "C4v100-soft", duration = 8.0, events = [[0.0, "cc", 67, 127], [1.0, "on", "C4", 100], [6.0, "off", "C4"]] },
+  { name = "C6v100", duration = 8.0, events = [[1.0, "on", "C6", 100], [6.0, "off", "C6"]] },
+  { name = "C6v100-soft", duration = 8.0, events = [[0.0, "cc", 67, 127], [1.0, "on", "C6", 100], [6.0, "off", "C6"]] },
 ]

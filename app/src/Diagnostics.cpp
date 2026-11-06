@@ -152,6 +152,56 @@ int runListAudio(const juce::StringArray& arguments)
     return 0;
 }
 
+int runAudioHold(const juce::StringArray& arguments)
+{
+    // Test aid: holds the saved audio device for a while (as a closing application or another program would).
+    const double seconds = arguments[arguments.indexOf("--audio-hold") + 1].getDoubleValue();
+    juce::PropertiesFile::Options options;
+    options.applicationName = "PianoForge";
+    options.folderName = "PianoForge";
+    options.filenameSuffix = ".settings";
+    juce::ApplicationProperties properties;
+    properties.setStorageParameters(options);
+    const auto saved = properties.getUserSettings()->getXmlValue("audio");
+    juce::AudioDeviceManager manager;
+    manager.initialise(0, 2, saved.get(), false);
+    juce::Thread::sleep((int) (std::max(0.0, seconds) * 1000.0));
+    manager.closeAudioDevice();
+    return 0;
+}
+
+int runAudioRestore(const juce::StringArray& arguments)
+{
+    // What the application does at start: the saved device, the preferred setup otherwise.
+    const int i = arguments.indexOf("--audio-restore");
+    const juce::File reportFile(arguments[i + 1].isNotEmpty() ? arguments[i + 1] : "audio-restore.txt");
+    juce::PropertiesFile::Options options;
+    options.applicationName = "PianoForge";
+    options.folderName = "PianoForge";
+    options.filenameSuffix = ".settings";
+    juce::ApplicationProperties properties;
+    properties.setStorageParameters(options);
+    const auto saved = properties.getUserSettings()->getXmlValue("audio");
+    juce::String report;
+    report << "saved: " << (saved != nullptr ? saved->toString(juce::XmlElement::TextFormat().singleLine()) : juce::String("none")) << "\n";
+    juce::AudioDeviceManager::AudioDeviceSetup preferred;
+    preferred.sampleRate = 44100.0;
+    preferred.bufferSize = 128;
+    for (const bool fallback : { false, true }) {
+        juce::AudioDeviceManager manager;
+        const auto error = manager.initialise(0, 2, saved.get(), fallback, {}, &preferred);
+        auto* d = manager.getCurrentAudioDevice();
+        report << (fallback ? "with" : "without") << " the default on failure: error '" << error << "', opened "
+               << (d != nullptr ? manager.getCurrentAudioDeviceType() + " / " + d->getName() + " at " + juce::String(d->getCurrentSampleRate())
+                                      + " Hz, " + juce::String(d->getCurrentBufferSizeSamples())
+                                : juce::String("nothing"))
+               << "\n";
+        manager.closeAudioDevice();
+    }
+    reportFile.replaceWithText(report, false, false, "\n");
+    return 0;
+}
+
 
 namespace {
 

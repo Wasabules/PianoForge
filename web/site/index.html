@@ -22,6 +22,7 @@
     </span>
     <span id="pedal" class="lamp" title="Sustain pedal (Space)">Pedal</span>
     <span id="sostenuto" class="lamp" title="Sostenuto pedal (B)">Sost.</span>
+    <span id="soft" class="lamp" title="Soft pedal, una corda (N)">Soft</span>
     <span id="meter" class="meter"><span id="meterFill"></span></span>
   </header>
 
@@ -54,6 +55,7 @@
           <summary>Engine and keyboard</summary>
           <div id="options" class="options"></div>
           <label class="field">Sympathetic level <input id="sympathetic" type="range" min="-24" max="12" step="0.5" value="0"><output id="sympatheticOut">0 dB</output></label>
+          <label class="field" title="How far apart the strings of each note are tuned: 100 % as measured, 0 % in perfect unison (no beating), 200 to 300 % an old upright's">Unison tuning <input id="unison" type="range" min="0" max="300" step="1" value="100"><output id="unisonOut">100 %</output></label>
           <label class="field">A4 <input id="a4" type="number" min="415" max="466" step="0.1" value="440"> Hz</label>
           <label class="field" title="The highest velocity the MIDI keyboard really sends (Korg B2: about 114)">MIDI keyboard top velocity <input id="curveMax" type="number" min="20" max="127" step="1" value="127"></label>
         </details>
@@ -86,7 +88,7 @@
     </section>
 
     <p id="message" class="message"></p>
-    <p class="hint">Computer keyboard from C<span id="octave">4</span>: A W S E D F T G Y H U J K O L P (QWERTY places; Q Z S E... on AZERTY) &nbsp; Z / X octave &nbsp; C / V velocity <output id="velocityOut">100</output> &nbsp; Space pedal &nbsp; B sostenuto. The mouse plays too: lower on a key is louder.</p>
+    <p class="hint">Computer keyboard from C<span id="octave">4</span>: A W S E D F T G Y H U J K O L P (QWERTY places; Q Z S E... on AZERTY) &nbsp; Z / X octave &nbsp; C / V velocity <output id="velocityOut">100</output> &nbsp; Space pedal &nbsp; B sostenuto &nbsp; N soft pedal. The mouse plays too: lower on a key is louder.</p>
     <div id="keyboard" class="keyboard" aria-label="88-key keyboard"></div>
   </main>
 </body>

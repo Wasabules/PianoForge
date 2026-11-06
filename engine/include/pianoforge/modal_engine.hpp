@@ -82,6 +82,9 @@ public:
     std::atomic<float> referenceA4 { 440.0f };
     std::array<std::atomic<float>, 12> pitchClassCents {}; // against equal temperament, index note % 12 (0 = C)
     std::atomic<std::uint32_t> tuningVersion { 0 };
+    /// The strings of each unison detuned by this much against the measured (1: as measured; 0: in perfect unison,
+    /// no beating, a single decay; 2 to 4: an old upright's honky-tonk). Applies to the notes struck from then on.
+    std::atomic<float> unisonSpread { 1.0f };
     /// Frequency ratio of a note against the profile: (referenceA4 / 440) x 2^(cents / 1200).
     double tuningRatio(int note) const noexcept;
 
@@ -94,6 +97,7 @@ public:
         bool pedalCatch = true, releaseNoise = true;
         float referenceA4 = 440.0f;
         std::array<float, 12> pitchClassCents {};
+        float unisonSpread = 1.0f; // the strings' detunings within each unison against the measured (0 to 4)
     };
     Settings settings() const noexcept;
     /// Applies `s` (the free strings are retuned on the next block).
@@ -103,6 +107,7 @@ public:
     std::atomic<int> lastNote { -1 }, lastVelocity { 0 }, lastLayerVelocity { 0 };
     std::atomic<int> activeVoices { 0 }, activeModes { 0 }, ringingStrings { 0 };
     std::atomic<bool> sustainDown { false }, sostenutoDown { false };
+    std::atomic<float> softPedalPosition { 0.0f }; // the soft pedal (CC67), 0 to 1
     std::atomic<float> pedalPosition { 0.0f }; // damper lift, 0 to 1
     std::atomic<float> outputPeak { 0.0f };
     std::atomic<std::uint32_t> stolenVoices { 0 }, noteOnsReceived { 0 };
@@ -177,6 +182,7 @@ private:
     // Per note (its register's shape), per sample: what is left of the drive's rise (exp(-1 / (onset fs))), and the
     // drive's decay (exp(-1 / (decay fs))).
     std::array<float, 128> onsetFactor {}, driveFadeFactor {};
+    std::array<float, 128> driveGain {}, driveExponent {}; // per note: the drive's gain and velocity exponent
     std::array<Voice, kMaxVoices> voices;
     ModeBank body;
     float bodyGain = 1.0f, bodyDecay = 1.0f;
@@ -184,6 +190,7 @@ private:
     std::vector<float> bufferL, bufferR, bufferD, mixL, mixR; // bufferD: a voice's drive of the free strings
     std::uint64_t ageCounter = 0;
     float pedalLift = 0.0f; // 0: dampers resting, 1: lifted
+    float softPedal = 0.0f; // the soft pedal: how far the action is shifted, 0 to 1 (audio thread)
     bool sostenuto = false;                       // CC66 down
     std::array<bool, 128> sostenutoHeld {};       // dampers caught by the sostenuto
     float knockScale = 1.0f; // release noise of dampers landing together (see apply)

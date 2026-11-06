@@ -339,6 +339,58 @@ std::shared_ptr<const ModalProfile> parseModalProfile(std::vector<char> data, co
                     p->stringDriveShapes.push_back(shape);
                 }
             }
+            if (r.position() + sizeof(std::uint32_t) <= end) { // then each register's gain and velocity exponent
+                const auto registers = r.get<std::uint32_t>();
+                for (std::uint32_t k = 0; k < registers && r.ok(); ++k) {
+                    const float gainDb = r.get<float>(), exponent = r.get<float>();
+                    if (k < p->stringDriveShapes.size()) {
+                        p->stringDriveShapes[k].gainDb = std::isfinite(gainDb) ? std::clamp(gainDb, -40.0f, 40.0f) : 0.0f;
+                        p->stringDriveShapes[k].velocityExponent = std::isfinite(exponent) ? std::clamp(exponent, 0.0f, 4.0f) : -1.0f;
+                    }
+                }
+            }
+        } else if (std::memcmp(tag, "UNIS", 4) == 0) {
+            // The coupled strings, per note, layer and partial; a layer that does not match the profile's is skipped.
+            const auto count = r.get<std::uint32_t>();
+            for (std::uint32_t n = 0; n < count && r.ok() && r.position() < end; ++n) {
+                const auto midi = (int) r.get<std::uint32_t>();
+                const auto layers = r.get<std::uint32_t>();
+                ModalProfile::Note* note = nullptr;
+                for (auto& candidate : p->notes)
+                    if (candidate.midi == midi)
+                        note = &candidate;
+                for (std::uint32_t l = 0; l < layers && r.ok(); ++l) {
+                    const auto velocity = (int) r.get<std::uint32_t>();
+                    const auto partials = r.get<std::uint32_t>();
+                    ModalProfile::Layer* layer = nullptr;
+                    if (note != nullptr)
+                        for (auto& candidate : note->layers)
+                            if (candidate.velocity == velocity && candidate.partials.size() == partials)
+                                layer = &candidate;
+                    std::vector<ModalProfile::Unison> table(layer != nullptr ? partials : 0);
+                    for (std::uint32_t k = 0; k < partials && r.ok(); ++k) {
+                        std::uint8_t head[4];
+                        float values[5];
+                        r.bytes(head, sizeof(head));
+                        r.bytes(values, sizeof(values));
+                        if (layer == nullptr)
+                            continue;
+                        auto& u = table[k];
+                        const auto& part = layer->partials[k];
+                        u.strings = head[0] <= 3 ? head[0] : 0;
+                        for (int i = 0; i < 3; ++i) {
+                            u.modes[(std::size_t) i] = head[i + 1];
+                            u.detuneHz[(std::size_t) i] = std::isfinite(values[i]) ? values[i] : 0.0f;
+                        }
+                        u.bridge = { values[3], values[4] };
+                        for (int i = 0; i < u.strings; ++i)
+                            if (u.modes[(std::size_t) i] >= part.modeCount || !std::isfinite(values[3]) || !std::isfinite(values[4]))
+                                u.strings = 0;
+                    }
+                    if (layer != nullptr)
+                        layer->unison = std::move(table);
+                }
+            }
         } else if (std::memcmp(tag, "PEDL", 4) == 0) {
             r.bytes(p->pedalLift.data(), p->pedalLift.size() * sizeof(float));
         } else if (std::memcmp(tag, "RELN", 4) == 0) {

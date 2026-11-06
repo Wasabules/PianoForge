@@ -174,6 +174,13 @@ void pf_set_sympathetic_db(float db)
         g_engine->sympatheticGain = std::pow(10.0f, std::clamp(db, -40.0f, 12.0f) / 20.0f);
 }
 
+/// The strings of each unison detuned by this much against the measured (1; 0: perfect unison; up to 4).
+void pf_set_unison(float spread)
+{
+    if (g_engine != nullptr)
+        g_engine->unisonSpread = std::clamp(spread, 0.0f, 4.0f);
+}
+
 /// The reference A4, equal temperament.
 void pf_set_tuning(float a4)
 {
@@ -282,6 +289,7 @@ int pf_voices() { return g_engine != nullptr ? g_engine->activeVoices.load() : 0
 int pf_resonators() { return g_engine != nullptr ? g_engine->activeModes.load() : 0; }
 int pf_sustain() { return g_engine != nullptr && g_engine->sustainDown.load() ? 1 : 0; }
 int pf_sostenuto() { return g_engine != nullptr && g_engine->sostenutoDown.load() ? 1 : 0; }
+int pf_soft() { return g_engine != nullptr && g_engine->softPedalPosition.load() > 0.0f ? 1 : 0; }
 int pf_last_note() { return g_engine != nullptr ? g_engine->lastNote.load() : -1; }
 int pf_last_velocity() { return g_engine != nullptr ? g_engine->lastVelocity.load() : 0; }
 int pf_last_layer() { return g_engine != nullptr ? g_engine->lastLayerVelocity.load() : 0; }

@@ -14,6 +14,10 @@ int runMidiMonitor(const juce::StringArray& arguments);
 /// Lists the audio driver types (WASAPI, ASIO, DirectSound...) and their output devices:
 ///   PianoForge --list-audio <report file>
 int runListAudio(const juce::StringArray& arguments);
+/// --audio-restore <report>: the saved audio device reopened as at start, and what JUCE says.
+int runAudioRestore(const juce::StringArray& arguments);
+/// --audio-hold <seconds>: holds the saved audio device that long (to test a busy driver at start).
+int runAudioHold(const juce::StringArray& arguments);
 
 /// End-to-end check of the stream output through a virtual cable, without the main device: a quiet 1 kHz tone
 /// (-40 dBFS) produced at 44.1 kHz in 128-sample blocks goes out through the mirror to <playback device>, and is

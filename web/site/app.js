@@ -206,12 +206,15 @@ window.addEventListener('keydown', (event) => {
     store.set('velocity', velocity);
   } else if (event.code === 'KeyB') {
     pedal(66, true);
+  } else if (event.code === 'KeyN') {
+    pedal(67, true);
   }
 });
 
 window.addEventListener('keyup', (event) => {
   if (event.code === 'Space' && !event.ctrlKey) { pedal(64, false); return; }
   if (event.code === 'KeyB') { pedal(66, false); return; }
+  if (event.code === 'KeyN') { pedal(67, false); return; }
   const note = held.get(event.code);
   if (note !== undefined) {
     held.delete(event.code);
@@ -417,6 +420,7 @@ function settings() {
     room: { ...preset, on: $('roomOn').checked, levelDb: Number($('roomLevel').value), distance: position.distance, keepLoudness: true },
     options: OPTIONS.map((_, i) => $('option' + i).checked),
     sympathetic: Number($('sympathetic').value),
+    unison: Number($('unison').value),
     a4: Number($('a4').value) || 440,
     curveMax: Math.max(20, Math.min(127, Number($('curveMax').value) || 127)),
   };
@@ -427,11 +431,13 @@ function apply() {
   $('volumeOut').textContent = `${s.volume.toFixed(1)} dB`;
   $('roomLevelOut').textContent = `${s.room.levelDb} dB`;
   $('sympatheticOut').textContent = `${s.sympathetic} dB`;
+  $('unisonOut').textContent = `${s.unison} %`;
   store.set('settings', { ...s, roomPreset: Number($('roomPreset').value), roomPosition: Number($('roomPosition').value), roomModel: ROOM_MODEL });
   send({ type: 'volume', db: s.volume });
   send({ type: 'room', ...s.room });
   s.options.forEach((on, option) => send({ type: 'option', option, on }));
   send({ type: 'sympathetic', db: s.sympathetic });
+  send({ type: 'unison', spread: s.unison / 100 });
   send({ type: 'tuning', a4: s.a4 });
   send({ type: 'curve', inputMin: 1, inputMax: s.curveMax, points: [0, 0.25, 0.5, 0.75, 1] });
 }
@@ -453,12 +459,13 @@ function buildSettings() {
     $('roomLevel').value = saved.roomModel === ROOM_MODEL ? saved.room.levelDb : 0; // (the earlier model's level: not a trim)
     saved.options.forEach((on, i) => { $('option' + i).checked = on; });
     $('sympathetic').value = saved.sympathetic;
+    $('unison').value = saved.unison ?? 100;
     $('a4').value = saved.a4;
     $('curveMax').value = saved.curveMax;
   }
   for (const id of ['roomPreset', 'roomPosition'])
     $(id).addEventListener('change', apply);
-  for (const id of ['volume', 'roomOn', 'roomLevel', 'sympathetic', 'a4', 'curveMax'])
+  for (const id of ['volume', 'roomOn', 'roomLevel', 'sympathetic', 'unison', 'a4', 'curveMax'])
     $(id).addEventListener('input', apply);
   $('options').addEventListener('change', apply);
   $('octave').textContent = octave;
@@ -580,6 +587,7 @@ function received(data) {
         $('noteLine').textContent = `Last note ${data.lastNote}, velocity ${data.lastVelocity} (layer ${data.lastLayer})`;
       $('pedal').classList.toggle('on', data.sustain);
       $('sostenuto').classList.toggle('on', data.sostenuto);
+      $('soft').classList.toggle('on', data.soft);
       $('meterFill').style.width = `${Math.min(100, Math.max(0, (20 * Math.log10(data.peak + 1e-9) + 60) / 60 * 100))}%`;
       filePosition = data.file.position;
       filePlaying = data.file.playing;

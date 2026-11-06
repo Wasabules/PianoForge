@@ -83,6 +83,7 @@ private:
     void shiftOctave(int delta);
     void sendSustain(bool down);
     void sendSostenuto(bool down);
+    void sendSoftPedal(bool down);
     void enableMidiInputs();
     void saveSettings();
     void showMessage(const juce::String& text, juce::Colour colour = theme::text);
@@ -153,8 +154,20 @@ private:
     juce::String recordingStem, lastSaved;
     double messageUntil = 0.0;
     int octave = 4;             // scientific octave of the first computer-keyboard note (C4 = middle C)
-    bool spaceDown = false, pedalFromSpace = false, sostenutoKeyDown = false, focusGiven = false, bankInstalled = false;
+    bool spaceDown = false, pedalFromSpace = false, sostenutoKeyDown = false, softKeyDown = false, focusGiven = false, bankInstalled = false;
     bool constructed = false;   // no saving while the settings are being read back
+    // The audio device asked for (the saved one, or the last one chosen) and, when it could not be opened at start
+    // (a driver still held by a closing application, another program using it), the one used meanwhile: the
+    // choice is then neither saved over nor forgotten, and tried again for a while.
+    std::unique_ptr<juce::XmlElement> wantedAudio;
+    juce::String fallbackType, fallbackName, lastDeviceType;
+    bool audioFallback = false;
+    int audioRetries = 0;
+    double nextAudioRetry = 0.0;
+    juce::AudioDeviceManager::AudioDeviceSetup preferredAudio;
+    void noteAudioDevice();       // after a device change: the choice kept, the fallback ended, the per-type memory
+    void retryWantedAudio();
+    bool opensWanted() const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

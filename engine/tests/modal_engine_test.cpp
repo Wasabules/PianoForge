@@ -589,5 +589,117 @@ int main()
               "settings copied to another engine: the same sound, sample for sample");
     }
 
+    // 14. Coupled strings (a trichord: A4): the partial's modes are those of a known unison (three detuned strings
+    //     on a bridge), with the model. Unchanged by default (bit for bit); the soft pedal (the hammer misses a
+    //     string) weakens the attack and leaves relatively more after-sound; a perfect unison stops the beating,
+    //     a wider one beats more.
+    {
+        using C = std::complex<double>;
+        const double detune[3] = { -0.3, 0.05, 0.4 };
+        const C Y(-2.0, 0.3);
+        C s[3], lam[3];
+        for (int i = 0; i < 3; ++i)
+            s[i] = C(-1.0, kTwoPi * (440.0 + detune[i]));
+        // The eigenvalues: roots of prod (l - s_i) - Y sum_i prod_{j != i} (l - s_j) (Durand-Kerner).
+        const C e1 = s[0] + s[1] + s[2], e2 = s[0] * s[1] + s[0] * s[2] + s[1] * s[2], e3 = s[0] * s[1] * s[2];
+        const C c2 = -(e1 + 3.0 * Y), c1 = e2 + 2.0 * Y * e1, c0 = -(e3 + Y * e2);
+        for (int i = 0; i < 3; ++i)
+            lam[i] = s[i] + Y + C(0.01 * (i + 1), 0.013 * (i + 1));
+        for (int iter = 0; iter < 200; ++iter)
+            for (int i = 0; i < 3; ++i) {
+                C den(1.0, 0.0);
+                for (int j = 0; j < 3; ++j)
+                    if (j != i)
+                        den *= lam[i] - lam[j];
+                lam[i] -= (((lam[i] + c2) * lam[i] + c1) * lam[i] + c0) / den;
+            }
+        std::sort(lam, lam + 3, [](const C& a, const C& b) { return a.imag() < b.imag(); });
+        auto coupled = std::make_shared<pf::ModalProfile>(*profile);
+        auto& layer = coupled->notes[0].layers[1]; // the loud layer, played at 100
+        layer.modes.clear();
+        for (int k = 0; k < 3; ++k) {
+            C sv(0.0), svv(0.0);
+            for (int i = 0; i < 3; ++i) {
+                const C v = 1.0 / (lam[k] - s[i]);
+                sv += v;
+                svv += v * v;
+            }
+            const C r = 0.2 * sv * sv / svv; // struck alike, the bridge summing the strings
+            layer.modes.push_back({ lam[k].imag() / kTwoPi, -lam[k].real(), std::complex<float>(r), std::complex<float>(r) });
+        }
+        layer.partials = { { 1, 0, 3, layer.partials[0].level } };
+        coupled->maxModesPerLayer = 3;
+        auto plain = std::make_shared<pf::ModalProfile>(*coupled);
+        pf::ModalProfile::Unison u;
+        u.strings = 3;
+        u.modes = { 0, 1, 2 };
+        const double mean = (detune[0] + detune[1] + detune[2]) / 3.0;
+        for (int i = 0; i < 3; ++i)
+            u.detuneHz[(std::size_t) i] = (float) (detune[i] - mean);
+        u.bridge = std::complex<float>(Y);
+        coupled->notes[0].layers[1].unison = { u };
+
+        auto play = [&](std::shared_ptr<const pf::ModalProfile> prof, float spread, int soft) {
+            pf::ModalEngine e;
+            e.bodyEnabled = false;
+            e.unisonSpread = spread;
+            e.install(prof);
+            e.prepare(kRate, 64);
+            std::vector<float> l, r;
+            render(e, { { 0, 0xB0, 67, (std::uint8_t) soft }, { 0, 0x90, 69, 100 } }, (int) (4.0 * kRate), l, r);
+            return l;
+        };
+        auto level = [&](const std::vector<float>& x, double a, double b) {
+            double e = 0.0;
+            for (auto i = (std::size_t) (a * kRate); i < (std::size_t) (b * kRate); ++i)
+                e += (double) x[i] * x[i];
+            return 10.0 * std::log10(e / ((b - a) * kRate) + 1e-30);
+        };
+        // The 20 ms log envelope over 0.1 to 1.5 s against a straight line (one exponential decay): how far it
+        // wobbles (dB RMS), and how often it turns (beats).
+        auto envelope = [&](const std::vector<float>& x) {
+            std::vector<double> env;
+            for (double t = 0.1; t + 0.02 <= 1.5; t += 0.02)
+                env.push_back(level(x, t, t + 0.02));
+            const double n = (double) env.size();
+            double sx = 0, sy = 0, sxx = 0, sxy = 0;
+            for (std::size_t i = 0; i < env.size(); ++i) {
+                sx += (double) i;
+                sy += env[i];
+                sxx += (double) i * i;
+                sxy += (double) i * env[i];
+            }
+            const double slope = (n * sxy - sx * sy) / (n * sxx - sx * sx), offset = (sy - slope * sx) / n;
+            for (std::size_t i = 0; i < env.size(); ++i)
+                env[i] -= offset + slope * (double) i;
+            return env;
+        };
+        auto wobble = [&](const std::vector<float>& x) {
+            double v = 0.0;
+            const auto env = envelope(x);
+            for (const double e : env)
+                v += e * e;
+            return std::sqrt(v / (double) env.size());
+        };
+        auto turns = [&](const std::vector<float>& x) {
+            const auto env = envelope(x);
+            int count = 0;
+            for (std::size_t i = 2; i < env.size(); ++i)
+                count += (env[i] - env[i - 1]) * (env[i - 1] - env[i - 2]) < 0.0 ? 1 : 0;
+            return count;
+        };
+        const auto base = play(plain, 1.0f, 0), same = play(coupled, 1.0f, 0);
+        const auto soft = play(coupled, 1.0f, 127), unison0 = play(coupled, 0.0f, 0), unison3 = play(coupled, 3.0f, 0);
+        const double attack = level(soft, 0.0, 0.05) - level(same, 0.0, 0.05);
+        const double after = (level(soft, 2.5, 3.5) - level(soft, 0.0, 0.05)) - (level(same, 2.5, 3.5) - level(same, 0.0, 0.05));
+        std::printf("      soft pedal: attack %+.1f dB, after-sound against the attack %+.1f dB; envelope against one decay: "
+                    "%.2f dB, %d turns (perfect unison %.2f dB, %d; three times the detuning %.2f dB, %d)\n", attack, after,
+                    wobble(same), turns(same), wobble(unison0), turns(unison0), wobble(unison3), turns(unison3));
+        check(base == same, "coupled strings: the measured modes, unchanged by default (bit for bit)");
+        check(attack < -1.0 && attack > -6.0 && after > 1.0, "the soft pedal: a softer attack, relatively more after-sound");
+        check(wobble(unison0) < 0.3 * wobble(same) && wobble(unison3) > wobble(same),
+              "the unison's tuning: a single decay in perfect unison, deeper beating when wider");
+    }
+
     return failures ? 1 : 0;
 }

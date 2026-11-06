@@ -806,6 +806,55 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
   - *Dans l'atelier* : la fenêtre Room a deux cartes, la salle et la position d'écoute (cinq positions : au clavier 1 m, sur scène 3 m, premier rang 6 m, milieu de salle 12 m, fond 20 m ; la distance de 1 à 30 m ; keep loudness). Un résumé donne ce que la physique donne là : volume et dimensions, distance critique, salle contre direct, première réflexion, niveau, air et largeur du direct.
   - *Dans la page web* : une liste des positions à côté du préréglage, keep loudness toujours actif.
 
+**Cordes couplées, una corda et accord de l'unisson (6 novembre 2026).** Les 2 ou 3 cordes d'une note sont accordées presque pareil et tirent toutes sur le chevalet, qui bouge et les couple.
+  - *Ce qu'on avait.* Les modes mesurés sur Noire contenaient déjà les battements et la double décroissance (son immédiat, puis son rémanent), mais figés : chaque frappe battait pareil, sans una corda ni réglage d'unisson.
+  - *Noire et l'una corda.* Des prises avec et sans CC67 (do4 v40 et v100, la1 v100, do6 v100) sont identiques au bit près : Noire ignore la pédale douce. L'una corda ne peut donc être que physique, sans référence.
+  - *Modèle* (Weinreich, 1977), par partiel et pour une polarisation. On a A = diag(s_i) + Y·J :
+    - s_i = −σ + 2πi·f_i, les pôles propres des cordes (amortissement commun, fréquences désaccordées) ;
+    - Y, l'admittance du chevalet vue par les cordes ;
+    - J, la matrice de uns.
+
+    Le marteau frappe avec des poids h, et le chevalet somme les cordes. A est complexe symétrique, d'où des résidus simples : r_k = (Σ v)(Σ v·h)/(Σ v²), avec v_i = 1/(λ_k − s_i).
+    - Frappées pareil, les cordes bougent ensemble : c'est la décroissance rapide.
+    - Leur désaccord fuit vers les mouvements où elles s'opposent. Ceux-ci remuent peu le chevalet, meurent lentement (le son rémanent) et battent contre le premier.
+    - Cordage d'un Steinway D : 10 notes à une corde, 18 à deux, 60 à trois.
+  - *Ajustement* (`forge/unison.py`, dans l'export : section `UNIS`). Les pôles des N modes mesurés les plus énergétiques du partiel sont les valeurs propres. Pour un Y donné, les s_i en découlent : le polynôme caractéristique de A vaut p − Y·p′, donc p = q + Y·q′ + Y²·q″ + ….
+    - À trois cordes, on choisit Y pour que les cordes aient le même amortissement.
+    - À deux cordes, il manque une condition. On garde le chevalet le plus résistif possible, avec un amortissement propre positif.
+    - Résultat sur tout le profil : 16 643 des 23 021 partiels des notes à 2 ou 3 cordes (87 % des bicordes, 52 % des trichordes).
+    - Les trichordes résolus donnent, en médiane, un amortissement propre de 1,2 /s, un chevalet de 1,8 /s et un étalement de l'unisson de 1,3 cent (de 0,5 à 5,8). C'est un unisson bien accordé.
+  - *Dans le moteur*, à la frappe, seulement si l'una corda ou le réglage d'unisson s'écarte du défaut :
+    - le modèle de chaque partiel est résolu (valeurs propres d'une matrice 2 × 2 ou 3 × 3, par Durand-Kerner), puis ajusté aux modes mesurés (α, par moindres carrés) ;
+    - ce que le modèle n'explique pas garde son amortissement mesuré et ne suit que son changement de fréquence (c'est le battement) ;
+    - la part du modèle devient α·r, sur le pôle déplacé ;
+    - l'énergie du partiel est bornée à +6 dB.
+
+    Par défaut, le son est exactement celui d'avant (même au bit près). Deux premières formes ont été abandonnées sur mesure :
+    - multiplier chaque mode par r′/r donnait jusqu'à +14 dB quand le modèle sous-estime un mode fort ;
+    - déplacer aussi l'amortissement de la part non expliquée faisait remonter la fin de note.
+  - *Una corda* (CC67, continu ; touche N au clavier de l'ordinateur ; voyant Soft). Le marteau décalé manque une corde de chaque unisson (h = 1 − pédale sur la corde accordée le plus haut ; on ne sait pas laquelle, l'effet en dépend peu). Il frappe aussi avec un feutre plus tendre, estimé à −1,5 dB par octave de numéro de partiel. Sans modèle, la part frappée est (N − pédale)/N.
+    - Rendus sur le vrai profil : −1,4 à −3,9 dB à l'attaque ;
+    - le son rémanent est relativement plus présent (+1 à +4 dB sur 2–5 s dans le grave et le médium) ;
+    - le timbre est plus doux (centroïde −16 à −69 Hz).
+  - *Accord de l'unisson* (Engine settings, « Unison tuning », 0 à 300 %, 100 % : comme mesuré). Les désaccords des cordes sont multipliés.
+    - À 0 % : plus de battement. L'enveloppe du do4 v40 s'écarte de 0,08 dB d'une décroissance unique, contre 1,70 dB mesuré ; v100 : 0,12 contre 2,02.
+    - À 200–300 % : un piano droit fatigué, qui bat plus et garde plus de son rémanent.
+    - Le réglage s'applique aux notes frappées ensuite.
+  - *Tests.* Forge (`test_unison`) : un système connu (deux et trois cordes) est retrouvé, et l'una corda affaiblit le mode rapide en excitant le lent. Moteur (test 14, sur un trichorde synthétique) :
+    - par défaut, rien ne change au bit près ;
+    - una corda : attaque −3,5 dB, son rémanent +6,9 dB relativement à l'attaque ;
+    - unisson parfait : une seule décroissance (0,15 dB d'écart, contre 5,8) ;
+    - désaccord ×3 : battement plus profond (7,4 dB).
+  - *Limites.*
+    - Une seule polarisation, avec les N modes les plus forts. Les autres modes du partiel restent tels que mesurés, à l'una corda près, qui ne leur applique que le feutre.
+    - Un trichorde sur deux n'a pas de modèle (pas de chevalet physique qui reproduise ses trois pôles) : il ne reçoit que la part frappée.
+
+**L'extrême aigu, revu (6 novembre 2026).** Mesuré à nouveau, par bandes et par fenêtres, sur C6, C7, E7, A7 et C8 de v40 à v112.
+  - Depuis que le résidu d'attaque se prolonge (jusqu'à 0,5 s), le moteur suit Noire à ±1 dB au total sur toute la première seconde. Les modes du fondamental, refits sur des fenêtres plus longues, reproduisent la prise à 1–2 dB jusqu'à 2 s : ils n'étaient pas en cause.
+  - Ce qui manquait, entre 50 et 60 dB sous la crête de la note : entre 1 et 3 s, l'énergie de Noire est surtout sous 500 Hz (la table d'harmonie qui sonne encore, −82 à −124 dBFS). La table du moteur s'éteignait 2 à 9 dB trop tôt, puis était coupée sous −100 dB.
+  - Correctif : la table s'éteint désormais sous −120 dB. Entre 2 et 3 s, la bande 60–120 Hz est à −1 à +9 dB de Noire, au lieu du silence.
+  - Reste, inaudible : la bande 500–2000 Hz des notes les plus aiguës après 0,5 s (−5 à −25 dB, à −88 à −96 dBFS), entre la table (≤ 700 Hz) et le fondamental.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

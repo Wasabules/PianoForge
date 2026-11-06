@@ -43,6 +43,9 @@ Play a MIDI file live: File > Open MIDI file (Ctrl+O), drop it on the window, or
 Tracks... picks the parts to play (a part is a track's channel; drums off by default); -oct, -, +, +oct
 transpose the file by semitones or octaves.
 
+The modal engine models each note's coupled strings (Weinreich): the soft pedal (CC67, the N key) makes the hammer
+miss a string, and Engine settings > Unison tuning draws the strings together (0 %: no beating) or apart.
+
 Record (Ctrl+R) writes the sound live as a 32-bit float WAV; when it stops, the formats ticked in File > Record
 formats are made from it in the background: WAV 24-bit, FLAC 24-bit, MP3 320 kbit/s (Windows' Media Foundation
 encoder), Opus 192 kbit/s; plus the MIDI, aligned to the sample. Recordings go to Documents/PianoForge/Recordings.

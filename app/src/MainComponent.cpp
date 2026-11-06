@@ -100,11 +100,26 @@ MainComponent::MainComponent()
 
     // Audio: ask for 44.1 kHz (the corpus rate) and a small buffer; the saved setting takes precedence, and the
     // device is switched to the corpus rate once the corpus is loaded, when the device offers it.
-    juce::AudioDeviceManager::AudioDeviceSetup preferred;
-    preferred.sampleRate = 44100.0;
-    preferred.bufferSize = 128;
+    preferredAudio.sampleRate = 44100.0;
+    preferredAudio.bufferSize = 128;
     const auto savedAudio = settings->getXmlValue("audio");
-    deviceManager.initialise(0, 2, savedAudio.get(), true, {}, &preferred);
+    const auto audioError = deviceManager.initialise(0, 2, savedAudio.get(), true, {}, &preferredAudio);
+    if (savedAudio != nullptr)
+        wantedAudio = std::make_unique<juce::XmlElement>(*savedAudio);
+    lastDeviceType = deviceManager.getCurrentAudioDeviceType();
+    // The device last used with each type, from the start: a switch of type in Audio opens it, not the type's first.
+    if (wantedAudio != nullptr && wantedAudio->getStringAttribute("deviceType").isNotEmpty())
+        settings->setValue("audioDevice." + wantedAudio->getStringAttribute("deviceType"), wantedAudio->getStringAttribute("audioOutputDeviceName"));
+    if (wantedAudio != nullptr && !opensWanted()) { // the saved device could not be opened: kept, tried again
+        audioFallback = true;
+        fallbackType = deviceManager.getCurrentAudioDeviceType();
+        fallbackName = deviceManager.getCurrentAudioDevice() != nullptr ? deviceManager.getCurrentAudioDevice()->getName() : juce::String();
+        nextAudioRetry = juce::Time::getMillisecondCounterHiRes() + 1500.0;
+        showMessage("Audio: " + wantedAudio->getStringAttribute("audioOutputDeviceName") + " could not be opened"
+                        + (audioError.isNotEmpty() ? " (" + audioError + ")" : juce::String()) + ": playing on " + fallbackName
+                        + " meanwhile, trying it again",
+                    theme::busy);
+    }
     curveSettings = parseCurve(settings->getValue("velocityCurve"));
     velocityCurve.set(curveSettings);
     host.rateMode = settings->getIntValue("engineRateMode", 0) == 1 ? 1 : 0; // before the device starts the host
@@ -411,7 +426,7 @@ void MainComponent::showShortcuts()
         juce::String("Playing\n")
             + (azerty ? "  Q Z S E D F T G Y H U J K O L P M: the keys from C to E\n  W / X: octave down / up\n"
                       : "  A W S E D F T G Y H U J K O L P ;: the keys from C to E\n  Z / X: octave down / up\n")
-            + "  C / V: velocity -10 / +10\n  Space: sustain pedal\n  B: sostenuto pedal (held)\n\n"
+            + "  C / V: velocity -10 / +10\n  Space: sustain pedal\n  B: sostenuto pedal (held)\n  N: soft pedal, una corda (held)\n\n"
               "MIDI file player\n  Ctrl+O: open a MIDI file (or drop it on the window)\n  Ctrl+Space: play / pause\n"
               "  Ctrl+Home: stop, back to the start\n  Ctrl+Left / Ctrl+Right: 5 s back / forward\n  Ctrl+L: loop\n\n"
               "Application\n  Ctrl+R: record / stop\n  Ctrl+S: save the last take\n  Ctrl+1 / Ctrl+2: reference / modal engine\n"
@@ -457,7 +472,7 @@ void MainComponent::setKeyLayout(int layout)
     keyboard.setKeyPressBaseOctave(octave + 1); // JUCE: octave n -> C = 12 * n; C4 (60) = octave 5
     hint.setText(juce::String("Computer keyboard from C") + juce::String(octave) + ": "
                      + (keyLayout == kLayoutAzerty ? "Q Z S E D F T G Y H U J K...   W / X octave" : "A W S E D F T G Y H U J K...   Z / X octave")
-                     + "   C / V velocity   Space pedal   B sostenuto   Ctrl+R record   F1 all the shortcuts",
+                     + "   C / V velocity   Space pedal   B sostenuto   N soft   Ctrl+R record   F1 all the shortcuts",
                  juce::dontSendNotification);
     saveSettings();
 }
@@ -536,6 +551,12 @@ bool MainComponent::keyStateChanged(bool, juce::Component*)
         sostenutoKeyDown = b;
         sendSostenuto(b);
     }
+    // N held: the soft pedal (una corda).
+    const bool n = juce::KeyPress::isKeyCurrentlyDown('n') && !juce::ModifierKeys::getCurrentModifiersRealtime().isCommandDown();
+    if (n != softKeyDown) {
+        softKeyDown = n;
+        sendSoftPedal(n);
+    }
     return false; // let the on-screen keyboard handle the other keys
 }
 
@@ -547,6 +568,11 @@ void MainComponent::sendSustain(bool down)
 void MainComponent::sendSostenuto(bool down)
 {
     host.send(juce::MidiMessage::controllerEvent(1, 66, down ? 127 : 0));
+}
+
+void MainComponent::sendSoftPedal(bool down)
+{
+    host.send(juce::MidiMessage::controllerEvent(1, 67, down ? 127 : 0));
 }
 
 void MainComponent::enableMidiInputs()
@@ -885,7 +911,68 @@ void MainComponent::filesDropped(const juce::StringArray& files, int, int)
 
 void MainComponent::changeListenerCallback(juce::ChangeBroadcaster*)
 {
-    saveSettings(); // the audio device changed
+    noteAudioDevice(); // the audio device changed
+    saveSettings();
+}
+
+bool MainComponent::opensWanted() const
+{
+    const auto* d = deviceManager.getCurrentAudioDevice();
+    return wantedAudio == nullptr
+        || (d != nullptr && deviceManager.getCurrentAudioDeviceType() == wantedAudio->getStringAttribute("deviceType")
+            && d->getName() == wantedAudio->getStringAttribute("audioOutputDeviceName"));
+}
+
+void MainComponent::noteAudioDevice()
+{
+    const auto* d = deviceManager.getCurrentAudioDevice();
+    const auto type = deviceManager.getCurrentAudioDeviceType();
+    const auto name = d != nullptr ? d->getName() : juce::String();
+    auto* s = properties.getUserSettings();
+    if (audioFallback) {
+        if (opensWanted()) { // back on the device asked for
+            audioFallback = false;
+            showMessage("Audio: back on " + name, theme::good);
+        } else if (d == nullptr || (type == fallbackType && name == fallbackName)) {
+            return; // still the stand-in (its rate may have changed): the choice stays as it was
+        } else {
+            audioFallback = false; // another device chosen: it becomes the choice
+        }
+    }
+    // A switch of device type opens that type's first device (JUCE): the one last used with it instead.
+    if (type != lastDeviceType) {
+        lastDeviceType = type;
+        const auto remembered = s->getValue("audioDevice." + type);
+        if (auto* t = deviceManager.getCurrentDeviceTypeObject();
+            t != nullptr && remembered.isNotEmpty() && remembered != name && t->getDeviceNames(false).contains(remembered)) {
+            auto setup = deviceManager.getAudioDeviceSetup();
+            setup.outputDeviceName = remembered;
+            setup.inputDeviceName = {};
+            if (deviceManager.setAudioDeviceSetup(setup, true).isEmpty())
+                return; // its own change message records it
+        }
+    }
+    if (d != nullptr) {
+        s->setValue("audioDevice." + type, name);
+        if (const auto xml = deviceManager.createStateXml())
+            wantedAudio = std::make_unique<juce::XmlElement>(*xml);
+    }
+}
+
+void MainComponent::retryWantedAudio()
+{
+    // The device asked for, again; if it still cannot be opened, back to the stand-in.
+    ++audioRetries;
+    nextAudioRetry = juce::Time::getMillisecondCounterHiRes() + 2000.0;
+    const auto standIn = deviceManager.createStateXml();
+    const auto error = deviceManager.initialise(0, 2, wantedAudio.get(), false, {}, &preferredAudio);
+    if (error.isEmpty() && opensWanted())
+        return; // the change message ends the fallback
+    deviceManager.initialise(0, 2, standIn.get(), true, {}, &preferredAudio);
+    if (audioRetries >= 8)
+        showMessage("Audio: " + wantedAudio->getStringAttribute("audioOutputDeviceName") + " is busy or missing (" + error
+                        + "); playing on " + fallbackName + " meanwhile. Choose it again in Audio once it is free.",
+                    theme::bad);
 }
 
 void MainComponent::saveSettings()
@@ -893,8 +980,12 @@ void MainComponent::saveSettings()
     if (!constructed)
         return;
     auto* s = properties.getUserSettings();
-    if (const auto xml = deviceManager.createStateXml())
+    if (audioFallback) {
+        if (wantedAudio != nullptr) // the device asked for, not the stand-in
+            s->setValue("audio", wantedAudio.get());
+    } else if (const auto xml = deviceManager.createStateXml()) {
         s->setValue("audio", xml.get());
+    }
     s->setValue("corpus", corpusFolder.getFullPathName());
     s->setValue("volume", volume.getValue());
     s->setValue("velocity", (int) velocity.getValue());
@@ -927,7 +1018,7 @@ juce::StringArray MainComponent::engineLines() const
                      + thousands(modal.activeModes.load()) + " resonators",
                  juce::String(modal.ringingStrings.load()) + " free strings ringing, pedal "
                      + juce::String(juce::roundToInt(modal.pedalPosition.load() * 100.0f)) + " %"
-                     + (modal.sostenutoDown.load() ? ", sostenuto" : "") + ", "
+                     + (modal.sostenutoDown.load() ? ", sostenuto" : "") + (modal.softPedalPosition.load() > 0.0f ? ", soft pedal" : "") + ", "
                      + juce::String((int) modal.stolenVoices.load()) + " voices stolen" };
     return { juce::String(player.activeVoices.load()) + " voices of " + juce::String(ReferencePlayer::kMaxVoices),
              juce::String((int) player.stolenVoices.load()) + " voices stolen" + (player.sostenutoDown.load() ? ", sostenuto" : "") };
@@ -1028,6 +1119,8 @@ void MainComponent::timerCallback()
         keyboard.grabKeyboardFocus();
         focusGiven = true;
     }
+    if (audioFallback && audioRetries < 8 && juce::Time::getMillisecondCounterHiRes() >= nextAudioRetry)
+        retryWantedAudio();
 
     drained.clear(); // take capture: move what reached the engine into the session record
     host.drainRecorded(drained);

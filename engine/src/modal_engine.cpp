@@ -16,9 +16,157 @@ namespace {
 
 constexpr double kFastFadeS = 0.015;     // cut, voice stealing: long enough to avoid a click
 constexpr float kSilentEnergy = 1.0e-10f; // -100 dB (amplitude 1e-5) for the sum of the modes: the voice is freed
-constexpr double kBodyFadeS = 0.02;       // the soundboard fading out under -100 dB
+constexpr double kBodyFadeS = 0.02;       // the soundboard fading out under kBodySilentEnergy
+constexpr float kBodySilentEnergy = 1.0e-12f; // -120 dB: the soundboard rings as low as the reference's (top notes:
+                                              // -105 to -125 dBFS at 60-120 Hz 2 to 3 s after the strike)
 constexpr float kDampedDb = -30.0f;      // a damper curve ending lower than this means the string is damped
 constexpr float kMinGain = 0.25f, kMaxGain = 4.0f; // per-partial level interpolation: at most +-12 dB
+// The soft pedal (una corda): the hammer, shifted, misses one string of each unison (the one tuned highest: which
+// one is unknown, the effect hardly depends on it) and strikes with its softer, less worn felt: the partials above
+// the fundamental lose this much per octave (an estimate: the reference has no soft pedal).
+constexpr double kSoftFeltDbPerOctave = 1.5;
+constexpr double kMaxUnisonEnergy = 4.0;   // a partial moved at most 6 dB above its measured energy
+// A concert grand's stringing (as forge unison): the lowest 10 keys have one string, the next 18 two, the rest three.
+constexpr int kSingleStringLast = 30, kDoubleStringLast = 48;
+
+int stringsOf(int note) noexcept
+{
+    return note <= kSingleStringLast ? 1 : note <= kDoubleStringLast ? 2 : 3;
+}
+
+/// Weinreich's coupled unison of one partial (forge unison): eigenvalues (relative to the strings' mean pole,
+/// ascending imaginary part) and residues of A = diag(2 pi i spread d) + Y J for the strike weights h (the bridge
+/// sums the strings). A is complex symmetric: its eigenvectors are v_i = 1 / (lambda - s_i) and the residue of mode
+/// k is (sum v) (sum v h) / (sum v^2). No allocation.
+struct UnisonModes {
+    int n = 0;
+    std::complex<double> lambda[3], residue[3];
+};
+
+void unisonModes(const ModalProfile::Unison& u, double spread, const double* h, UnisonModes& out) noexcept
+{
+    using C = std::complex<double>;
+    const int n = std::clamp(u.strings, 1, 3);
+    const C Y(u.bridge.real(), u.bridge.imag());
+    C s[3];
+    double scale = std::abs(Y);
+    for (int i = 0; i < n; ++i) {
+        s[i] = C(0.0, 2.0 * 3.141592653589793 * spread * u.detuneHz[(std::size_t) i]);
+        scale = std::max(scale, std::abs(s[i]));
+    }
+    scale = std::max(scale, 1e-6);
+    C lam[3];
+    if (n == 1) {
+        lam[0] = s[0] + Y;
+    } else if (n == 2) {
+        const C mean = 0.5 * (s[0] + s[1]), half = 0.5 * (s[0] - s[1]), root = std::sqrt(half * half + Y * Y);
+        lam[0] = mean + Y - root;
+        lam[1] = mean + Y + root;
+    } else {
+        // The characteristic polynomial: prod (l - s_i) - Y sum_i prod_{j != i} (l - s_j), roots by Durand-Kerner.
+        const C e1 = s[0] + s[1] + s[2], e2 = s[0] * s[1] + s[0] * s[2] + s[1] * s[2], e3 = s[0] * s[1] * s[2];
+        const C c2 = -(e1 + 3.0 * Y), c1 = e2 + 2.0 * Y * e1, c0 = -(e3 + Y * e2);
+        auto poly = [&](C l) { return ((l + c2) * l + c1) * l + c0; };
+        for (int i = 0; i < 3; ++i) // near each string, apart from one another
+            lam[i] = s[i] + Y + scale * C(0.01 * (i + 1), 0.013 * (i + 1));
+        for (int iter = 0; iter < 80; ++iter) {
+            double step = 0.0;
+            for (int i = 0; i < 3; ++i) {
+                C den(1.0, 0.0);
+                for (int j = 0; j < 3; ++j)
+                    if (j != i)
+                        den *= lam[i] - lam[j];
+                if (std::abs(den) < 1e-300)
+                    den = C(1e-300, 0.0);
+                const C d = poly(lam[i]) / den;
+                lam[i] -= d;
+                step = std::max(step, std::abs(d));
+            }
+            if (step < 1e-12 * scale)
+                break;
+        }
+    }
+    std::sort(lam, lam + n, [](const C& a, const C& b) { return a.imag() < b.imag(); });
+    out.n = n;
+    for (int k = 0; k < n; ++k) {
+        C sv(0.0), svh(0.0), svv(0.0);
+        for (int i = 0; i < n; ++i) {
+            const C d = lam[k] - s[i];
+            const C v = std::abs(d) > 1e-9 * scale ? 1.0 / d : C(1e9 / scale, 0.0);
+            sv += v;
+            svh += v * h[i];
+            svv += v * v;
+        }
+        out.lambda[k] = lam[k];
+        out.residue[k] = std::abs(svv) > 0.0 ? sv * svh / svv : C(0.0);
+    }
+}
+
+/// The soft pedal and the unison tuning on one partial's measured modes. The model is fitted to them (per channel,
+/// by least squares: measured ~ alpha r0). Each modelled mode is then split: what the model does not account for
+/// (measured - alpha r0) keeps its measured damping and follows the model's change of frequency only (the strings
+/// drawn together or apart change the beating; a damping moved under a part the model does not explain would let it
+/// ring on, or die, for no reason); the model's part becomes alpha r, on the pole moved by lambda - lambda0 (with the
+/// strike changed only, the pole does not move and both parts are one). The partial's
+/// energy (|a|^2 / 2 sigma over those modes) stays within +6 dB of the measured. No allocation.
+struct UnisonMove {
+    int n = 0;
+    int mode[3] {};
+    std::complex<float> keepL[3], keepR[3], movedL[3], movedR[3]; // on the measured pole; on the moved one
+    double dFreq[3] {}, dDecay[3] {};                              // the moved pole's shift (Hz, 1/s)
+};
+
+void moveUnison(const ModalProfile::Unison& u, const ModalProfile::Mode* modes, double spread, double soft, UnisonMove& out) noexcept
+{
+    using C = std::complex<double>;
+    out.n = 0;
+    double h[3] = { 1.0, 1.0, 1.0 }, ones[3] = { 1.0, 1.0, 1.0 };
+    int missed = 0; // the string the shifted hammer misses: the one tuned highest
+    for (int i = 1; i < u.strings; ++i)
+        if (u.detuneHz[(std::size_t) i] > u.detuneHz[(std::size_t) missed])
+            missed = i;
+    h[missed] = 1.0 - soft;
+    UnisonModes before, after;
+    unisonModes(u, 1.0, ones, before);
+    unisonModes(u, spread, h, after);
+    C num[2] = {}, den = 0.0;
+    for (int k = 0; k < before.n; ++k) {
+        const auto& m = modes[u.modes[(std::size_t) k]];
+        num[0] += std::conj(before.residue[k]) * C(m.left);
+        num[1] += std::conj(before.residue[k]) * C(m.right);
+        den += std::norm(before.residue[k]);
+    }
+    if (std::abs(den) <= 0.0)
+        return;
+    const C alpha[2] = { num[0] / den, num[1] / den };
+    C keep[3][2], moved[3][2];
+    double energyBefore = 0.0, energyAfter = 0.0;
+    for (int k = 0; k < before.n; ++k) {
+        const int idx = u.modes[(std::size_t) k];
+        const auto& m = modes[idx];
+        const C delta = after.lambda[k] - before.lambda[k];
+        out.mode[k] = idx;
+        out.dFreq[k] = delta.imag() / (2.0 * 3.141592653589793);
+        out.dDecay[k] = -delta.real();
+        const double s0 = std::max(0.01, m.decay), s1 = std::max(0.01, m.decay - delta.real());
+        const C measured[2] = { C(m.left), C(m.right) };
+        for (int c = 0; c < 2; ++c) {
+            keep[k][c] = measured[c] - alpha[c] * before.residue[k];
+            moved[k][c] = alpha[c] * after.residue[k];
+            energyBefore += std::norm(measured[c]) / (2.0 * s0);
+            energyAfter += std::norm(keep[k][c]) / (2.0 * s0) + std::norm(moved[k][c]) / (2.0 * s1); // (apart: an estimate)
+        }
+    }
+    const double scale = energyAfter > kMaxUnisonEnergy * energyBefore && energyAfter > 0.0
+                       ? std::sqrt(kMaxUnisonEnergy * energyBefore / energyAfter) : 1.0;
+    for (int k = 0; k < before.n; ++k) {
+        out.keepL[k] = std::complex<float>(keep[k][0] * scale);
+        out.keepR[k] = std::complex<float>(keep[k][1] * scale);
+        out.movedL[k] = std::complex<float>(moved[k][0] * scale);
+        out.movedR[k] = std::complex<float>(moved[k][1] * scale);
+    }
+    out.n = before.n;
+}
 
 /// Flush-to-zero and denormals-are-zero for the scope (decaying modes end up denormal otherwise).
 struct NoDenormals {
@@ -73,7 +221,8 @@ void ModalEngine::release() noexcept
 
 void ModalEngine::allocate()
 {
-    const int capacity = owned != nullptr ? owned->maxModesPerLayer : 0;
+    // Twice the largest layer: the unison model may add a mode for each one it moves (moveUnison).
+    const int capacity = owned != nullptr ? 2 * owned->maxModesPerLayer : 0;
     const int partials = owned != nullptr ? owned->maxPartialsPerLayer : 0;
     for (auto& v : voices) {
         v.active = false;
@@ -112,12 +261,17 @@ void ModalEngine::allocate()
     for (int note = 0; note < 128; ++note) { // the drive's shape of each note's register
         float onset = owned != nullptr ? owned->stringOnsetSeconds : 0.0f;
         float decay = owned != nullptr ? owned->stringDriveDecaySeconds : 0.0f;
+        float gainDb = 0.0f, exponent = owned != nullptr ? owned->stringVelocityExponent : 0.0f;
         if (owned != nullptr)
             for (const auto& shape : owned->stringDriveShapes)
                 if (note >= shape.firstNote) {
                     onset = shape.onsetSeconds;
                     decay = shape.decaySeconds;
+                    gainDb = shape.gainDb;
+                    exponent = shape.velocityExponent >= 0.0f ? shape.velocityExponent : owned->stringVelocityExponent;
                 }
+        driveGain[(std::size_t) note] = (float) std::pow(10.0, (double) gainDb / 20.0);
+        driveExponent[(std::size_t) note] = exponent;
         onsetFactor[(std::size_t) note] = onset > 0.0f ? (float) std::exp(-1.0 / ((double) onset * sampleRate)) : 0.0f;
         driveFadeFactor[(std::size_t) note] = decay > 0.0f ? (float) std::exp(-1.0 / ((double) decay * sampleRate)) : 1.0f;
     }
@@ -166,6 +320,7 @@ ModalEngine::Settings ModalEngine::settings() const noexcept
     s.referenceA4 = referenceA4.load();
     for (std::size_t pc = 0; pc < 12; ++pc)
         s.pitchClassCents[pc] = pitchClassCents[pc].load();
+    s.unisonSpread = unisonSpread.load();
     return s;
 }
 
@@ -182,6 +337,7 @@ void ModalEngine::applySettings(const Settings& s) noexcept
     referenceA4 = s.referenceA4;
     for (std::size_t pc = 0; pc < 12; ++pc)
         pitchClassCents[pc] = s.pitchClassCents[pc];
+    unisonSpread = std::clamp(s.unisonSpread, 0.0f, 4.0f);
     tuningVersion.fetch_add(1);
 }
 
@@ -327,6 +483,9 @@ void ModalEngine::apply(const ModalProfile& p, const Event& e) noexcept
                 sostenutoDown.store(down, std::memory_order_relaxed);
                 updateAllDampers(p);
             }
+        } else if (e.data1 == 67) { // the soft pedal: continuous, as the action shifts
+            softPedal = (float) std::min<int>(e.data2, 127) / 127.0f;
+            softPedalPosition.store(softPedal, std::memory_order_relaxed);
         } else if (e.data1 == 120 || e.data1 == 123)
             allSoundOff();
     }
@@ -424,8 +583,16 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     const bool ramped = residualEnd > 0 && overall > 1e-6f;
     const auto rampLength = std::max<std::int64_t>(1, (std::int64_t) std::llround(kLevelRampSeconds * sampleRate));
     const double nyquist = 0.5 * sampleRate;
+    // The coupled strings: the soft pedal and the unison tuning move the measured modes by what the model of each
+    // partial's unison gives against the strike and tuning measured (exactly the measured modes otherwise).
+    const double spread = std::clamp((double) unisonSpread.load(std::memory_order_relaxed), 0.02, 4.0);
+    const double soft = std::clamp((double) softPedal, 0.0, 1.0);
+    const bool moved = soft > 0.0 || std::abs(spread - 1.0) > 1e-6;
+    const int noteStrings = stringsOf(note);
     std::size_t j = 0; // walks the other layer's partials (both ascending)
+    std::size_t partIndex = 0;
     for (const auto& part : near.partials) {
+        const std::size_t pi = partIndex++;
         while (j < other.partials.size() && other.partials[j].number < part.number)
             ++j;
         float g = overall;
@@ -443,10 +610,38 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
         const bool ramp = ramped && complete && std::abs(g - overall) > 1e-4f * overall
                           && v.ramps.size() < v.ramps.capacity();
         const float start = ramp ? overall : g;
+        // The soft pedal and the unison tuning: the modes of the partial's unison model moved (see moveUnison), the
+        // softer felt, or without a model the strings struck in proportion. Otherwise the measured modes.
+        UnisonMove move;
+        float common = 1.0f;
+        if (moved) {
+            if (soft > 0.0)
+                common = (float) std::pow(10.0, -soft * kSoftFeltDbPerOctave * std::log2((double) std::max(1, part.number)) / 20.0);
+            const auto* u = pi < near.unison.size() ? &near.unison[pi] : nullptr;
+            if (u != nullptr && u->strings >= 2)
+                moveUnison(*u, near.modes.data() + part.firstMode, spread, soft, move);
+            else if (noteStrings >= 2 && soft > 0.0)
+                common *= (float) ((noteStrings - soft) / noteStrings);
+        }
+        const float scaled = start * common;
         for (int k = 0; k < part.modeCount; ++k) {
             const auto& m = near.modes[(std::size_t) (part.firstMode + k)];
-            if (m.freq * tuning < nyquist)
-                v.bank.add(modePole(m.freq * tuning, m.decay, sampleRate), m.left * start, m.right * start);
+            if (m.freq * tuning >= nyquist)
+                continue;
+            std::complex<float> l = m.left, r = m.right;
+            double shift = 0.0; // the part the model does not explain: the model's change of frequency only
+            for (int q = 0; q < move.n; ++q)
+                if (move.mode[q] == k) {
+                    const bool apart = std::abs(move.dFreq[q]) > 1e-9 || std::abs(move.dDecay[q]) > 1e-9;
+                    l = apart ? move.keepL[q] : move.keepL[q] + move.movedL[q];
+                    r = apart ? move.keepR[q] : move.keepR[q] + move.movedR[q];
+                    if (apart && v.bank.size() < v.bank.capacity() - 1) { // the model's part, on its moved pole
+                        v.bank.add(modePole((m.freq + move.dFreq[q]) * tuning, std::max(0.01, m.decay + move.dDecay[q]), sampleRate),
+                                   move.movedL[q] * scaled, move.movedR[q] * scaled);
+                        shift = move.dFreq[q];
+                    }
+                }
+            v.bank.add(modePole((m.freq + shift) * tuning, m.decay, sampleRate), l * scaled, r * scaled);
         }
         if (ramp)
             v.ramps.push_back({ first, v.bank.size() - first, part.firstMode,
@@ -494,7 +689,8 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     v.curveGain = 1.0f;
     v.curvePos = 0.0;
     v.damperSpeed = 0.0f;
-    v.driveGain = (float) std::pow((double) velocity / (double) p.stringReferenceVelocity, (double) p.stringVelocityExponent);
+    v.driveGain = driveGain[(std::size_t) note]
+                * (float) std::pow((double) velocity / (double) p.stringReferenceVelocity, (double) driveExponent[(std::size_t) note]);
     v.driveOnset = 0.0f;
     v.driveFade = 1.0f;
     v.sinceOn = 0;
@@ -643,13 +839,13 @@ void ModalEngine::render(const ModalProfile& p, float* const* outputs, int numCh
                 mixR[(std::size_t) k] += bufferR[(std::size_t) k] * g;
             }
             bodyGain = g;
-            // Under -100 dB the body fades out over kBodyFadeS, then stops (a cut there would splatter a little).
+            // Under -120 dB the body fades out over kBodyFadeS, then stops (a cut there would splatter a little).
             const float energy = body.energy() * g * g;
-            if (energy < kSilentEnergy * 1e-4f) {
+            if (energy < kBodySilentEnergy * 1e-4f) {
                 body.silence();
                 bodyActive = false;
                 bodyGain = bodyDecay = 1.0f;
-            } else if (energy < kSilentEnergy && bodyDecay >= 1.0f) {
+            } else if (energy < kBodySilentEnergy && bodyDecay >= 1.0f) {
                 bodyDecay = (float) std::exp(-1.0 / (kBodyFadeS * sampleRate));
             }
         }
