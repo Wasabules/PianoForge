@@ -15,4 +15,10 @@ int runMidiMonitor(const juce::StringArray& arguments);
 ///   PianoForge --list-audio <report file>
 int runListAudio(const juce::StringArray& arguments);
 
+/// End-to-end check of the stream output through a virtual cable, without the main device: a quiet 1 kHz tone
+/// (-40 dBFS) produced at 44.1 kHz in 128-sample blocks goes out through the mirror to <playback device>, and is
+/// captured back from <capture device> (the cable's other end, as OBS would take it):
+///   PianoForge --mirror-check "<playback device>" "<capture device>" <report file>
+int runMirrorCheck(const juce::StringArray& arguments);
+
 } // namespace pf::app

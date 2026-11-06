@@ -164,6 +164,20 @@ MainComponent::MainComponent()
         addAndMakeVisible(*c);
     applyTuning();
 
+    // Stream output: a copy of the sound on another device (a virtual cable for OBS), the main device untouched.
+    mirrorLabel.setText("Stream output (OBS)", juce::dontSendNotification);
+    mirrorChoice.setTooltip("A copy of the sound on another device, through the Windows mixer: pick a virtual cable "
+                            "(VB-Audio Hi-Fi Cable Input) and add its output to OBS as an audio input. The main output "
+                            "(ASIO) is not affected.");
+    fillMirrorDevices();
+    if (const int i = mirrorDevices.indexOf(settings->getValue("mirrorDevice")); i >= 0)
+        mirrorChoice.setSelectedId(i + 2, juce::dontSendNotification);
+    else
+        mirrorChoice.setSelectedId(1, juce::dontSendNotification);
+    mirrorChoice.onChange = [this] { openMirror(); saveSettings(); };
+    for (auto* c : std::initializer_list<juce::Component*> { &mirrorLabel, &mirrorChoice, &mirrorStatus })
+        addAndMakeVisible(*c);
+
     saveTakeButton.setButtonText("Save last take");
     saveTakeButton.onClick = [this] { saveLastTake(); };
     takesFolderButton.setButtonText("Takes folder");
@@ -266,6 +280,7 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    host.mirror.close();
     if (host.live.recording())
         finishRecording();
     saveSettings();
@@ -588,6 +603,34 @@ void MainComponent::applyTuning()
     modal.tuningVersion.fetch_add(1); // the free strings follow
 }
 
+void MainComponent::fillMirrorDevices()
+{
+    mirrorDevices = MirrorOutput::deviceNames();
+    mirrorChoice.clear(juce::dontSendNotification);
+    mirrorChoice.addItem("Off", 1);
+    for (int i = 0; i < mirrorDevices.size(); ++i)
+        mirrorChoice.addItem(mirrorDevices[i], i + 2);
+}
+
+void MainComponent::openMirror()
+{
+    const int id = mirrorChoice.getSelectedId();
+    if (id < 2) {
+        host.mirror.close();
+        mirrorStatus.setText("Off", juce::dontSendNotification);
+        return;
+    }
+    const auto name = mirrorDevices[id - 2];
+    if (auto* main = deviceManager.getCurrentAudioDevice(); main != nullptr && main->getName() == name) {
+        mirrorStatus.setText("This is the main output already: pick another device", juce::dontSendNotification);
+        host.mirror.close();
+        return;
+    }
+    const auto opened = host.mirror.open(name, host.mirror.mainSampleRate(), host.mirror.mainBlockSize());
+    mirrorStatus.setText(opened.wasOk() ? host.mirror.status() : "Cannot open " + name + ": " + opened.getErrorMessage(),
+                         juce::dontSendNotification);
+}
+
 void MainComponent::changeListenerCallback(juce::ChangeBroadcaster*)
 {
     saveSettings(); // the audio device changed
@@ -616,6 +659,7 @@ void MainComponent::saveSettings()
     s->setValue("referenceA4", referenceA4.getValue());
     s->setValue("temperament", temperamentChoice.getSelectedId());
     s->setValue("temperamentRoot", temperamentRoot.getSelectedId());
+    s->setValue("mirrorDevice", mirrorChoice.getSelectedId() >= 2 ? mirrorDevices[mirrorChoice.getSelectedId() - 2] : juce::String());
     s->setValue("recordWav", recordWavButton.getToggleState());
     s->saveIfNeeded();
 }
@@ -649,6 +693,13 @@ void MainComponent::timerCallback()
     drained.clear(); // take capture: move what reached the engine into the session record
     host.drainRecorded(drained);
     takes.add(drained, host.currentSegment(), host.currentRate());
+    // Stream output: opened once the main device runs, again when its rate or block size changes.
+    if (mirrorChoice.getSelectedId() >= 2 && host.mirror.mainSampleRate() > 0.0
+        && (!host.mirror.isOpen() || host.mirror.needsReopen()) && !mirrorStatus.getText().startsWith("Cannot")
+        && !mirrorStatus.getText().startsWith("This is"))
+        openMirror();
+    if (host.mirror.isOpen())
+        mirrorStatus.setText(host.mirror.status(), juce::dontSendNotification);
     if (host.live.endedByDevice()) { // the device stopped or changed: the recording ends there
         finishRecording();
     } else if (host.live.recording()) {
@@ -814,6 +865,11 @@ void MainComponent::resized()
     temperamentChoice.setBounds(row.removeFromLeft(220).reduced(0, 2));
     row.removeFromLeft(8);
     temperamentRoot.setBounds(row.removeFromLeft(90).reduced(0, 2));
+    row.removeFromLeft(24);
+    mirrorLabel.setBounds(row.removeFromLeft(130));
+    mirrorChoice.setBounds(row.removeFromLeft(300).reduced(0, 2));
+    row.removeFromLeft(8);
+    mirrorStatus.setBounds(row);
 
     area.removeFromTop(6);
     row = area.removeFromTop(28);

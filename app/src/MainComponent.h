@@ -55,6 +55,8 @@ private:
     void sendSustain(bool down);
     void saveSettings();
     void applyTuning();
+    void fillMirrorDevices();
+    void openMirror();
     juce::String audioDescription() const;
 
     juce::ApplicationProperties properties;
@@ -87,6 +89,9 @@ private:
     juce::Label tuningLabel;
     juce::Slider referenceA4;
     juce::ComboBox temperamentChoice, temperamentRoot;
+    juce::Label mirrorLabel, mirrorStatus;
+    juce::ComboBox mirrorChoice;           // id 1: off, then the devices
+    juce::StringArray mirrorDevices;
     juce::TextButton audioButton, corpusButton, curveButton, saveTakeButton, takesFolderButton;
     juce::TextButton recordButton, recordingsFolderButton;
     juce::ToggleButton recordMidiButton, recordWavButton;

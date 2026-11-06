@@ -433,6 +433,86 @@ int runSelfTest(const juce::StringArray& arguments)
                                            : juce::String("NOT aligned")) + startError);
     }
 
+    // 8c. Stream output: two devices on their own clocks (and rates). Over two minutes, a 1 kHz sine must come out
+    //     at 1 kHz in the consumer's real time, clean, without a dropout once settled, the FIFO at its target.
+    {
+        struct Case {
+            double inRate, outRate, drift;
+            int inBlock, outBlock;
+        };
+        for (const auto& c : { Case { 44100.0, 48000.0, 150e-6, 128, 480 }, Case { 44100.0, 44100.0, -80e-6, 64, 441 } }) {
+            DriftResampler d;
+            d.prepare(c.inRate, c.outRate, c.inBlock, c.outBlock);
+            const double outTrue = c.outRate * (1.0 + c.drift), seconds = 120.0;
+            std::vector<float> inL((size_t) c.inBlock), inR((size_t) c.inBlock), outL, outR((size_t) c.outBlock);
+            outL.reserve((size_t) (seconds * outTrue) + (size_t) c.outBlock);
+            const float* in[2] = { inL.data(), inR.data() };
+            double tp = 0.0, tc = 0.0;
+            long long produced = 0;
+            std::uint32_t settledUnderruns = 0;
+            bool settled = false;
+            double lowPpm = 1e9, highPpm = -1e9; // the ratio's correction over the last 30 s
+            while (tc < seconds) {
+                if (tp <= tc) {
+                    for (int k = 0; k < c.inBlock; ++k)
+                        inL[(size_t) k] = inR[(size_t) k] = 0.5f * (float) std::sin(6.283185307179586 * 1000.0 * (double) (produced + k) / c.inRate);
+                    d.push(in, 2, c.inBlock);
+                    produced += c.inBlock;
+                    tp += c.inBlock / c.inRate;
+                } else {
+                    const size_t at = outL.size();
+                    outL.resize(at + (size_t) c.outBlock);
+                    float* out[2] = { outL.data() + at, outR.data() };
+                    d.pull(out, 2, c.outBlock);
+                    tc += c.outBlock / outTrue;
+                    if (tc > seconds - 30.0) {
+                        lowPpm = juce::jmin(lowPpm, d.correctionPpm());
+                        highPpm = juce::jmax(highPpm, d.correctionPpm());
+                    }
+                    if (!settled && tc > 10.0) {
+                        settled = true;
+                        settledUnderruns = d.underruns() + d.overruns();
+                    }
+                }
+            }
+            // The sine against a fit over 20 ms windows of the last 30 s, at 1 kHz in the consumer's real time.
+            const double w = 6.283185307179586 * 1000.0 / outTrue;
+            const int window = (int) (0.02 * outTrue);
+            double residualDb = -300.0;
+            for (size_t s = outL.size() - (size_t) (30.0 * outTrue); s + (size_t) window < outL.size(); s += (size_t) window) {
+                // Least squares on cos and sin (over a few tens of cycles they are not quite orthogonal).
+                double cc = 0.0, cs = 0.0, ss = 0.0, xc = 0.0, xs = 0.0, fitted = 0.0, rest = 0.0;
+                for (int k = 0; k < window; ++k) {
+                    const double co = std::cos(w * (double) (s + (size_t) k)), si = std::sin(w * (double) (s + (size_t) k));
+                    cc += co * co;
+                    cs += co * si;
+                    ss += si * si;
+                    xc += outL[s + (size_t) k] * co;
+                    xs += outL[s + (size_t) k] * si;
+                }
+                const double det = cc * ss - cs * cs;
+                const double cosPart = (xc * ss - xs * cs) / det, sinPart = (xs * cc - xc * cs) / det;
+                for (int k = 0; k < window; ++k) {
+                    const double fit = cosPart * std::cos(w * (double) (s + (size_t) k)) + sinPart * std::sin(w * (double) (s + (size_t) k));
+                    fitted += fit * fit;
+                    rest += std::pow(outL[s + (size_t) k] - fit, 2.0);
+                }
+                residualDb = juce::jmax(residualDb, 10.0 * std::log10(rest / fitted + 1e-30));
+            }
+            const double fillError = std::abs(d.fillSeconds() - d.targetSeconds()) / d.targetSeconds();
+            const double truePpm = -1e6 * c.drift / (1.0 + c.drift);
+            const bool clean = d.underruns() + d.overruns() == settledUnderruns && fillError < 0.3 && residualDb < -60.0
+                               && lowPpm > truePpm - 40.0 && highPpm < truePpm + 40.0;
+            r.check(clean, "stream output, " + juce::String(c.inRate / 1000.0, 1) + " kHz into " + juce::String(c.outRate / 1000.0, 1)
+                               + " kHz with the clocks " + juce::String(juce::roundToInt(c.drift * 1e6)) + " ppm apart, 2 min: ratio corrected by "
+                               + juce::String(juce::roundToInt(lowPpm)) + " to " + juce::String(juce::roundToInt(highPpm))
+                               + " ppm (needed " + juce::String(juce::roundToInt(truePpm)) + "), FIFO at " + juce::String(1000.0 * d.fillSeconds(), 1)
+                               + " ms (target " + juce::String(1000.0 * d.targetSeconds(), 1) + "), "
+                               + juce::String((int) (d.underruns() + d.overruns() - settledUnderruns)) + " dropouts once settled, "
+                               + "1 kHz sine residual " + juce::String(residualDb, 1) + " dB");
+        }
+    }
+
     // 9. Modal engine, when the corpus state has a modal profile (forge export).
     if (const auto path = folder.getParentDirectory().getChildFile("modal-profile.bin"); path.existsAsFile()) {
         std::string error;

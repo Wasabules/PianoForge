@@ -1,6 +1,7 @@
 #pragma once
 
 #include "LiveRecorder.h"
+#include "MirrorOutput.h"
 #include "TakeRecorder.h"
 
 #include <pianoforge/engine.hpp>
@@ -24,6 +25,7 @@ public:
     juce::MidiMessageCollector collector; // MIDI from keyboards (MIDI thread) and from the UI (message thread)
     juce::MidiKeyboardState keyboardState; // on-screen keyboard; also displays the notes received
     LiveRecorder live;                     // records what the device plays (start / stop from the interface)
+    MirrorOutput mirror;                   // a copy for streaming software, on another device (OBS)
 
     /// Message thread: sends a message as if it came from a keyboard.
     void send(const juce::MidiMessage& m)
@@ -38,6 +40,7 @@ public:
         collector.reset(sampleRate);
         midi.ensureSize(16384);
         engine.prepare(sampleRate, blockSize);
+        mirror.mainFormat(sampleRate, blockSize);
         samplesElapsed = 0;
         recordingRate = sampleRate;
         segment.fetch_add(1);
@@ -95,6 +98,7 @@ public:
         }
         engine.process(outputs, numOutputs, n, events.data(), count);
         live.push(outputs, numOutputs, n, samplesElapsed); // a copy into a lock-free FIFO: nothing waits on it
+        mirror.push(outputs, numOutputs, n);               // likewise
         samplesElapsed += n;
     }
 
