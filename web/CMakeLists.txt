@@ -9,7 +9,8 @@ set(pianoforge_exports
     _pf_left _pf_right _pf_all_sound_off _pf_set_volume_db _pf_set_option _pf_set_sympathetic_db _pf_set_tuning
     _pf_set_room _pf_set_velocity_curve _pf_voices _pf_resonators _pf_sustain _pf_sostenuto _pf_last_note
     _pf_last_velocity _pf_last_layer _pf_midi_load _pf_midi_close _pf_midi_notes _pf_midi_tracks
-    _pf_midi_drums_left_out _pf_midi_length _pf_midi_play _pf_midi_pause _pf_midi_stop _pf_midi_seek _pf_midi_speed
+    _pf_midi_parts _pf_midi_part_name _pf_midi_part_instrument _pf_midi_part_track _pf_midi_part_channel
+    _pf_midi_part_notes _pf_midi_part_enabled _pf_midi_set_part _pf_midi_transpose _pf_midi_transposition _pf_midi_length _pf_midi_play _pf_midi_pause _pf_midi_stop _pf_midi_seek _pf_midi_speed
     _pf_midi_loop _pf_midi_position _pf_midi_playing _pf_midi_sounding)
 list(JOIN pianoforge_exports "," pianoforge_exports_list)
 # The profile is parsed in the module (about 200 MB once decoded): the memory grows on demand, up to 2 GB.

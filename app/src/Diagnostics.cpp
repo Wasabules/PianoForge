@@ -322,9 +322,17 @@ int runUiSnapshots(const juce::StringArray& arguments)
         sequence->tracks = 2;
         sequence->length = 271.0;
         sequence->events.push_back({ 0.0, 0x90, 60, 64 });
+        for (const char* hand : { "Right hand", "Left hand" }) {
+            pf::MidiSequence::Part part;
+            part.track = (int) sequence->parts.size() + 1;
+            part.name = hand;
+            part.program = 0;
+            part.notes = 703;
+            sequence->parts.push_back(part);
+        }
         host.filePlayer.load(sequence);
         bar.fileChanged();
-        bar.setBounds(0, 0, 1416, 40);
+        bar.setBounds(0, 0, 1416, 72);
         save(bar, "player-bar");
         bar.setSpeed(1.5); // the time at the speed, and the file's
         bar.refresh();

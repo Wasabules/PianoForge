@@ -200,7 +200,7 @@ MainComponent::MainComponent()
     else
         showMessage("No corpus found: File > Change corpus..., and pick corpus/reference/noire-dry/single-notes", theme::busy);
 
-    setSize(1440, 570);
+    setSize(1440, 600);
     constructed = true;
     startTimerHz(20);
 }
@@ -1077,7 +1077,7 @@ void MainComponent::resized()
 
     // Keyboard and its hint.
     area.reduce(12, 0);
-    auto keys = area.removeFromBottom(juce::jlimit(120, 280, area.getHeight() - 118 - 12 - 26 - 16 - 50));
+    auto keys = area.removeFromBottom(juce::jlimit(120, 280, area.getHeight() - 118 - 12 - 26 - 16 - 82));
     keyboard.setBounds(keys);
     keyboard.setKeyWidth((float) keys.getWidth() / 52.0f); // 52 white keys from A0 to C8
     area.removeFromBottom(4);
@@ -1092,7 +1092,7 @@ void MainComponent::resized()
         cards.removeFromLeft(gap);
     }
     area.removeFromTop(10);
-    playerBar->setBounds(area.removeFromTop(40));
+    playerBar->setBounds(area.removeFromTop(72));
 }
 
 } // namespace pf::app

@@ -586,13 +586,14 @@ int runSelfTest(const juce::StringArray& arguments)
         const auto sequence = MidiFilePlayer::read(path, error);
         path.deleteFile();
         const double expected[] = { 0.6, 0.9, 1.2, 1.5, 1.8, 2.4 }; // the six events of channel 1, in seconds
-        r.check(sequence != nullptr && sequence->notes == 2 && sequence->drumsLeftOut && sequence->events.size() == 6
+        r.check(sequence != nullptr && sequence->notes == 3 && sequence->parts.size() == 2 && sequence->parts[1].drums
+                    && sequence->events.size() == 7
                     && std::abs(sequence->length - 2.4) < 1e-9,
                 "MIDI file read back: " + (sequence == nullptr ? error
                                                                : juce::String(sequence->notes) + " notes, " + juce::String((int) sequence->events.size())
-                                                                     + " events, " + juce::String(sequence->length, 3) + " s, drums "
-                                                                     + (sequence->drumsLeftOut ? "left out" : "kept"))
-                    + " (expected 2 notes, 6 events, 2.400 s, drums left out)");
+                                                                     + " events, " + juce::String(sequence->length, 3) + " s, "
+                                                                     + juce::String((int) sequence->parts.size()) + " parts")
+                    + " (expected 3 notes, 7 events, 2.400 s, 2 parts: the drums kept, off by default)");
 
         player.playWholeTake = false;
         std::vector<float> l(512), rr(512);

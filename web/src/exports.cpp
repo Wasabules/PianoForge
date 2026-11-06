@@ -231,7 +231,37 @@ int pf_midi_load(const unsigned char* data, int size)
 void pf_midi_close() { if (g_player != nullptr) g_player->load(nullptr); }
 int pf_midi_notes() { return g_player != nullptr && g_player->sequence() ? g_player->sequence()->notes : 0; }
 int pf_midi_tracks() { return g_player != nullptr && g_player->sequence() ? g_player->sequence()->tracks : 0; }
-int pf_midi_drums_left_out() { return g_player != nullptr && g_player->sequence() && g_player->sequence()->drumsLeftOut ? 1 : 0; }
+int pf_midi_parts() { return g_player != nullptr && g_player->sequence() ? (int) g_player->sequence()->parts.size() : 0; }
+
+namespace {
+const pf::MidiSequence::Part* part(int i)
+{
+    const auto s = g_player != nullptr ? g_player->sequence() : nullptr;
+    return s != nullptr && i >= 0 && i < (int) s->parts.size() ? &s->parts[(std::size_t) i] : nullptr;
+}
+std::string g_text; // the last text handed to the page
+} // namespace
+
+/// A part's name (its track's), or "".
+const char* pf_midi_part_name(int i)
+{
+    g_text = part(i) != nullptr ? part(i)->name : std::string();
+    return g_text.c_str();
+}
+/// Its General MIDI instrument ("Drums" on channel 10), or "".
+const char* pf_midi_part_instrument(int i)
+{
+    g_text = part(i) != nullptr ? part(i)->instrument() : std::string();
+    return g_text.c_str();
+}
+int pf_midi_part_track(int i) { return part(i) != nullptr ? part(i)->track : 0; }
+int pf_midi_part_channel(int i) { return part(i) != nullptr ? part(i)->channel : 0; }
+int pf_midi_part_notes(int i) { return part(i) != nullptr ? part(i)->notes : 0; }
+int pf_midi_part_enabled(int i) { return g_player != nullptr && g_player->partEnabled(i) ? 1 : 0; }
+void pf_midi_set_part(int i, int on) { if (g_player != nullptr) g_player->setPartEnabled(i, on != 0); }
+/// Semitones added to every note (clamped to +-48).
+void pf_midi_transpose(int semitones) { if (g_player != nullptr) g_player->setTranspose(semitones); }
+int pf_midi_transposition() { return g_player != nullptr ? g_player->getTranspose() : 0; }
 double pf_midi_length() { return g_player != nullptr && g_player->sequence() ? g_player->sequence()->length : 0.0; }
 void pf_midi_play() { if (g_player != nullptr) g_player->play(); }
 void pf_midi_pause() { if (g_player != nullptr) g_player->pause(); }

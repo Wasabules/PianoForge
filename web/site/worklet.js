@@ -47,8 +47,20 @@ class PianoForgeProcessor extends AudioWorkletProcessor {
     const { pf } = this;
     const status = this.withBytes(bytes, (pointer, length) => pf.pf_midi_load(pointer, length));
     return status === 0
-      ? { ok: true, notes: pf.pf_midi_notes(), tracks: pf.pf_midi_tracks(), length: pf.pf_midi_length(), drumsLeftOut: pf.pf_midi_drums_left_out() !== 0 }
+      ? { ok: true, notes: pf.pf_midi_notes(), tracks: pf.pf_midi_tracks(), length: pf.pf_midi_length(), parts: this.parts() }
       : { ok: false, error: status < 0 ? 'out of memory' : this.text(pf.pf_error()) };
+  }
+
+  /** The parts of the MIDI file (its instruments) and whether each plays. */
+  parts() {
+    const { pf } = this;
+    const list = [];
+    for (let i = 0; i < pf.pf_midi_parts(); i++) {
+      list.push({ name: this.text(pf.pf_midi_part_name(i)), instrument: this.text(pf.pf_midi_part_instrument(i)),
+        track: pf.pf_midi_part_track(i), channel: pf.pf_midi_part_channel(i), notes: pf.pf_midi_part_notes(i),
+        enabled: pf.pf_midi_part_enabled(i) !== 0 });
+    }
+    return list;
   }
 
   loadProfile(bytes) {
@@ -83,6 +95,8 @@ class PianoForgeProcessor extends AudioWorkletProcessor {
       case 'midiSeek': pf.pf_midi_seek(c.seconds); break;
       case 'midiSpeed': pf.pf_midi_speed(c.factor); break;
       case 'midiLoop': pf.pf_midi_loop(c.on ? 1 : 0); break;
+      case 'midiPart': pf.pf_midi_set_part(c.part, c.on ? 1 : 0); break;
+      case 'midiTranspose': pf.pf_midi_transpose(c.semitones); break;
       case 'allSoundOff': pf.pf_all_sound_off(); break;
       case 'volume': pf.pf_set_volume_db(c.db); break;
       case 'option': pf.pf_set_option(c.option, c.on ? 1 : 0); break;

@@ -28,9 +28,10 @@ private:
     Icon icon;
 };
 
-/// The mini MIDI player, under the dashboard: open, play / pause, stop, the position (click or drag to move),
-/// the time, the speed and the loop. The file plays through the audio host, to the sample, with what the
-/// keyboards play (and is recorded with it). Speed and loop are kept in the settings.
+/// The mini MIDI player, under the dashboard, on two rows: open, play / pause, stop, the file, its parts (the
+/// instruments to play) and the transposition; then the position (click or drag to move), the time, the speed and
+/// the loop. The file plays through the audio host, to the sample, with what the keyboards play (and is recorded
+/// with it). Speed and loop are kept in the settings; the parts and the transposition go with the file.
 class PlayerBar final : public juce::Component {
 public:
     PlayerBar(MidiFilePlayer& p, juce::PropertiesFile& s);
@@ -44,16 +45,19 @@ public:
     void setSpeed(double factor);    // also updates the slider and saves
     void setLoop(bool on);
     void setDropHighlight(bool on);
+    void transposeBy(int semitones); // relative to the current transposition
     /// The timer: position, time, state.
     void refresh();
-    /// After a file is loaded (or closed).
-    void fileChanged();
+    /// After a file is loaded or closed (newFile), or its parts changed.
+    void fileChanged(bool newFile = true);
 
     void paint(juce::Graphics&) override;
     void resized() override;
 
 private:
     void save();
+    void showParts();
+    void showTranspose();
 
     MidiFilePlayer& player;
     juce::PropertiesFile& settings;
@@ -62,6 +66,9 @@ private:
     juce::Label nameLabel, timeLabel, speedLabel;
     juce::Slider position, speed;
     juce::ToggleButton loopButton { "Loop" };
+    juce::TextButton partsButton { "Tracks..." };
+    juce::Label transposeLabel, transposeValue;
+    juce::TextButton octaveDown { "-oct" }, semitoneDown { "-" }, semitoneUp { "+" }, octaveUp { "+oct" };
     bool dragging = false, dropHighlight = false, ready = false; // ready: the settings are read back
 };
 

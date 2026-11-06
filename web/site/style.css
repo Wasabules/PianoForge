@@ -72,6 +72,18 @@ main { padding: 14px 16px 16px; }
 .player input[type="range"]#midiPosition { flex: 1 1 200px; width: auto; }
 .player .time { min-width: 0; color: var(--text); font-variant-numeric: tabular-nums; }
 body.dropping .player { outline: 2px solid var(--accent); }
+.player .break { flex-basis: 100%; height: 0; }
+.player button.small { padding: 4px 8px; }
+.player .transpose { min-width: 76px; text-align: center; color: var(--dim); }
+.player .transpose.on { color: var(--accent); }
+.parts { position: relative; }
+.parts summary { list-style: none; padding: 5px 12px; border: 1px solid var(--edge); border-radius: 4px; background: #2c333b; }
+.parts[open] .partsMenu {
+  position: absolute; z-index: 10; top: 34px; left: 0; width: 460px; max-height: 360px; overflow: auto;
+  background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 8px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.partsMenu label { display: block; padding: 3px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
 .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 10px 14px; }

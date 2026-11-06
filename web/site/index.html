@@ -65,6 +65,19 @@
       <button id="midiPlay" class="transport" title="Play / pause (Ctrl+Space)" disabled>&#9654;</button>
       <button id="midiStop" class="transport" title="Stop, back to the start (Ctrl+Home)" disabled>&#9632;</button>
       <span id="midiName" class="name dim">No MIDI file: open one, or drop a .mid file on the page</span>
+      <details id="midiParts" class="parts">
+        <summary id="midiPartsSummary" title="The parts of the file (its instruments) to play: every one but the drums at first">Tracks</summary>
+        <div class="partsMenu">
+          <p><button id="partsAll">All</button> <button id="partsNone">None</button></p>
+          <div id="partsList"></div>
+        </div>
+      </details>
+      <span class="field" title="Semitones added to every note of the file (back to 0 with every new file)">Transpose
+        <button id="octDown" class="small">-oct</button><button id="semiDown" class="small">-</button>
+        <output id="transposeOut" class="transpose">0</output>
+        <button id="semiUp" class="small">+</button><button id="octUp" class="small">+oct</button>
+      </span>
+      <span class="break"></span>
       <input id="midiPosition" type="range" min="0" max="1" step="0.01" value="0" disabled title="Click or drag to move (Ctrl+Left / Ctrl+Right: 5 s)">
       <output id="midiTime" class="time" title="The time at the speed set (one second per second, against the duration at that speed); away from 100 %, the file's own time in brackets">-:-- / -:--</output>
       <label class="field">Speed <input id="midiSpeed" type="range" min="25" max="200" step="1" value="100"><output id="midiSpeedOut">100 %</output></label>

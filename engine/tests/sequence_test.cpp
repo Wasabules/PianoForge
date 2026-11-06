@@ -53,6 +53,7 @@ Bytes testFile()
     varlen(t0, 960), t0.insert(t0.end(), { 0xFF, 0x51, 3 }), be(t0, 600000, 3);
     varlen(t0, 0), t0.insert(t0.end(), { 0xFF, 0x2F, 0 });
     Bytes t1;
+    varlen(t1, 0), t1.insert(t1.end(), { 0xFF, 0x03, 5, 'P', 'i', 'a', 'n', 'o' }); // track name
     varlen(t1, 0), t1.insert(t1.end(), { 0xF0, 3, 0x7E, 0x7F, 0xF7 });  // sysex
     varlen(t1, 480), t1.insert(t1.end(), { 0x90, 60, 90 });             // C4 at 0.5 s
     varlen(t1, 0), t1.insert(t1.end(), { 64, 70 });                     // E4, running status
@@ -107,12 +108,18 @@ int main()
     const auto bytes = testFile();
     std::string error;
     const auto seq = pf::readMidiFile(bytes.data(), bytes.size(), error);
-    const double expected[] = { 0.5, 0.5, 1.0, 1.6, 2.2, 2.8, 2.8 };
-    bool times = seq != nullptr && seq->events.size() == 7;
-    for (std::size_t i = 0; times && i < 7; ++i)
-        times = std::abs(seq->events[i].seconds - expected[i]) < 1e-9;
-    check(times && seq->notes == 3 && seq->tracks == 2 && seq->drumsLeftOut && std::abs(seq->length - 2.8) < 1e-9,
-          "a format-1 file: tempo map, running status, sysex, program change, drums left out, the times exact");
+    // Every event of the file, the drum note included (its part is off by default, not removed).
+    const double all[] = { 0.5, 0.5, 1.0, 1.6, 1.675, 2.2, 2.8, 2.8 };
+    bool times = seq != nullptr && seq->events.size() == 8;
+    for (std::size_t i = 0; times && i < 8; ++i)
+        times = std::abs(seq->events[i].seconds - all[i]) < 1e-9;
+    check(times && seq->notes == 4 && seq->tracks == 2 && std::abs(seq->length - 2.8) < 1e-9,
+          "a format-1 file: tempo map, running status, sysex, program change, the times exact");
+    check(seq != nullptr && seq->parts.size() == 2 && seq->parts[0].name == "Piano" && seq->parts[0].channel == 0
+              && seq->parts[0].notes == 3 && seq->parts[0].instrument() == "Electric Piano 2" && seq->parts[1].drums
+              && seq->parts[1].instrument() == "Drums" && seq->events[3].part == 0 && seq->events[4].part == 1,
+          "parts: (track, channel) pairs with notes, their name, instrument and count; the pedal with its part");
+    const double expected[] = { 0.5, 0.5, 1.0, 1.6, 2.2, 2.8, 2.8 }; // played by default: no drums
     check(seq != nullptr && seq->events[2].status == 0x90 && seq->events[2].data2 == 0 && seq->events[1].data1 == 64,
           "running status read as such, a note-on of velocity 0 kept (a note-off)");
 
@@ -158,6 +165,42 @@ int main()
         check(s == "80 64 0, b0 64 0, b0 64 127" && p == "b0 64 0" && r == "b0 64 127, 90 67 80, 80 67 0, b0 64 0",
               "seek, pause and resume: releases and pedals as the sequence has them");
         check(player.sounding(67) == 0 && player.sounding(64) == 0, "nothing left sounding at the end");
+    }
+
+    // Transposition: an octave up; changed while playing, what sounds is released first.
+    {
+        pf::SequencePlayer player;
+        player.load(seq);
+        player.setTranspose(12);
+        player.play();
+        long long clock = 0;
+        const auto start = play(player, 0.7, clock); // C5 and E5 struck
+        player.setTranspose(0);
+        const auto change = play(player, 0.1, clock);
+        const std::string a = text(start), c = text(change);
+        std::printf("      +12: [%s]; back to 0: [%s]\n", a.c_str(), c.c_str());
+        check(a == "90 72 90, 90 76 70" && c == "80 72 0, 80 76 0" && player.getTranspose() == 0,
+              "transposed an octave up; a change while playing releases the transposed notes");
+        player.setTranspose(99);
+        check(player.getTranspose() == pf::SequencePlayer::kMaxTranspose, "the transposition is clamped");
+    }
+
+    // Parts: the drums switched on play their note; the piano switched off while sounding releases its notes.
+    {
+        pf::SequencePlayer player;
+        player.load(seq);
+        check(player.partEnabled(0) && !player.partEnabled(1), "every part plays by default but the percussion");
+        player.setPartEnabled(1, true);
+        player.play();
+        long long clock = 0;
+        const auto first = play(player, 0.7, clock); // C4, E4
+        player.setPartEnabled(0, false);
+        const auto off = play(player, 0.1, clock);
+        const auto rest = play(player, 2.5, clock);
+        const std::string f = text(first), o = text(off), r = text(rest);
+        std::printf("      parts: [%s], piano off [%s], then [%s]\n", f.c_str(), o.c_str(), r.c_str());
+        check(f == "90 60 90, 90 64 70" && o == "80 60 0, 80 64 0" && r == "99 36 100",
+              "a part switched off releases its notes and plays no more; the drums switched on play");
     }
 
     // Loop: back to the start, everything released first.

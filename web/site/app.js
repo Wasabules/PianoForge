@@ -55,7 +55,8 @@ const COMPUTER_KEYS = ['KeyA', 'KeyW', 'KeyS', 'KeyE', 'KeyD', 'KeyF', 'KeyT', '
   'KeyK', 'KeyO', 'KeyL', 'KeyP', 'Semicolon']; // physical places: QWERTY names, AZERTY keys alike
 
 let context = null, node = null, profile = null, midi = null;
-let midiFile = null;           // { name, bytes, notes, tracks, length, drumsLeftOut } once the worklet has read it
+let midiFile = null;           // { name, bytes, notes, tracks, length, parts } once the worklet has read it
+let transposition = 0;
 let filePosition = 0, filePlaying = false, seeking = false;
 let fileKeys = new Set();      // the keys the MIDI file has sounding (from the worklet)
 let octave = store.get('octave', 4), velocity = store.get('velocity', 100);
@@ -285,6 +286,50 @@ function openMidi(file) {
   });
 }
 
+function showParts() {
+  const parts = midiFile?.parts ?? [];
+  const list = $('partsList');
+  list.textContent = '';
+  parts.forEach((part, i) => {
+    const label = document.createElement('label');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = part.enabled;
+    box.addEventListener('change', () => {
+      part.enabled = box.checked;
+      send({ type: 'midiPart', part: i, on: box.checked });
+      showParts();
+    });
+    const name = part.name || `Track ${part.track + 1}`;
+    label.append(box, ` ${i + 1}. ${name}   (channel ${part.channel + 1}${part.instrument ? ', ' + part.instrument : ''}, ${part.notes} notes)`);
+    list.appendChild(label);
+  });
+  const playing = parts.filter((p) => p.enabled).length;
+  $('midiPartsSummary').textContent = parts.length > 1 ? `Tracks ${playing}/${parts.length}` : 'Tracks';
+  $('midiParts').style.visibility = midiFile ? 'visible' : 'hidden';
+}
+
+function setAllParts(on) {
+  (midiFile?.parts ?? []).forEach((part, i) => {
+    part.enabled = on;
+    send({ type: 'midiPart', part: i, on });
+  });
+  showParts();
+}
+
+function transposeBy(semitones) {
+  if (!midiFile) return;
+  transposition = Math.max(-48, Math.min(48, transposition + semitones));
+  send({ type: 'midiTranspose', semitones: transposition });
+  showTranspose();
+}
+
+function showTranspose() {
+  const t = transposition, n = Math.abs(t), sign = t > 0 ? '+' : '-';
+  $('transposeOut').textContent = t === 0 ? '0' : `${sign}${n} st` + (n % 12 === 0 ? ` (${sign}${n / 12} oct)` : '');
+  $('transposeOut').classList.toggle('on', t !== 0);
+}
+
 function togglePlay() {
   if (!midiFile) return;
   send({ type: filePlaying ? 'midiPause' : 'midiPlay' });
@@ -308,6 +353,16 @@ function nudge(seconds) {
 function buildPlayer() {
   $('midiFile').addEventListener('change', (event) => openMidi(event.target.files?.[0]));
   $('midiPlay').addEventListener('click', togglePlay);
+  $('partsAll').addEventListener('click', () => setAllParts(true));
+  $('partsNone').addEventListener('click', () => setAllParts(false));
+  $('octDown').addEventListener('click', () => transposeBy(-12));
+  $('semiDown').addEventListener('click', () => transposeBy(-1));
+  $('semiUp').addEventListener('click', () => transposeBy(1));
+  $('octUp').addEventListener('click', () => transposeBy(12));
+  document.addEventListener('click', (event) => { // the parts menu closes on a click elsewhere
+    if (!$('midiParts').contains(event.target)) $('midiParts').open = false;
+  });
+  showTranspose();
   $('midiStop').addEventListener('click', stopFile);
   $('midiPosition').addEventListener('input', () => { seeking = true; showPlayer(); });
   $('midiPosition').addEventListener('change', () => {
@@ -342,6 +397,7 @@ function buildPlayer() {
     if (file) openMidi(file);
   });
   showPlayer();
+  showParts();
 }
 
 // ---- Settings ----
@@ -497,8 +553,10 @@ function received(data) {
         Object.assign(midiFile, data);
         filePosition = 0;
         filePlaying = false;
-        $('midiName').textContent = `${midiFile.name}   (${data.notes} notes, ${data.tracks} ${data.tracks === 1 ? 'track' : 'tracks'}`
-          + (data.drumsLeftOut ? ', drums (channel 10) left out)' : ')');
+        $('midiName').textContent = `${midiFile.name}   (${data.notes} notes, ${data.tracks} ${data.tracks === 1 ? 'track' : 'tracks'})`;
+        transposition = 0; // a new file starts untransposed
+        showTranspose();
+        showParts();
         $('midiName').classList.remove('dim');
         message(`Opened ${midiFile.name}: Ctrl+Space plays it, with its own velocities.`, 'good');
       } else {
