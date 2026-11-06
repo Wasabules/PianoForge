@@ -24,12 +24,28 @@ checked against `PIANOFORGE_OBS_HASH`); the import library is made from the inst
 cmake --build build/windows-msvc --config Release --target install-obs-plugin
 ```
 
-copies it to `%ProgramData%/obs-studio/plugins/pianoforge-obs/bin/64bit` (no administrator rights needed). Restart
-OBS, then add a source: **PianoForge** (under audio sources). Turn its monitoring off in OBS (Advanced Audio
+copies it to `%ProgramData%/obs-studio/plugins/pianoforge-obs/bin/64bit` (no administrator rights needed), OBS
+running or not: a plugin in use is moved aside (removed by a later install) and the new one loads at OBS's next
+start. Then add a source: **PianoForge** (under audio sources). Turn its monitoring off in OBS (Advanced Audio
 Properties) so that it is not heard twice.
+
+## Properties
+
+- **Status**: PianoForge connected or not; the sample rate and block size; the latency aimed at and the audio
+  waiting now; the clock drift compensated (PianoForge's audio clock against the system's); the resyncs since the
+  source was created; how long it has been running. **Refresh the status** updates it.
+- **Latency** (10 to 100 ms, 20 by default): the audio kept waiting between PianoForge and OBS. Lower is closer to
+  the sound heard; higher is safer on a busy machine. It cannot go below what the two sides' blocks call for (about
+  10 ms with 128-sample blocks).
+- **Resynchronise**: starts again from the newest audio, without removing the source.
+
+Volume, mono, sync offset and monitoring are OBS's own (Advanced Audio Properties); effects go in the source's
+Filters.
 
 ## Test
 
-`pianoforge-obs-test` (ctest `obs_plugin`, about 40 s, PianoForge closed) loads the plugin into the installed
-libobs without the OBS application, writes the feed as PianoForge does (a 1 kHz sine on a clock 200 ppm fast) and
-checks what libobs hands on: continuous audio and timestamps, the frequency on OBS's clock, no glitch.
+`pianoforge-obs-test` (ctest `obs_plugin`, about 45 s) loads the plugin into the installed libobs without the OBS
+application, writes the feed as PianoForge does (a 1 kHz sine on a clock 200 ppm fast) and checks what libobs hands
+on: continuous audio and timestamps, the frequency on OBS's clock, no glitch; then the properties: the status, a
+latency changed on the fly, the resync button. The test's feed has a name of its own (`PIANOFORGE_AUDIO_FEED`): it
+runs beside a PianoForge and an OBS in use.

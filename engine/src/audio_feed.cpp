@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -40,18 +42,38 @@ static_assert(sizeof(AudioFeedHeader) <= kHeaderBytes);
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free && std::atomic<std::uint32_t>::is_always_lock_free,
               "the feed's atomics must be lock-free to be shared between processes");
 
+/// The feed's name: "PianoForgeAudioFeed", or PIANOFORGE_AUDIO_FEED when set (tests run beside the application).
+std::string feedName()
+{
+    std::string name;
 #if defined(_WIN32)
-constexpr const wchar_t* kName = L"Local\\PianoForgeAudioFeed";
-constexpr const wchar_t* kOwnerName = L"Local\\PianoForgeAudioFeedWriter";
+    char* custom = nullptr;
+    std::size_t length = 0;
+    if (_dupenv_s(&custom, &length, "PIANOFORGE_AUDIO_FEED") == 0 && custom != nullptr) {
+        name = custom;
+        std::free(custom);
+    }
 #else
-constexpr const char* kName = "/pianoforge-audio-feed";
+    if (const char* custom = std::getenv("PIANOFORGE_AUDIO_FEED"); custom != nullptr)
+        name = custom;
+#endif
+    return name.empty() ? std::string("PianoForgeAudioFeed") : name;
+}
+
+#if defined(_WIN32)
+std::wstring localName(const std::string& suffix)
+{
+    const std::string name = feedName() + suffix; // ASCII
+    return L"Local\\" + std::wstring(name.begin(), name.end());
+}
 #endif
 
 void* mapShared(bool create, void*& handle)
 {
 #if defined(_WIN32)
-    HANDLE h = create ? CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, (DWORD) kBytes, kName)
-                      : OpenFileMappingW(FILE_MAP_READ, FALSE, kName);
+    const std::wstring name = localName("");
+    HANDLE h = create ? CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, (DWORD) kBytes, name.c_str())
+                      : OpenFileMappingW(FILE_MAP_READ, FALSE, name.c_str());
     if (h == nullptr)
         return nullptr;
     void* view = MapViewOfFile(h, create ? FILE_MAP_ALL_ACCESS : FILE_MAP_READ, 0, 0, kBytes);
@@ -62,7 +84,8 @@ void* mapShared(bool create, void*& handle)
     handle = h;
     return view;
 #else
-    const int fd = shm_open(kName, create ? (O_CREAT | O_RDWR) : O_RDONLY, 0600);
+    const std::string name = "/" + feedName();
+    const int fd = shm_open(name.c_str(), create ? (O_CREAT | O_RDWR) : O_RDONLY, 0600);
     if (fd < 0)
         return nullptr;
     if (create && ftruncate(fd, (off_t) kBytes) != 0) {
@@ -100,7 +123,7 @@ bool AudioFeedWriter::create()
         return true;
 #if defined(_WIN32)
     // One writer at a time: a second PianoForge would interleave its blocks with the first one's.
-    HANDLE lock = CreateMutexW(nullptr, FALSE, kOwnerName);
+    HANDLE lock = CreateMutexW(nullptr, FALSE, localName("Writer").c_str());
     if (lock == nullptr)
         return false;
     if (GetLastError() == ERROR_ALREADY_EXISTS) {

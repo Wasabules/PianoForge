@@ -3,7 +3,8 @@
 #
 # Windows: built against the installed OBS Studio. The libobs headers of the same version are fetched (and checked
 # against their hash); the import library is made from the installed obs.dll's exports. The target
-# install-obs-plugin copies the plugin where OBS looks for plugins of every user, no administrator rights needed:
+# install-obs-plugin copies the plugin where OBS looks for plugins of every user, no administrator rights needed,
+# OBS running or not (the new plugin then loads at its next start):
 # %ProgramData%/obs-studio/plugins/pianoforge-obs/bin/64bit.
 # Linux: built against the system's libobs (package libobs-dev or obs-studio's development files).
 
@@ -65,12 +66,11 @@ if(WIN32)
     file(TO_CMAKE_PATH "$ENV{ProgramData}" program_data)
     set(plugin_root "${program_data}/obs-studio/plugins/pianoforge-obs")
     add_custom_target(install-obs-plugin
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${plugin_root}/bin/64bit" "${plugin_root}/data/locale"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:pianoforge-obs> "${plugin_root}/bin/64bit/"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/data/locale/en-US.ini"
-                "${plugin_root}/data/locale/"
+        COMMAND ${CMAKE_COMMAND} -DDLL=$<TARGET_FILE:pianoforge-obs>
+                -DLOCALE=${CMAKE_CURRENT_SOURCE_DIR}/data/locale/en-US.ini -DDEST=${plugin_root}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/install_plugin.cmake
         DEPENDS pianoforge-obs
-        COMMENT "Installing the PianoForge OBS plugin into ${plugin_root} (restart OBS to load it)")
+        COMMENT "Installing the PianoForge OBS plugin into ${plugin_root}")
 else()
     find_package(libobs REQUIRED)
     target_link_libraries(pianoforge-obs PRIVATE OBS::libobs)

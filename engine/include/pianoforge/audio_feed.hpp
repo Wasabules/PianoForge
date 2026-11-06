@@ -9,7 +9,8 @@ struct AudioFeedHeader;
 /// A one-way stereo audio feed from PianoForge to another process on the same machine (the OBS plugin), through
 /// shared memory: no driver, no system mixer, no virtual cable in between.
 ///
-/// The memory ("PianoForgeAudioFeed": Local\ on Windows, /pianoforge-audio-feed on Linux) holds a header and a
+/// The memory ("PianoForgeAudioFeed", or the value of PIANOFORGE_AUDIO_FEED for tests running beside the
+/// application: Local\ on Windows, /<name> on Linux) holds a header and a
 /// ring of interleaved float frames. The writer (PianoForge's audio thread) copies each block into the ring and
 /// then publishes the total of frames written (release); a reader copies any span still in the ring and checks
 /// afterwards that the writer has not lapped it. Writing is a memory copy and one atomic store: no system call, no

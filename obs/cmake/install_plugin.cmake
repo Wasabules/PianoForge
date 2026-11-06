@@ -1,0 +1,33 @@
+# Copies the plugin into OBS's plugin folder, OBS running or not (cmake -P, with DLL, LOCALE and DEST defined).
+# Windows keeps a loaded DLL from being overwritten, not from being renamed: the one OBS uses moves aside (.old,
+# removed by a later install once OBS has let go of it) and the new one takes its place, for OBS's next start.
+cmake_minimum_required(VERSION 3.25)
+
+set(bin "${DEST}/bin/64bit")
+file(MAKE_DIRECTORY "${bin}" "${DEST}/data/locale")
+file(GLOB stale "${bin}/*.old")
+foreach(file IN LISTS stale)
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E rm -f "${file}" RESULT_VARIABLE ignored ERROR_QUIET)
+endforeach()
+file(COPY_FILE "${LOCALE}" "${DEST}/data/locale/en-US.ini" ONLY_IF_DIFFERENT)
+
+set(target "${bin}/pianoforge-obs.dll")
+if(EXISTS "${target}")
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E compare_files "${DLL}" "${target}" RESULT_VARIABLE different)
+    if(different EQUAL 0)
+        message(STATUS "The PianoForge OBS plugin in ${bin} is up to date")
+        return()
+    endif()
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E copy "${DLL}" "${target}" RESULT_VARIABLE copied ERROR_QUIET)
+    if(copied EQUAL 0)
+        message(STATUS "Installed the PianoForge OBS plugin into ${bin} (restart OBS to load it)")
+        return()
+    endif()
+    string(TIMESTAMP stamp "%Y%m%d-%H%M%S")
+    file(RENAME "${target}" "${target}.${stamp}.old")
+    file(COPY_FILE "${DLL}" "${target}")
+    message(STATUS "OBS is using the plugin: the new one is in place, and OBS loads it when it starts again")
+else()
+    file(COPY_FILE "${DLL}" "${target}")
+    message(STATUS "Installed the PianoForge OBS plugin into ${bin} (restart OBS to load it)")
+endif()

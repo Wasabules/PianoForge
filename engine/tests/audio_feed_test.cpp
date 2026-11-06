@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 namespace {
@@ -20,6 +21,12 @@ void check(bool condition, const char* what)
 
 int main()
 {
+    // A feed of the test's own: it runs beside a PianoForge in use.
+#if defined(_WIN32)
+    _putenv_s("PIANOFORGE_AUDIO_FEED", "PianoForgeAudioFeedUnitTest");
+#else
+    setenv("PIANOFORGE_AUDIO_FEED", "PianoForgeAudioFeedUnitTest", 1);
+#endif
     pf::AudioFeedReader early;
     check(!early.open(), "no writer yet: nothing to open");
 
