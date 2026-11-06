@@ -41,6 +41,9 @@ PianoForge.exe --selftest corpus/reference/noire-dry/single-notes selftest.txt
 Play a MIDI file live: File > Open MIDI file (Ctrl+O), drop it on the window, or pass it on the command line
 (`PianoForge.exe song.mid`). It plays to the sample with what the keyboards play, and is recorded with it.
 
+A room around the piano (algorithmic reverberation, no latency on the direct sound): the Room button in the
+toolbar, its settings in Engine > Room settings (Ctrl+M). Heard, recorded, streamed and in take renders alike.
+
 Offline render of a MIDI file, through the reference player or the modal engine:
 
 ```

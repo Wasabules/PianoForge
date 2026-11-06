@@ -675,6 +675,34 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - *Contrôle de la forge* : la moitié des fenêtres à moins de 4,6 → 4,0 dB, 90 % à moins de 10,1 → 8,4 dB.
     - *Dans le moteur*, sur les 30 paires et cinq fenêtres : médiane +1,2 → +0,9 dB, moitié des fenêtres à moins de 4,7 → 3,8 dB, 90 % à moins de 11,0 → 8,7 dB. Dans le grave à v100, l'excès après 4 s tombe de +10 à +14 dB à +1 à +4 dB (A0, D#1, A1) ; sur 0–0,2 s, D#1 passe de −9,2 à −2,8 dB. Il reste un excès de 5 à 9 dB entre 0,5 et 4 s pour A0 à v100.
 
+**Salle (6 novembre 2026).** Le moteur sortait un son sec : Noire est calibrée sans réverbération. `pf::Room` (`engine/`, sans JUCE, réutilisable par un plugin) ajoute une salle en sortie, quel que soit le moteur. Le son direct traverse sans être touché ni retardé ; seule la réverbération a son pré-délai.
+  - *Premières réflexions.* Un modèle à sources-images d'une salle rectangulaire : les 24 images des ordres 1 et 2, du piano vers deux micros espacés de 0,6 m. Les dimensions suivent la taille, de 4,7 × 3,4 m à 21 × 15 m.
+  - *Queue.* Un réseau de 16 lignes de retard rebouclées : longueurs en nombres premiers d'échantillons (29 à 113 ms pour la plus grande salle), mélange par une matrice de Hadamard sans perte, entrée diffusée par quatre passe-tout par canal.
+    - *Absorption.* Par ligne, une perte qui fixe le temps de réverbération, et un plateau du premier ordre à 3 kHz qui raccourcit les aigus selon la brillance (filtres d'absorption de Jot). Le filtre passe-bas à un pôle habituel descend en pente douce de 0 à 24 kHz : mesuré, il ne raccourcissait presque pas les 2 à 8 kHz où se trouve la brillance du piano.
+    - *Modulation.* Chaque longueur est modulée lentement, de 0,25 à 1 Hz et de ±0,125 ms : au plus 1,4 cent de hauteur, sans effet de chorus. La lecture fractionnaire passe par un passe-tout du premier ordre. Une interpolation linéaire dans la boucle étouffait les aigus à chaque passage, et le niveau sortait 4 dB trop bas.
+  - *Niveaux.* L'énergie des premières réflexions est normalisée ; celle de la queue vaut 3 √(T60 / 2 s) fois la leur, d'après une estimation analytique (énergie stockée et décroissance), vérifiée à 0,7 dB près. Le réglage Level place ensuite la réverbération par rapport au son direct.
+  - *Comportement.*
+    - Le calcul se fait échantillon par échantillon : le résultat ne dépend pas de la taille des blocs.
+    - Un changement de taille ou de pré-délai éteint la réverbération puis la rallume en 10 ms, sans clic, et la queue continue. Les autres réglages glissent sur 20 ms.
+    - Coupée, la salle s'éteint, se vide, puis laisse passer l'entrée bit à bit.
+    - En veille, une fois la queue sous −120 dB et l'entrée muette assez longtemps, elle ne coûte rien. Au réveil, elle repart d'un état propre.
+  - *Dans l'atelier.* Un bouton Room dans la barre d'outils pour l'A/B, et la fenêtre Engine > Room settings (Ctrl+M). On y trouve cinq préréglages (Studio, Chamber, Concert hall, Large hall, Cathedral) et six réglages : niveau, taille, temps de réverbération, brillance, pré-délai, largeur. Par défaut, la salle est allumée sur Concert hall à −15 dB. Les enregistrements, le flux OBS et la sortie miroir l'incluent ; le rendu des prises (Ctrl+S) l'applique avec les réglages entendus et une queue allongée d'autant (mêmes réglages, phases de modulation reparties de zéro).
+  - *Tests* (`room_test`, 16 contrôles, à 48 kHz) :
+    - temps de réverbération mesuré (intégrale de Schroeder) : 2,01 s pour 2 s, 4,02 s pour 4 s, 1,95 à 1,97 s de 100 à 400 Hz ;
+    - à brillance 0,3 : 1,00 s à 4–8 kHz et 0,89 s à 6–12 kHz, pour une cible de 0,81 s au-dessus de 3 kHz ;
+    - densité d'échos normalisée de 1,03 dès 0,15 s, celle d'un bruit ;
+    - dispersion du spectre de la queue de 5,8 dB autour de sa tendance (un bruit : 5,6 dB), donc pas de mode qui sonne ;
+    - corrélation gauche/droite de −0,01 à pleine largeur, 1,000 à largeur nulle ;
+    - 100 % de l'énergie d'un la à 1 kHz à moins de 4 Hz ;
+    - pas de clic au changement de taille ;
+    - contournement bit à bit quand la salle est coupée ;
+    - même sortie en blocs de 64 ou de 509 ;
+    - réglages extrêmes de 44,1 à 192 kHz finis ;
+    - 60 s de silence en veille calculées en 4 ms ;
+    - coût de 1,6 % d'un cœur.
+
+    L'autotest de l'app vérifie qu'une note jouée par l'hôte audio garde son son direct (−0,2 dB d'écart) et gagne une queue de 8 dB après le relâchement. Au repos à 192 kHz, la charge reste à 0 %.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

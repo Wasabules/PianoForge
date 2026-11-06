@@ -12,6 +12,7 @@
 #include "ui/Meters.h"
 #include "ui/PerformancePanel.h"
 #include "ui/PlayerBar.h"
+#include "ui/RoomPanel.h"
 #include "ui/ToolWindow.h"
 
 #include <pianoforge/modal_engine.hpp>
@@ -75,6 +76,7 @@ private:
     void updateRenderedLayers();
     void showWindow(std::unique_ptr<ToolWindow>& window, const juce::String& title, juce::Component& content);
     void showShortcuts();
+    void refreshRoomButton();
     void showAbout();
     void setKeyLayout(int layout);
     void shiftOctave(int delta);
@@ -118,12 +120,14 @@ private:
     std::unique_ptr<EnginePanel> enginePanel;
     std::unique_ptr<AudioPanel> audioPanel;
     PerformancePanel performancePanel;
-    std::unique_ptr<ToolWindow> engineWindow, audioWindow, performanceWindow;
+    std::unique_ptr<RoomPanel> roomPanel;
+    std::unique_ptr<ToolWindow> engineWindow, audioWindow, performanceWindow, roomWindow;
     std::unique_ptr<PlayerBar> playerBar;
     std::unique_ptr<VelocityCurveWindow> curveWindow;
 
     // Toolbar.
-    juce::TextButton referenceButton { "Reference" }, modalButton { "Modal" }, recordButton, pedalButton { "Pedal" };
+    juce::TextButton referenceButton { "Reference" }, modalButton { "Modal" }, recordButton, pedalButton { "Pedal" },
+        roomButton { "Room" };
     juce::Slider volume, velocity;
     juce::Label volumeLabel, velocityLabel;
     LoadMeter loadMeter;

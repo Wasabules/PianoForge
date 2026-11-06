@@ -5,6 +5,7 @@
 #include <pianoforge/engine.hpp>
 #include <pianoforge/modal_engine.hpp>
 #include <pianoforge/modal_profile.hpp>
+#include <pianoforge/room.hpp>
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
@@ -28,6 +29,10 @@ juce::AudioBuffer<float> renderSequence(const juce::MidiMessageSequence& sequenc
 juce::AudioBuffer<float> renderSequenceModal(const juce::MidiMessageSequence& sequence,
                                              std::shared_ptr<const pf::ModalProfile> profile, double sampleRate,
                                              const pf::ModalEngine::Settings& settings, double tailSeconds = 4.0);
+
+/// Adds the room to a rendered buffer (when `settings` has it on), as the audio host does live. The modulation's
+/// phases start from zero here, so the result is the same room, not the same samples.
+void applyRoom(juce::AudioBuffer<float>& audio, const pf::Room::Settings& settings, double sampleRate);
 
 /// Writes a 32-bit float WAV file (creating the folder when needed).
 juce::Result writeWav(const juce::AudioBuffer<float>& audio, double sampleRate, const juce::File& file);

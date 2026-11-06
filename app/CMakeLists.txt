@@ -17,6 +17,7 @@ target_sources(PianoForgeApp PRIVATE
     src/ui/AudioPanel.cpp
     src/ui/PerformancePanel.cpp
     src/ui/PlayerBar.cpp
+    src/ui/RoomPanel.cpp
     src/MainComponent.cpp
     src/VelocityCurveEditor.cpp
     src/SelfTest.cpp

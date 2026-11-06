@@ -14,7 +14,7 @@ enum MenuId {
     // Player
     kPlayPause = 80, kStopPlayer, kBack, kForward, kLoop, kCloseMidi, kSpeed = 100,
     // Engine
-    kEngineReference = 20, kEngineModal, kEngineOption = 30, kEngineSettings = 50,
+    kEngineReference = 20, kEngineModal, kEngineOption = 30, kEngineSettings = 50, kRoomToggle, kRoomSettings,
     // Audio
     kAudioSettings = 60, kPerformance, kResetDropouts,
     // Keyboard
@@ -118,6 +118,8 @@ MainComponent::MainComponent()
         auto* d = deviceManager.getCurrentAudioDevice();
         loadTracker.reset(host.load, d != nullptr ? d->getXRunCount() : -1);
     };
+    roomPanel = std::make_unique<RoomPanel>(host.room, *settings);
+    roomPanel->onChange = [this] { refreshRoomButton(); };
     playerBar = std::make_unique<PlayerBar>(host.filePlayer, *settings);
     playerBar->onOpen = [this] { chooseMidiFile(); };
     playerBar->onClicked = [this] { keyboard.grabKeyboardFocus(); };
@@ -144,6 +146,9 @@ MainComponent::MainComponent()
     pedalButton.setTooltip("The sustain pedal (Space)");
     pedalButton.setClickingTogglesState(false);
     pedalButton.onClick = [this] { sendSustain(!pedalButton.getToggleState()); };
+    roomButton.setClickingTogglesState(false);
+    roomButton.onClick = [this] { roomPanel->setOn(!roomPanel->isOn()); };
+    refreshRoomButton();
     volumeLabel.setText("Volume", juce::dontSendNotification);
     volume.setRange(-24.0, 24.0, 0.5);
     volume.setTextValueSuffix(" dB");
@@ -162,7 +167,7 @@ MainComponent::MainComponent()
     loadMeter.setTooltip("How much of each audio block's time the engine uses. Click for the details.");
     loadMeter.onClick = [this] { showWindow(performanceWindow, "Performance", performancePanel); };
     levelMeter.setTooltip("Output level, left and right (click to clear the clip light)");
-    for (auto* c : std::initializer_list<juce::Component*> { &recordButton, &pedalButton, &volumeLabel, &volume, &velocityLabel,
+    for (auto* c : std::initializer_list<juce::Component*> { &recordButton, &pedalButton, &roomButton, &volumeLabel, &volume, &velocityLabel,
                                                              &velocity, &loadMeter, &levelMeter })
         addAndMakeVisible(*c);
 
@@ -214,6 +219,7 @@ MainComponent::~MainComponent()
     engineWindow.reset();
     audioWindow.reset();
     performanceWindow.reset();
+    roomWindow.reset();
     curveWindow.reset(); // it refers to curveSettings and keyboardInput
     keyboard.removeKeyListener(this);
     deviceManager.removeChangeListener(this);
@@ -290,6 +296,9 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         }
         menu.addSeparator();
         menu.addItem(item(kEngineSettings, "Engine settings (tuning, re-strike, levels)...", "Ctrl+E"));
+        menu.addSeparator();
+        menu.addItem(item(kRoomToggle, "Room: " + roomPanel->presetName(), {}, roomPanel->isOn()));
+        menu.addItem(item(kRoomSettings, "Room settings...", "Ctrl+M"));
         break;
     }
     case 3:
@@ -349,6 +358,8 @@ void MainComponent::menuItemSelected(int id, int)
     case kEngineReference: selectEngine(false); break;
     case kEngineModal: selectEngine(true); break;
     case kEngineSettings: showWindow(engineWindow, "Engine settings", *enginePanel); break;
+    case kRoomToggle: roomPanel->setOn(!roomPanel->isOn()); break;
+    case kRoomSettings: showWindow(roomWindow, "Room", *roomPanel); break;
     case kAudioSettings: showWindow(audioWindow, "Audio, MIDI and streaming", *audioPanel); break;
     case kPerformance: showWindow(performanceWindow, "Performance", performancePanel); break;
     case kResetDropouts: performancePanel.onReset(); break;
@@ -384,7 +395,7 @@ void MainComponent::showShortcuts()
               "MIDI file player\n  Ctrl+O: open a MIDI file (or drop it on the window)\n  Ctrl+Space: play / pause\n"
               "  Ctrl+Home: stop, back to the start\n  Ctrl+Left / Ctrl+Right: 5 s back / forward\n  Ctrl+L: loop\n\n"
               "Application\n  Ctrl+R: record / stop\n  Ctrl+S: save the last take\n  Ctrl+1 / Ctrl+2: reference / modal engine\n"
-              "  Ctrl+E: engine settings\n  Ctrl+,: audio, MIDI and streaming\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
+              "  Ctrl+E: engine settings\n  Ctrl+M: room settings\n  Ctrl+,: audio, MIDI and streaming\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
               "The mouse plays too: lower on a key is louder.");
 }
 
@@ -398,6 +409,14 @@ void MainComponent::showAbout()
 }
 
 // ---- Actions ----
+
+void MainComponent::refreshRoomButton()
+{
+    roomButton.setToggleState(roomPanel->isOn(), juce::dontSendNotification);
+    roomButton.setTooltip("The room around the piano: " + roomPanel->presetName()
+                          + (roomPanel->isOn() ? juce::String(" (click: off)") : juce::String(" (off; click: on)"))
+                          + ". Ctrl+M: its settings");
+}
 
 void MainComponent::selectEngine(bool useModal)
 {
@@ -452,6 +471,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
         case 'R': toggleRecording(); return true;
         case 'S': saveLastTake(); return true;
         case 'E': showWindow(engineWindow, "Engine settings", *enginePanel); return true;
+        case 'M': showWindow(roomWindow, "Room", *roomPanel); return true;
         case 'P': showWindow(performanceWindow, "Performance", performancePanel); return true;
         case ',': showWindow(audioWindow, "Audio, MIDI and streaming", *audioPanel); return true;
         case '1': selectEngine(false); return true;
@@ -658,13 +678,16 @@ void MainComponent::saveLastTake()
         takeRender.join();
     renderingTake = true;
     // Same engine and settings as heard live, at the rate it was played: the WAV is the take as heard.
-    // Every setting of the engine heard (tuning, sympathetic resonance, pedal catch, release noise...), as it is now.
+    // Every setting of the engine heard (tuning, sympathetic resonance, pedal catch, release noise...) and the room,
+    // as they are now; the tail is longer by the room's.
     takeRender = std::thread([sequence = TakeRecorder::toSequence(*take), bank = std::move(bank), profile = std::move(profile),
-                              withModal, settings = modal.settings(), rate = take->sampleRate,
+                              withModal, settings = modal.settings(), room = host.room.settings(), rate = take->sampleRate,
                               restrike = enginePanel->restrikeSeconds(), whole = enginePanel->isOn(EnginePanel::Option::wholeTake),
                               wavFile, summary, safe = juce::Component::SafePointer<MainComponent>(this)] {
-        const auto audio = withModal ? renderSequenceModal(sequence, profile, rate, settings)
-                                     : renderSequence(sequence, bank, rate, restrike, whole);
+        const double tail = 4.0 + (room.enabled ? pf::Room::tailSeconds(room) : 0.0);
+        auto audio = withModal ? renderSequenceModal(sequence, profile, rate, settings, tail)
+                               : renderSequence(sequence, bank, rate, restrike, whole, tail);
+        applyRoom(audio, room, rate);
         const auto written = writeWav(audio, rate, wavFile);
         juce::MessageManager::callAsync([safe, written, wavFile, summary] {
             if (auto* self = safe.getComponent()) {
@@ -1034,6 +1057,8 @@ void MainComponent::resized()
     loadMeter.setBounds(bar.removeFromRight(250));
     bar.removeFromRight(16);
     pedalButton.setBounds(bar.removeFromRight(70).withSizeKeepingCentre(70, 30));
+    bar.removeFromRight(8);
+    roomButton.setBounds(bar.removeFromRight(70).withSizeKeepingCentre(70, 30));
     bar.removeFromRight(12);
     const int sliderWidth = juce::jmax(140, (bar.getWidth() - 120) / 2);
     volumeLabel.setBounds(bar.removeFromLeft(54));

@@ -33,6 +33,19 @@ juce::AudioBuffer<float> renderSequenceModal(const juce::MidiMessageSequence& se
     return renderWith(engine, sequence, sampleRate, tailSeconds);
 }
 
+void applyRoom(juce::AudioBuffer<float>& audio, const pf::Room::Settings& settings, double sampleRate)
+{
+    if (!settings.enabled || audio.getNumChannels() < 2)
+        return;
+    pf::Room room;
+    room.applySettings(settings);
+    room.prepare(sampleRate);
+    for (int start = 0; start < audio.getNumSamples(); start += 512) {
+        const int n = juce::jmin(512, audio.getNumSamples() - start);
+        room.process(audio.getWritePointer(0, start), audio.getWritePointer(1, start), n);
+    }
+}
+
 juce::AudioBuffer<float> renderWith(pf::Engine& player, const juce::MidiMessageSequence& sequence, double sampleRate,
                                     double tailSeconds)
 {

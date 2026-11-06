@@ -7,6 +7,7 @@
 
 #include <pianoforge/audio_feed.hpp>
 #include <pianoforge/engine.hpp>
+#include <pianoforge/room.hpp>
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -43,6 +44,7 @@ public:
     LiveRecorder live;                     // records what the device plays (start / stop from the interface)
     MirrorOutput mirror;                   // a copy for streaming software, on another device
     MidiFilePlayer filePlayer;             // a MIDI file, played to the sample with what the keyboards play
+    pf::Room room;                         // the room around the piano, at the output (off until the interface sets it)
     bool feedOn() const noexcept { return feedOpen; } // the audio feed of the OBS plugin (obs/)
 
     /// Message thread: sends a message as if it came from a keyboard.
@@ -58,6 +60,7 @@ public:
         collector.reset(sampleRate);
         midi.ensureSize(65536); // room for a busy block plus the player's releases: no allocation
         engine.prepare(sampleRate, blockSize);
+        room.prepare(sampleRate);
         mirror.mainFormat(sampleRate, blockSize);
         feed.setFormat((std::uint32_t) std::lround(sampleRate), (std::uint32_t) std::max(blockSize, 1));
         samplesElapsed = 0;
@@ -127,6 +130,8 @@ public:
                 overflows.fetch_add(1, std::memory_order_relaxed);
         }
         engine.process(outputs, numOutputs, n, events.data(), count);
+        if (numOutputs >= 2 && outputs[0] != nullptr && outputs[1] != nullptr)
+            room.process(outputs[0], outputs[1], n); // whichever engine: what is heard, recorded and streamed
         live.push(outputs, numOutputs, n, samplesElapsed); // a copy into a lock-free FIFO: nothing waits on it
         mirror.push(outputs, numOutputs, n);               // likewise
         feed.write(outputs, numOutputs, n);                // the OBS plugin's feed: a copy into shared memory

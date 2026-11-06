@@ -6,6 +6,7 @@
 #include "ui/EnginePanel.h"
 #include "ui/PerformancePanel.h"
 #include "ui/PlayerBar.h"
+#include "ui/RoomPanel.h"
 #include "ui/Theme.h"
 #include "KeyboardInput.h"
 #include "ReferencePlayer.h"
@@ -328,6 +329,8 @@ int runUiSnapshots(const juce::StringArray& arguments)
         host.filePlayer.load(nullptr);
         bar.fileChanged();
         save(bar, "player-bar-empty");
+        RoomPanel roomPanel(host.room, settings);
+        save(roomPanel, "room");
         settings.getFile().deleteFile();
     }
     juce::LookAndFeel::setDefaultLookAndFeel(nullptr);

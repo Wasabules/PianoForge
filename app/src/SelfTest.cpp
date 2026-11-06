@@ -643,6 +643,46 @@ int runSelfTest(const juce::StringArray& arguments)
         }
     }
 
+    // 8e. Room: a note through the audio host, the room on then off. With it, a tail rings on after the note is
+    //     damped; the dry sound is the same (the reverberation is only added), and the room off leaves it untouched.
+    {
+        auto play = [&](bool roomOn) {
+            player.playWholeTake = false;
+            AudioHost host { player };
+            pf::Room::Settings s;
+            s.enabled = roomOn;
+            s.levelDb = -15.0f;
+            s.size = 0.65f;
+            s.decaySeconds = 2.2f;
+            host.room.applySettings(s);
+            host.start(fs, 512);
+            std::vector<float> l(512), rr(512), out;
+            float* outputs[2] = { l.data(), rr.data() };
+            const int blocks = (int) (3.0 * fs) / 512;
+            for (int k = 0; k < blocks; ++k) {
+                if (k == 2)
+                    host.send(juce::MidiMessage::noteOn(1, 60, (juce::uint8) 90));
+                if (k == (int) (0.5 * fs) / 512)
+                    host.send(juce::MidiMessage::noteOff(1, 60));
+                host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, 512, {});
+                out.insert(out.end(), l.begin(), l.end());
+            }
+            return out;
+        };
+        auto level = [&](const std::vector<float>& x, double a, double b) {
+            double e = 0.0;
+            for (int i = (int) (a * fs); i < (int) (b * fs); ++i)
+                e += (double) x[(size_t) i] * x[(size_t) i];
+            return 10.0 * std::log10(e / ((b - a) * fs) + 1e-30);
+        };
+        const auto dry = play(false), wet = play(true);
+        const double during = level(wet, 0.05, 0.45) - level(dry, 0.05, 0.45);
+        const double tail = level(wet, 1.5, 2.5) - level(dry, 1.5, 2.5);
+        r.check(during < 1.5 && tail > 6.0,
+                "room: during the note " + juce::String(during, 1) + " dB over the dry sound (expected < 1.5), "
+                    + juce::String(tail, 1) + " dB over it 1 to 2 s after the release (expected > 6)");
+    }
+
     // 9. Modal engine, when the corpus state has a modal profile (forge export).
     if (const auto path = folder.getParentDirectory().getChildFile("modal-profile.bin"); path.existsAsFile()) {
         std::string error;
