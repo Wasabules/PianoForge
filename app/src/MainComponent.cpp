@@ -114,6 +114,56 @@ MainComponent::MainComponent()
     addAndMakeVisible(bodyButton);
     addAndMakeVisible(residualButton);
 
+    // Modal engine: what a piano does and the reference library does not can be switched off for A/B listening.
+    struct Switch {
+        juce::ToggleButton& button;
+        const char* text;
+        const char* key;
+        std::atomic<bool>& target;
+        const char* tip;
+    };
+    for (const auto& s : { Switch { sympatheticButton, "Sympathetic resonance", "modalSympathetic", modal.sympatheticEnabled,
+                                    "Free strings (pedal down) ring with what is played" },
+                           Switch { heldKeysButton, "Held keys resonate", "modalHeldKeys", modal.heldKeysResonate,
+                                    "The strings of keys held down ring too, without the pedal (a piano does; the reference does not)" },
+                           Switch { pedalCatchButton, "Pedal catches releases", "modalPedalCatch", modal.pedalCatch,
+                                    "Pressing the pedal again keeps what is left of the released notes (a piano does; the reference does not)" },
+                           Switch { releaseNoiseButton, "Release noise", "modalReleaseNoise", modal.releaseNoiseEnabled,
+                                    "The knock of the dampers landing, on the soundboard" } }) {
+        s.button.setButtonText(s.text);
+        s.button.setTooltip(s.tip);
+        s.button.setToggleState(settings->getBoolValue(s.key, true), juce::dontSendNotification);
+        s.target = s.button.getToggleState();
+        s.button.onClick = [this, &button = s.button, &target = s.target] {
+            target = button.getToggleState();
+            saveSettings();
+        };
+        addAndMakeVisible(s.button);
+    }
+
+    // Tuning of the modal engine: reference A4 and temperament.
+    tuningLabel.setText("Tuning (modal): A4", juce::dontSendNotification);
+    referenceA4.setRange(415.0, 466.0, 0.1);
+    referenceA4.setTextValueSuffix(" Hz");
+    referenceA4.setNumDecimalPlacesToDisplay(1);
+    referenceA4.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
+    referenceA4.setValue(settings->getDoubleValue("referenceA4", 440.0), juce::dontSendNotification);
+    referenceA4.onValueChange = [this] { applyTuning(); };
+    referenceA4.onDragEnd = [this] { saveSettings(); };
+    referenceA4.setDoubleClickReturnValue(true, 440.0);
+    for (int i = 0; i < (int) kTemperaments.size(); ++i)
+        temperamentChoice.addItem(kTemperaments[(size_t) i].name, i + 1);
+    temperamentChoice.setSelectedId(juce::jlimit(1, (int) kTemperaments.size(), settings->getIntValue("temperament", 1)),
+                                    juce::dontSendNotification);
+    const char* keys[] = { "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B" };
+    for (int i = 0; i < 12; ++i)
+        temperamentRoot.addItem(juce::String("on ") + keys[i], i + 1);
+    temperamentRoot.setSelectedId(juce::jlimit(1, 12, settings->getIntValue("temperamentRoot", 1)), juce::dontSendNotification);
+    temperamentChoice.onChange = temperamentRoot.onChange = [this] { applyTuning(); saveSettings(); };
+    for (auto* c : std::initializer_list<juce::Component*> { &tuningLabel, &referenceA4, &temperamentChoice, &temperamentRoot })
+        addAndMakeVisible(*c);
+    applyTuning();
+
     saveTakeButton.setButtonText("Save last take");
     saveTakeButton.onClick = [this] { saveLastTake(); };
     takesFolderButton.setButtonText("Takes folder");
@@ -127,6 +177,28 @@ MainComponent::MainComponent()
     addAndMakeVisible(saveTakeButton);
     addAndMakeVisible(takesFolderButton);
     addAndMakeVisible(takeStatus);
+
+    // Live recording: what the device plays, as it plays it (WAV), and the MIDI over the same span.
+    recordButton.setButtonText("Record");
+    recordButton.setTooltip("Start or stop a live recording (Ctrl+R)");
+    recordButton.onClick = [this] { toggleRecording(); };
+    recordMidiButton.setButtonText("MIDI");
+    recordMidiButton.setToggleState(settings->getBoolValue("recordMidi", true), juce::dontSendNotification);
+    recordMidiButton.onClick = [this] { saveSettings(); };
+    recordWavButton.setButtonText("WAV");
+    recordWavButton.setToggleState(settings->getBoolValue("recordWav", true), juce::dontSendNotification);
+    recordWavButton.onClick = [this] { saveSettings(); };
+    recordingsFolderButton.setButtonText("Recordings folder");
+    recordingsFolderButton.onClick = [] {
+        recordingsFolder().createDirectory();
+        recordingsFolder().startAsProcess();
+    };
+    recordStatus.setText("Record (Ctrl+R): the sound as it leaves the engine, in a 32-bit float WAV, and the MIDI aligned "
+                         "with it to the sample, in " + recordingsFolder().getFullPathName(),
+                         juce::dontSendNotification);
+    for (auto* c : std::initializer_list<juce::Component*> { &recordButton, &recordMidiButton, &recordWavButton,
+                                                             &recordingsFolderButton, &recordStatus })
+        addAndMakeVisible(*c);
 
     sustainButton.setButtonText("Sustain pedal (Space)");
     sustainButton.onClick = [this] { sendSustain(sustainButton.getToggleState()); };
@@ -187,13 +259,15 @@ MainComponent::MainComponent()
         corpusStatus.setText("No corpus found: use 'Change corpus...' and pick corpus/reference/noire-dry/single-notes",
                              juce::dontSendNotification);
 
-    setSize(1400, 562);
+    setSize(1400, 630);
     startTimerHz(20);
 }
 
 MainComponent::~MainComponent()
 {
     stopTimer();
+    if (host.live.recording())
+        finishRecording();
     saveSettings();
     if (takeRender.joinable())
         takeRender.join();
@@ -232,6 +306,10 @@ void MainComponent::applyKeyLayout()
 
 bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
 {
+    if (key.getModifiers().isCommandDown() && key.getKeyCode() == 'R') {
+        toggleRecording();
+        return true;
+    }
     const auto c = (int) juce::CharacterFunctions::toLowerCase(key.getTextCharacter());
     const bool azerty = keyLayout.getSelectedId() != kLayoutQwerty;
     if (c == (azerty ? 'w' : 'z') || c == 'x') {
@@ -304,6 +382,82 @@ void MainComponent::updateRenderedLayers()
 juce::File MainComponent::takesFolder()
 {
     return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("PianoForge").getChildFile("Takes");
+}
+
+juce::File MainComponent::recordingsFolder()
+{
+    return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("PianoForge").getChildFile("Recordings");
+}
+
+void MainComponent::toggleRecording()
+{
+    if (host.live.recording()) {
+        finishRecording();
+        return;
+    }
+    const bool midi = recordMidiButton.getToggleState(), wav = recordWavButton.getToggleState();
+    if (!midi && !wav) {
+        recordStatus.setText("Nothing to record: tick MIDI, WAV or both.", juce::dontSendNotification);
+        return;
+    }
+    if (deviceManager.getCurrentAudioDevice() == nullptr || host.currentRate() <= 0.0) {
+        recordStatus.setText("No audio device is running: see Audio and MIDI settings.", juce::dontSendNotification);
+        return;
+    }
+    recordingStem = "PianoForge " + juce::Time::getCurrentTime().formatted("%Y-%m-%d %H-%M-%S");
+    const auto wavFile = wav ? recordingsFolder().getChildFile(recordingStem + ".wav") : juce::File();
+    const auto engineName = modalSelected() ? juce::String("modal engine") : juce::String("reference player");
+    if (const auto started = host.live.start(wavFile, host.currentRate(), host.currentSegment(),
+                                             "PianoForge live recording (" + engineName + ")");
+        started.failed()) {
+        recordStatus.setText("Cannot record: " + started.getErrorMessage(), juce::dontSendNotification);
+        return;
+    }
+    recordButton.setButtonText("Stop");
+    recordButton.setColour(juce::TextButton::buttonColourId, juce::Colours::darkred);
+}
+
+void MainComponent::finishRecording()
+{
+    const auto span = host.live.stop();
+    recordButton.setButtonText("Record");
+    recordButton.removeColour(juce::TextButton::buttonColourId);
+    drained.clear(); // every event up to the stop, into the session record
+    host.drainRecorded(drained);
+    takes.add(drained, host.currentSegment(), host.currentRate());
+    if (!span.valid) {
+        if (span.wav != juce::File())
+            span.wav.deleteFile();
+        recordStatus.setText("Recording failed: " + (span.error.isNotEmpty() ? span.error : juce::String("nothing recorded")),
+                             juce::dontSendNotification);
+        return;
+    }
+    juce::StringArray saved;
+    int notes = 0;
+    if (recordMidiButton.getToggleState()) {
+        if (auto take = takes.span(span.segment, span.start, span.end)) {
+            take->text = "PianoForge live recording " + recordingStem + ", " + juce::String(span.sampleRate, 0)
+                       + " Hz: one tick per sample, tick 0 is the first sample of the WAV of the same name";
+            const auto midiFile = recordingsFolder().getChildFile(recordingStem + ".mid");
+            recordingsFolder().createDirectory();
+            midiFile.deleteFile();
+            juce::FileOutputStream out(midiFile);
+            if (out.openedOk() && TakeRecorder::toMidiFile(*take).writeTo(out)) {
+                saved.add(".mid");
+                notes = take->notes;
+            }
+        }
+    }
+    if (span.wav.existsAsFile())
+        saved.add(".wav");
+    auto text = "Saved " + recordingStem + " " + saved.joinIntoString(" and ") + " ("
+              + juce::String((double) (span.end - span.start) / span.sampleRate, 1) + " s, " + juce::String(notes)
+              + " notes) in " + recordingsFolder().getFullPathName();
+    if (span.dropped > 0)
+        text << "  WARNING: " << juce::String(span.dropped) << " samples lost (the disk did not keep up)";
+    if (span.error.isNotEmpty())
+        text << "  " << span.error;
+    recordStatus.setText(text, juce::dontSendNotification);
 }
 
 void MainComponent::saveLastTake()
@@ -424,6 +578,16 @@ void MainComponent::loadModalProfile()
     });
 }
 
+void MainComponent::applyTuning()
+{
+    const auto& t = kTemperaments[(size_t) juce::jlimit(0, (int) kTemperaments.size() - 1, temperamentChoice.getSelectedId() - 1)];
+    const auto offsets = pitchClassOffsets(t, juce::jlimit(0, 11, temperamentRoot.getSelectedId() - 1));
+    modal.referenceA4 = (float) referenceA4.getValue();
+    for (int pc = 0; pc < 12; ++pc)
+        modal.pitchClassCents[(size_t) pc] = (float) offsets[(size_t) pc];
+    modal.tuningVersion.fetch_add(1); // the free strings follow
+}
+
 void MainComponent::changeListenerCallback(juce::ChangeBroadcaster*)
 {
     saveSettings(); // the audio device changed
@@ -444,6 +608,15 @@ void MainComponent::saveSettings()
     s->setValue("engine", engineChoice.getSelectedId());
     s->setValue("modalBody", bodyButton.getToggleState());
     s->setValue("modalResidual", residualButton.getToggleState());
+    s->setValue("recordMidi", recordMidiButton.getToggleState());
+    s->setValue("modalSympathetic", sympatheticButton.getToggleState());
+    s->setValue("modalHeldKeys", heldKeysButton.getToggleState());
+    s->setValue("modalPedalCatch", pedalCatchButton.getToggleState());
+    s->setValue("modalReleaseNoise", releaseNoiseButton.getToggleState());
+    s->setValue("referenceA4", referenceA4.getValue());
+    s->setValue("temperament", temperamentChoice.getSelectedId());
+    s->setValue("temperamentRoot", temperamentRoot.getSelectedId());
+    s->setValue("recordWav", recordWavButton.getToggleState());
     s->saveIfNeeded();
 }
 
@@ -476,6 +649,16 @@ void MainComponent::timerCallback()
     drained.clear(); // take capture: move what reached the engine into the session record
     host.drainRecorded(drained);
     takes.add(drained, host.currentSegment(), host.currentRate());
+    if (host.live.endedByDevice()) { // the device stopped or changed: the recording ends there
+        finishRecording();
+    } else if (host.live.recording()) {
+        const double t = host.live.seconds();
+        auto text = juce::String::formatted("Recording %d:%04.1f", (int) t / 60, std::fmod(t, 60.0)) + "  -  " + recordingStem
+                  + (recordWavButton.getToggleState() ? " .wav" : "") + (recordMidiButton.getToggleState() ? " .mid" : "");
+        if (const auto lost = host.live.droppedSamples(); lost > 0)
+            text << "  (" << juce::String(lost) << " samples lost)";
+        recordStatus.setText(text, juce::dontSendNotification);
+    }
 
     if (loader.isLoading()) {
         loadProgress = loader.progress();
@@ -533,7 +716,9 @@ void MainComponent::timerCallback()
     if (modalSelected())
         engineStatus.setText("Modal engine | voices: " + juce::String(modal.activeVoices.load()) + " / "
                                  + juce::String(pf::ModalEngine::kMaxVoices) + "   |   resonators: "
-                                 + juce::String(modal.activeModes.load()) + "   |   Audio thread load: "
+                                 + juce::String(modal.activeModes.load()) + "   |   free strings ringing: "
+                                 + juce::String(modal.ringingStrings.load()) + "   |   pedal "
+                                 + juce::String(juce::roundToInt(modal.pedalPosition.load() * 100.0f)) + " %   |   Audio thread load: "
                                  + juce::String(deviceManager.getCpuUsage() * 100.0, 1) + " %   |   Stolen voices: "
                                  + juce::String((int) modal.stolenVoices.load()),
                              juce::dontSendNotification);
@@ -615,6 +800,20 @@ void MainComponent::resized()
     row = area.removeFromTop(28);
     restrikeLabel.setBounds(row.removeFromLeft(270));
     restrikeFade.setBounds(row.removeFromLeft(300));
+    row.removeFromLeft(16);
+    sympatheticButton.setBounds(row.removeFromLeft(180));
+    heldKeysButton.setBounds(row.removeFromLeft(160));
+    pedalCatchButton.setBounds(row.removeFromLeft(190));
+    releaseNoiseButton.setBounds(row.removeFromLeft(140));
+
+    area.removeFromTop(4);
+    row = area.removeFromTop(28);
+    tuningLabel.setBounds(row.removeFromLeft(130));
+    referenceA4.setBounds(row.removeFromLeft(300));
+    row.removeFromLeft(12);
+    temperamentChoice.setBounds(row.removeFromLeft(220).reduced(0, 2));
+    row.removeFromLeft(8);
+    temperamentRoot.setBounds(row.removeFromLeft(90).reduced(0, 2));
 
     area.removeFromTop(6);
     row = area.removeFromTop(28);
@@ -622,6 +821,15 @@ void MainComponent::resized()
     takesFolderButton.setBounds(row.removeFromLeft(120).reduced(2));
     row.removeFromLeft(8);
     takeStatus.setBounds(row);
+
+    area.removeFromTop(6);
+    row = area.removeFromTop(28);
+    recordButton.setBounds(row.removeFromLeft(140).reduced(2));
+    recordMidiButton.setBounds(row.removeFromLeft(70));
+    recordWavButton.setBounds(row.removeFromLeft(70));
+    recordingsFolderButton.setBounds(row.removeFromLeft(140).reduced(2));
+    row.removeFromLeft(8);
+    recordStatus.setBounds(row);
 }
 
 } // namespace pf::app

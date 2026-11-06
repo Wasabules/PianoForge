@@ -51,19 +51,47 @@ std::optional<TakeRecorder::Take> TakeRecorder::lastTake(double gapSeconds, doub
     return take;
 }
 
+std::optional<TakeRecorder::Take> TakeRecorder::span(std::uint32_t segment, std::int64_t from, std::int64_t to) const
+{
+    const auto rate = rates.count(segment) != 0 ? rates.at(segment) : 0.0;
+    if (rate <= 0.0 || to <= from)
+        return std::nullopt;
+    std::array<int, 128> controllers {};
+    controllers.fill(-1);
+    Take take;
+    take.sampleRate = rate;
+    take.exactLength = true;
+    take.lengthSamples = to - from;
+    for (const auto& e : events) // pedals already down at the start: re-stated there
+        if (e.segment == segment && e.sample < from && (e.status & 0xF0) == 0xB0)
+            controllers[e.data1] = e.data2;
+    for (const int cc : { 64, 66, 67 })
+        if (controllers[(size_t) cc] > 0)
+            take.events.push_back({ 0, segment, 0xB0, (std::uint8_t) cc, (std::uint8_t) controllers[(size_t) cc] });
+    for (auto e : events)
+        if (e.segment == segment && e.sample >= from && e.sample < to) {
+            e.sample -= from;
+            take.events.push_back(e);
+            take.notes += ((e.status & 0xF0) == 0x90 && e.data2 > 0) ? 1 : 0;
+        }
+    return take;
+}
+
 juce::MidiFile TakeRecorder::toMidiFile(const Take& take)
 {
     juce::MidiMessageSequence sequence; // timestamps in ticks: one tick per sample
-    sequence.addEvent(juce::MidiMessage::tempoMetaEvent(500000), 0.0); // 120 BPM
-    sequence.addEvent(juce::MidiMessage::textMetaEvent(1, "PianoForge take, sample rate " + juce::String(take.sampleRate, 0)
-                                                              + " Hz, velocities after the velocity curve"), 0.0);
+    const bool fast = take.sampleRate > 65534.0;
+    sequence.addEvent(juce::MidiMessage::tempoMetaEvent(fast ? 250000 : 500000), 0.0); // 240 or 120 BPM
+    sequence.addEvent(juce::MidiMessage::textMetaEvent(1, take.text.isNotEmpty() ? take.text
+                                                              : "PianoForge take, sample rate " + juce::String(take.sampleRate, 0)
+                                                                    + " Hz, velocities after the velocity curve"), 0.0);
     for (const auto& e : take.events)
         sequence.addEvent(juce::MidiMessage(e.status, e.data1, e.data2), (double) e.sample);
-    sequence.addEvent(juce::MidiMessage::endOfTrack(), (double) take.lengthSamples + take.sampleRate);
+    sequence.addEvent(juce::MidiMessage::endOfTrack(), (double) take.lengthSamples + (take.exactLength ? 0.0 : take.sampleRate));
     // No updateMatchedPairs(): it inserts a note-off before a re-strike of a note still held, which changes what
     // the engine receives (a damper release instead of a re-strike). The file holds exactly what was played.
     juce::MidiFile file;
-    file.setTicksPerQuarterNote((int) std::lround(take.sampleRate / 2.0));
+    file.setTicksPerQuarterNote((int) std::lround(take.sampleRate / (fast ? 4.0 : 2.0)));
     file.addTrack(sequence);
     return file;
 }

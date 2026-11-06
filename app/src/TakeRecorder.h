@@ -25,8 +25,10 @@ public:
     struct Take {
         double sampleRate = 0.0;
         std::vector<RecordedEvent> events; // positions relative to the take start
-        std::int64_t lengthSamples = 0;    // up to the last event
+        std::int64_t lengthSamples = 0;    // up to the last event (a span: its exact length)
         int notes = 0;
+        bool exactLength = false;          // a span: the MIDI file ends exactly where the span does
+        juce::String text;                 // a text event at the start of the MIDI file, when not empty
     };
 
     void add(const std::vector<RecordedEvent>& newEvents, std::uint32_t currentSegment, double currentRate);
@@ -36,7 +38,12 @@ public:
     /// the pedal state at that moment re-stated at the start. Empty when nothing was played.
     std::optional<Take> lastTake(double gapSeconds = 10.0, double leadSeconds = 0.2) const;
 
-    /// The take as a MIDI file: 120 BPM with sampleRate / 2 ticks per quarter note, i.e. one tick per sample.
+    /// The events of device session `segment` in [from, to) (sample positions), relative to `from`, with the
+    /// pedal state at `from` re-stated at the start: the MIDI of a live recording, aligned with its WAV.
+    std::optional<Take> span(std::uint32_t segment, std::int64_t from, std::int64_t to) const;
+
+    /// The take as a MIDI file with one tick per sample: 120 BPM and sampleRate / 2 ticks per quarter note (240 BPM
+    /// and sampleRate / 4 above 65.5 kHz, a MIDI file holding at most 32767 ticks per quarter note).
     static juce::MidiFile toMidiFile(const Take& take);
     /// The take as a sequence timed in seconds, as an offline render expects it.
     static juce::MidiMessageSequence toSequence(const Take& take);

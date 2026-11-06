@@ -6,6 +6,7 @@
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
 #include "TakeRecorder.h"
+#include "Tuning.h"
 #include "VelocityCurveEditor.h"
 
 #include <pianoforge/modal_engine.hpp>
@@ -41,6 +42,9 @@ private:
     void openVelocityCurve();
     void saveLastTake();
     static juce::File takesFolder();
+    void toggleRecording();
+    void finishRecording();
+    static juce::File recordingsFolder();
     void updateRenderedLayers();
     void chooseCorpus();
     void loadCorpus(const juce::File& folder);
@@ -50,6 +54,7 @@ private:
     void applyKeyLayout();
     void sendSustain(bool down);
     void saveSettings();
+    void applyTuning();
     juce::String audioDescription() const;
 
     juce::ApplicationProperties properties;
@@ -78,7 +83,15 @@ private:
     juce::Label title, corpusStatus, modalStatus, audioStatus, noteStatus, engineStatus, help, takeStatus;
     juce::ComboBox engineChoice;
     juce::ToggleButton bodyButton, residualButton;
+    juce::ToggleButton sympatheticButton, heldKeysButton, pedalCatchButton, releaseNoiseButton;
+    juce::Label tuningLabel;
+    juce::Slider referenceA4;
+    juce::ComboBox temperamentChoice, temperamentRoot;
     juce::TextButton audioButton, corpusButton, curveButton, saveTakeButton, takesFolderButton;
+    juce::TextButton recordButton, recordingsFolderButton;
+    juce::ToggleButton recordMidiButton, recordWavButton;
+    juce::Label recordStatus;
+    juce::String recordingStem;
     juce::ToggleButton sustainButton, wholeTakeButton;
     juce::Slider volume, velocity, restrikeFade;
     juce::Label volumeLabel, velocityLabel, restrikeLabel;

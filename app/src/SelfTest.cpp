@@ -12,6 +12,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <cmath>
+#include <thread>
 
 namespace pf::app {
 
@@ -352,6 +353,84 @@ int runSelfTest(const juce::StringArray& arguments)
                 "take recorded live, saved as MIDI, re-rendered offline: " + juce::String(take.has_value() ? take->notes : 0)
                     + " notes captured, " + juce::String(notesInFile) + " in the file, largest difference with the live audio "
                     + (worstDb <= -300.0 ? juce::String("none (bit-identical)") : juce::String(worstDb, 1) + " dBFS"));
+    }
+
+    // 8b. Live recording: started and stopped from another thread while the audio callbacks run, the WAV must be
+    //     the audio sent to the device over the span, sample for sample, and the MIDI must line up with it (tick 0
+    //     = WAV sample 0, the pedal already down re-stated there).
+    {
+        constexpr int block = 256;
+        AudioHost host { player };
+        host.start(fs, block);
+        const int blocks = (int) (3.0 * fs) / block;
+        juce::AudioBuffer<float> live(2, blocks * block);
+        std::vector<float> l(block), rr(block);
+        float* outputs[2] = { l.data(), rr.data() };
+        const std::vector<std::pair<int, juce::MidiMessage>> script = {
+            { 10, juce::MidiMessage::noteOn(1, 60, (juce::uint8) 90) }, { 20, juce::MidiMessage::controllerEvent(1, 64, 127) },
+            { 50, juce::MidiMessage::noteOn(1, 64, (juce::uint8) 70) }, { 80, juce::MidiMessage::noteOff(1, 60) },
+            { 120, juce::MidiMessage::controllerEvent(1, 64, 0) }, { 150, juce::MidiMessage::noteOn(1, 67, (juce::uint8) 100) },
+            { 210, juce::MidiMessage::noteOff(1, 67) } };
+        const auto wav = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("pianoforge-selftest-recording.wav");
+        TakeRecorder recorder;
+        std::vector<RecordedEvent> recorded;
+        LiveRecorder::Span span;
+        std::thread stopper;
+        juce::String startError;
+        size_t next = 0;
+        for (int k = 0; k < blocks; ++k) {
+            if (k == 40)
+                if (const auto started = host.live.start(wav, fs, host.currentSegment(), "self-test"); started.failed())
+                    startError = started.getErrorMessage();
+            if (k == 200) { // stop() waits for the audio thread: from another thread, as the user interface does
+                stopper = std::thread([&] { span = host.live.stop(); });
+                while (!host.live.stopPending()) // the request is made before this block, as it would be live
+                    std::this_thread::yield();
+            }
+            while (next < script.size() && script[next].first == k)
+                host.send(script[next++].second);
+            host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, block, {});
+            live.copyFrom(0, k * block, l.data(), block);
+            live.copyFrom(1, k * block, rr.data(), block);
+            if (k == 200)
+                stopper.join(); // acknowledged by the callback just run
+        }
+        host.drainRecorded(recorded);
+        recorder.add(recorded, host.currentSegment(), host.currentRate());
+        float wavError = -1.0f;
+        int frames = 0;
+        if (span.valid) {
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+            if (std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(wav)); reader != nullptr) {
+                frames = (int) reader->lengthInSamples;
+                juce::AudioBuffer<float> file(2, frames);
+                reader->read(&file, 0, frames, 0, true, true);
+                wavError = 0.0f;
+                for (int c = 0; c < 2; ++c)
+                    for (int k = 0; k < frames && span.start + k < live.getNumSamples(); ++k)
+                        wavError = juce::jmax(wavError, std::abs(file.getSample(c, k) - live.getSample(c, (int) span.start + k)));
+            }
+        }
+        const auto take = span.valid ? recorder.span(span.segment, span.start, span.end) : std::nullopt;
+        bool aligned = take.has_value() && !take->events.empty() && take->events.front().sample == 0
+                       && take->events.front().status == 0xB0 && take->events.front().data2 == 127;
+        int inside = 0;
+        for (const auto& e : recorded)
+            inside += e.sample >= span.start && e.sample < span.end ? 1 : 0;
+        aligned = aligned && take.has_value() && (int) take->events.size() == inside + 1 && take->notes == 2;
+        if (aligned)
+            for (const auto& e : take->events) // every event at its own position, relative to the WAV's first sample
+                aligned = aligned && e.sample >= 0 && e.sample < span.end - span.start;
+        wav.deleteFile();
+        r.check(startError.isEmpty() && span.valid && span.start == 40 * block && span.end == 200 * block
+                    && frames == (int) (span.end - span.start) && wavError == 0.0f && span.dropped == 0 && aligned,
+                "live recording: started at block 40, stopped at block 200 from another thread: span "
+                    + juce::String(span.start) + " to " + juce::String(span.end) + ", WAV of " + juce::String(frames)
+                    + " frames, " + (wavError == 0.0f ? juce::String("identical to the audio sent to the device")
+                                                   : "largest difference " + juce::String(wavError))
+                    + ", MIDI " + (aligned ? "aligned (pedal re-stated at tick 0, " + juce::String(take->notes) + " notes)"
+                                           : juce::String("NOT aligned")) + startError);
     }
 
     // 9. Modal engine, when the corpus state has a modal profile (forge export).

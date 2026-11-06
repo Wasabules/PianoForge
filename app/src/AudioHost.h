@@ -1,5 +1,6 @@
 #pragma once
 
+#include "LiveRecorder.h"
 #include "TakeRecorder.h"
 
 #include <pianoforge/engine.hpp>
@@ -22,6 +23,7 @@ public:
 
     juce::MidiMessageCollector collector; // MIDI from keyboards (MIDI thread) and from the UI (message thread)
     juce::MidiKeyboardState keyboardState; // on-screen keyboard; also displays the notes received
+    LiveRecorder live;                     // records what the device plays (start / stop from the interface)
 
     /// Message thread: sends a message as if it came from a keyboard.
     void send(const juce::MidiMessage& m)
@@ -60,6 +62,7 @@ public:
 
     void audioDeviceStopped() override
     {
+        live.deviceStopped();
         engine.release();
     }
 
@@ -91,6 +94,7 @@ public:
                 overflows.fetch_add(1, std::memory_order_relaxed);
         }
         engine.process(outputs, numOutputs, n, events.data(), count);
+        live.push(outputs, numOutputs, n, samplesElapsed); // a copy into a lock-free FIFO: nothing waits on it
         samplesElapsed += n;
     }
 
