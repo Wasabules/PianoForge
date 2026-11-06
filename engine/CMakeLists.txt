@@ -2,6 +2,7 @@
 add_library(pianoforge_engine STATIC
     src/modal_profile.cpp
     src/modal_engine.cpp
+    src/midi_sequence.cpp
     src/room.cpp)
 # Not in a browser: the profile from a file, and the OBS plugin's shared memory.
 if(NOT EMSCRIPTEN)
@@ -53,8 +54,11 @@ if(BUILD_TESTING)
     add_executable(room_test tests/room_test.cpp)
     target_link_libraries(room_test PRIVATE pianoforge::engine)
     add_test(NAME room COMMAND room_test)
+    add_executable(sequence_test tests/sequence_test.cpp)
+    target_link_libraries(sequence_test PRIVATE pianoforge::engine)
+    add_test(NAME sequence COMMAND sequence_test)
     if(EMSCRIPTEN) # run by Node: a growing memory, and a stack for the engines the tests build on it
-        foreach(test velocity_curve_test mode_bank_test modal_engine_test room_test)
+        foreach(test velocity_curve_test mode_bank_test modal_engine_test room_test sequence_test)
             target_link_options(${test} PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB -sSTACK_SIZE=8MB)
         endforeach()
     endif()

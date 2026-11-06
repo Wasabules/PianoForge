@@ -55,6 +55,9 @@ const COMPUTER_KEYS = ['KeyA', 'KeyW', 'KeyS', 'KeyE', 'KeyD', 'KeyF', 'KeyT', '
   'KeyK', 'KeyO', 'KeyL', 'KeyP', 'Semicolon']; // physical places: QWERTY names, AZERTY keys alike
 
 let context = null, node = null, profile = null, midi = null;
+let midiFile = null;           // { name, bytes, notes, tracks, length, drumsLeftOut } once the worklet has read it
+let filePosition = 0, filePlaying = false, seeking = false;
+let fileKeys = new Set();      // the keys the MIDI file has sounding (from the worklet)
 let octave = store.get('octave', 4), velocity = store.get('velocity', 100);
 const held = new Map();        // computer key code -> note
 const pointers = new Map();    // pointer id -> note
@@ -137,7 +140,15 @@ function buildKeyboard() {
 function show(note, down) {
   if (note < 0 || note > 127) return;
   sounding[note] = Math.max(0, sounding[note] + (down ? 1 : -1));
-  keys.get(note)?.classList.toggle('down', sounding[note] > 0);
+  keys.get(note)?.classList.toggle('down', sounding[note] > 0 || fileKeys.has(note));
+}
+
+/** The MIDI file's sounding keys, from the worklet: the display follows. */
+function showFileKeys(list) {
+  const now = new Set(list);
+  for (const note of new Set([...fileKeys, ...now]))
+    keys.get(note)?.classList.toggle('down', sounding[note] > 0 || now.has(note));
+  fileKeys = now;
 }
 
 function noteOn(note, v, curved) {
@@ -160,6 +171,12 @@ function typing(event) {
 }
 
 window.addEventListener('keydown', (event) => {
+  if (event.ctrlKey && !event.altKey && !typing(event)) { // the MIDI file player
+    if (event.code === 'Space') { event.preventDefault(); togglePlay(); }
+    else if (event.code === 'Home') { event.preventDefault(); stopFile(); }
+    else if (event.code === 'ArrowLeft' || event.code === 'ArrowRight') { event.preventDefault(); nudge(event.code === 'ArrowLeft' ? -5 : 5); }
+    return;
+  }
   if (typing(event) || event.ctrlKey || event.metaKey || event.altKey) return;
   if (event.code === 'Space') { event.preventDefault(); if (!event.repeat) pedal(64, true); return; }
   if (event.repeat) return;
@@ -184,7 +201,7 @@ window.addEventListener('keydown', (event) => {
 });
 
 window.addEventListener('keyup', (event) => {
-  if (event.code === 'Space') { pedal(64, false); return; }
+  if (event.code === 'Space' && !event.ctrlKey) { pedal(64, false); return; }
   if (event.code === 'KeyB') { pedal(66, false); return; }
   const note = held.get(event.code);
   if (note !== undefined) {
@@ -227,6 +244,104 @@ async function connectMidi() {
   };
   midi.onstatechange = attach;
   attach();
+}
+
+// ---- The MIDI file player (it plays in the worklet, to the sample: the lab's sequence player) ----
+const clock = (seconds) => {
+  const s = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+
+/** The time at the speed set: one second per second, against the duration at that speed; away from 100 %, the
+ *  file's own time in brackets. */
+function timeText(position, length, speed) {
+  if (Math.abs(speed - 1) < 1e-3) return `${clock(position)} / ${clock(length)}`;
+  return `${clock(position / speed)} / ${clock(length / speed)}   (file ${clock(position)} / ${clock(length)})`;
+}
+
+const speedFactor = () => Number($('midiSpeed').value) / 100;
+
+function showPlayer() {
+  const loaded = !!midiFile;
+  for (const id of ['midiPlay', 'midiStop', 'midiPosition']) $(id).disabled = !loaded;
+  $('midiPlay').innerHTML = filePlaying ? '&#10074;&#10074;' : '&#9654;';
+  $('midiPlay').classList.toggle('on', filePlaying);
+  if (!loaded) {
+    $('midiTime').textContent = '-:-- / -:--';
+    return;
+  }
+  $('midiPosition').max = String(Math.max(0.01, midiFile.length));
+  if (!seeking) $('midiPosition').value = String(filePosition);
+  const at = seeking ? Number($('midiPosition').value) : filePosition;
+  $('midiTime').textContent = timeText(at, midiFile.length, speedFactor());
+}
+
+function openMidi(file) {
+  if (!file) return;
+  file.arrayBuffer().then((bytes) => {
+    midiFile = { name: file.name.replace(/\.(mid|midi|smf|kar)$/i, ''), bytes };
+    if (node) send({ type: 'midiFile', bytes: bytes.slice(0) });
+    else message(`${midiFile.name}: it goes to the engine once started (Start).`);
+  });
+}
+
+function togglePlay() {
+  if (!midiFile) return;
+  send({ type: filePlaying ? 'midiPause' : 'midiPlay' });
+  filePlaying = !filePlaying;
+  showPlayer();
+}
+
+function stopFile() {
+  if (!midiFile) return;
+  send({ type: 'midiStop' });
+  filePlaying = false;
+  filePosition = 0;
+  showPlayer();
+}
+
+function nudge(seconds) {
+  if (!midiFile) return;
+  send({ type: 'midiSeek', seconds: Math.max(0, Math.min(midiFile.length, filePosition + seconds)) });
+}
+
+function buildPlayer() {
+  $('midiFile').addEventListener('change', (event) => openMidi(event.target.files?.[0]));
+  $('midiPlay').addEventListener('click', togglePlay);
+  $('midiStop').addEventListener('click', stopFile);
+  $('midiPosition').addEventListener('input', () => { seeking = true; showPlayer(); });
+  $('midiPosition').addEventListener('change', () => {
+    seeking = false;
+    filePosition = Number($('midiPosition').value);
+    send({ type: 'midiSeek', seconds: filePosition });
+    showPlayer();
+  });
+  $('midiSpeed').value = String(store.get('midiSpeed', 100));
+  $('midiLoop').checked = store.get('midiLoop', false);
+  const speedChanged = () => {
+    $('midiSpeedOut').textContent = `${$('midiSpeed').value} %`;
+    store.set('midiSpeed', Number($('midiSpeed').value));
+    send({ type: 'midiSpeed', factor: speedFactor() });
+    showPlayer();
+  };
+  $('midiSpeed').addEventListener('input', speedChanged);
+  $('midiSpeed').addEventListener('dblclick', () => { $('midiSpeed').value = '100'; speedChanged(); });
+  $('midiLoop').addEventListener('change', () => {
+    store.set('midiLoop', $('midiLoop').checked);
+    send({ type: 'midiLoop', on: $('midiLoop').checked });
+  });
+  $('midiSpeedOut').textContent = `${$('midiSpeed').value} %`;
+  // A MIDI file dropped anywhere on the page.
+  const midiIn = (event) => [...(event.dataTransfer?.items ?? [])].some((i) => i.kind === 'file');
+  window.addEventListener('dragover', (event) => { if (midiIn(event)) { event.preventDefault(); document.body.classList.add('dropping'); } });
+  window.addEventListener('dragleave', () => document.body.classList.remove('dropping'));
+  window.addEventListener('drop', (event) => {
+    event.preventDefault();
+    document.body.classList.remove('dropping');
+    const file = [...(event.dataTransfer?.files ?? [])].find((f) => /\.(mid|midi|smf|kar)$/i.test(f.name));
+    if (file) openMidi(file);
+  });
+  showPlayer();
 }
 
 // ---- Settings ----
@@ -360,6 +475,9 @@ function received(data) {
       $('audioLine').textContent = `${(data.sampleRate / 1000).toFixed(1)} kHz, blocks of 128 (the browser converts to the device's rate)`;
       $('latencyLine').textContent = latency > 0 ? `Output latency about ${(latency * 1000).toFixed(0)} ms (browser and system)` : 'Output latency: not reported by this browser';
       apply();
+      send({ type: 'midiSpeed', factor: speedFactor() });
+      send({ type: 'midiLoop', on: $('midiLoop').checked });
+      if (midiFile) send({ type: 'midiFile', bytes: midiFile.bytes.slice(0) }); // opened before the start
       if (profile) sendProfile();
       else message('Choose modal-profile.bin to hear the piano.');
       break;
@@ -374,6 +492,21 @@ function received(data) {
         message('The profile did not load: ' + data.error, 'bad');
       }
       break;
+    case 'midiFile':
+      if (data.ok) {
+        Object.assign(midiFile, data);
+        filePosition = 0;
+        filePlaying = false;
+        $('midiName').textContent = `${midiFile.name}   (${data.notes} notes, ${data.tracks} ${data.tracks === 1 ? 'track' : 'tracks'}`
+          + (data.drumsLeftOut ? ', drums (channel 10) left out)' : ')');
+        $('midiName').classList.remove('dim');
+        message(`Opened ${midiFile.name}: Ctrl+Space plays it, with its own velocities.`, 'good');
+      } else {
+        midiFile = null;
+        message('Cannot open the MIDI file: ' + data.error, 'bad');
+      }
+      showPlayer();
+      break;
     case 'info':
       $('voicesLine').textContent = `${data.voices} ${data.voices === 1 ? 'voice' : 'voices'} of 64, ${data.resonators.toLocaleString('en')} resonators`;
       if (data.lastNote >= 0)
@@ -381,6 +514,10 @@ function received(data) {
       $('pedal').classList.toggle('on', data.sustain);
       $('sostenuto').classList.toggle('on', data.sostenuto);
       $('meterFill').style.width = `${Math.min(100, Math.max(0, (20 * Math.log10(data.peak + 1e-9) + 60) / 60 * 100))}%`;
+      filePosition = data.file.position;
+      filePlaying = data.file.playing;
+      showFileKeys(data.file.keys);
+      showPlayer();
       break;
     case 'error':
       message('The engine did not start: ' + data.message, 'bad');
@@ -393,6 +530,7 @@ function received(data) {
 // ---- Page start ----
 buildKeyboard();
 buildSettings();
+buildPlayer();
 profileDb.get().then((entry) => {
   if (entry) profile = { name: entry.name, size: entry.bytes.byteLength, bytes: entry.bytes };
   describeProfile();

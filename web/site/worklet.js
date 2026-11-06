@@ -1,7 +1,8 @@
 // The engine runs here, on the browser's audio thread, away from the page: the interface cannot make it stutter.
 // The module (pianoforge.wasm, built from web/src/exports.cpp) comes in the processor's options; the profile
-// arrives later as bytes, from the page (which keeps it in the browser: it is never uploaded).
-const INFO_HZ = 20;
+// arrives later as bytes, from the page (which keeps it in the browser: it is never uploaded); so does a MIDI file,
+// which plays here to the sample (the lab's sequence player).
+const INFO_HZ = 30;
 
 class PianoForgeProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -30,17 +31,39 @@ class PianoForgeProcessor extends AudioWorkletProcessor {
     return s;
   }
 
-  loadProfile(bytes) {
+  /** Copies bytes into the module's memory, runs `use(pointer, length)`, frees them. */
+  withBytes(bytes, use) {
     const { pf } = this;
     const data = new Uint8Array(bytes);
     const pointer = pf.pf_alloc(data.length);
-    if (pointer === 0) return { ok: false, error: 'out of memory for the profile' };
+    if (pointer === 0) return -1;
     new Uint8Array(pf.memory.buffer, pointer, data.length).set(data);
-    const status = pf.pf_load_profile(pointer, data.length);
+    const status = use(pointer, data.length);
     pf.pf_free(pointer);
+    return status;
+  }
+
+  loadMidi(bytes) {
+    const { pf } = this;
+    const status = this.withBytes(bytes, (pointer, length) => pf.pf_midi_load(pointer, length));
+    return status === 0
+      ? { ok: true, notes: pf.pf_midi_notes(), tracks: pf.pf_midi_tracks(), length: pf.pf_midi_length(), drumsLeftOut: pf.pf_midi_drums_left_out() !== 0 }
+      : { ok: false, error: status < 0 ? 'out of memory' : this.text(pf.pf_error()) };
+  }
+
+  loadProfile(bytes) {
+    const { pf } = this;
+    const status = this.withBytes(bytes, (pointer, length) => pf.pf_load_profile(pointer, length));
     return status === 0
       ? { ok: true, notes: pf.pf_profile_notes(), layers: pf.pf_profile_layers() }
-      : { ok: false, error: this.text(pf.pf_error()) };
+      : { ok: false, error: status < 0 ? 'out of memory for the profile' : this.text(pf.pf_error()) };
+  }
+
+  /** The keys the MIDI file has sounding (for the keyboard's display). */
+  fileKeys() {
+    const keys = [];
+    for (let key = 21; key <= 108; key++) if (this.pf.pf_midi_sounding(key) > 0) keys.push(key);
+    return keys;
   }
 
   command(c) {
@@ -52,6 +75,14 @@ class PianoForgeProcessor extends AudioWorkletProcessor {
         break;
       }
       case 'midi': pf.pf_event(c.status, c.data1, c.data2, c.curved ? 1 : 0); break;
+      case 'midiFile': this.port.postMessage({ type: 'midiFile', ...this.loadMidi(c.bytes) }); break;
+      case 'midiClose': pf.pf_midi_close(); break;
+      case 'midiPlay': pf.pf_midi_play(); break;
+      case 'midiPause': pf.pf_midi_pause(); break;
+      case 'midiStop': pf.pf_midi_stop(); break;
+      case 'midiSeek': pf.pf_midi_seek(c.seconds); break;
+      case 'midiSpeed': pf.pf_midi_speed(c.factor); break;
+      case 'midiLoop': pf.pf_midi_loop(c.on ? 1 : 0); break;
       case 'allSoundOff': pf.pf_all_sound_off(); break;
       case 'volume': pf.pf_set_volume_db(c.db); break;
       case 'option': pf.pf_set_option(c.option, c.on ? 1 : 0); break;
@@ -94,6 +125,7 @@ class PianoForgeProcessor extends AudioWorkletProcessor {
         lastVelocity: pf.pf_last_velocity(),
         lastLayer: pf.pf_last_layer(),
         peak: this.peak,
+        file: { position: pf.pf_midi_position(), playing: pf.pf_midi_playing() !== 0, keys: this.fileKeys() },
       });
       this.peak = 0;
     }

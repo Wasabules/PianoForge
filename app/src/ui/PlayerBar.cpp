@@ -12,6 +12,15 @@ juce::String clock(double seconds)
     return juce::String(s / 60) + ":" + juce::String(s % 60).paddedLeft('0', 2);
 }
 
+/// The time at the speed set: the counter goes on one second per second, against the duration at that speed;
+/// away from 100 %, the file's own time follows in brackets.
+juce::String timeText(double position, double length, double speed)
+{
+    if (std::abs(speed - 1.0) < 1e-3)
+        return clock(position) + " / " + clock(length);
+    return clock(position / speed) + " / " + clock(length / speed) + "   (file " + clock(position) + " / " + clock(length) + ")";
+}
+
 } // namespace
 
 // ---- TransportButton ----
@@ -69,6 +78,8 @@ PlayerBar::PlayerBar(MidiFilePlayer& p, juce::PropertiesFile& s) : player(p), se
     nameLabel.setMinimumHorizontalScale(0.7f);
     timeLabel.setFont(theme::font(13.0f));
     timeLabel.setJustificationType(juce::Justification::centred);
+    timeLabel.setTooltip("The time at the speed set (one second per second, against the duration at that speed); "
+                         "away from 100 %, the file's own time in brackets");
 
     position.setSliderStyle(juce::Slider::LinearHorizontal);
     position.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
@@ -83,7 +94,7 @@ PlayerBar::PlayerBar(MidiFilePlayer& p, juce::PropertiesFile& s) : player(p), se
     };
     position.onValueChange = [this] { // while dragging: the time follows the thumb
         if (dragging)
-            timeLabel.setText(clock(position.getValue()) + " / " + clock(position.getMaximum()), juce::dontSendNotification);
+            timeLabel.setText(timeText(position.getValue(), position.getMaximum(), player.getSpeed()), juce::dontSendNotification);
     };
 
     speedLabel.setText("Speed", juce::dontSendNotification);
@@ -187,9 +198,9 @@ void PlayerBar::fileChanged()
         juce::String details = juce::String(s->notes) + " notes, " + juce::String(s->tracks) + (s->tracks == 1 ? " track" : " tracks");
         if (s->drumsLeftOut)
             details << ", drums (channel 10) left out";
-        nameLabel.setText(s->name + "   (" + details + ")", juce::dontSendNotification);
+        nameLabel.setText(juce::String::fromUTF8(s->name.c_str()) + "   (" + details + ")", juce::dontSendNotification);
         nameLabel.setColour(juce::Label::textColourId, theme::text);
-        nameLabel.setTooltip(s->path);
+        nameLabel.setTooltip(juce::String::fromUTF8(s->path.c_str()));
     } else {
         position.setRange(0.0, 1.0, 0.0);
         nameLabel.setText("No MIDI file: Open, or drop a .mid file on the window", juce::dontSendNotification);
@@ -212,7 +223,7 @@ void PlayerBar::refresh()
     }
     if (!dragging) {
         position.setValue(player.position(), juce::dontSendNotification);
-        timeLabel.setText(clock(player.position()) + " / " + clock(s->length), juce::dontSendNotification);
+        timeLabel.setText(timeText(player.position(), s->length, player.getSpeed()), juce::dontSendNotification);
     }
 }
 
@@ -250,7 +261,7 @@ void PlayerBar::resized()
     speed.setBounds(area.removeFromRight(170));
     speedLabel.setBounds(area.removeFromRight(50));
     area.removeFromRight(12);
-    timeLabel.setBounds(area.removeFromRight(100));
+    timeLabel.setBounds(area.removeFromRight(235)); // the time at the speed, and the file's
     nameLabel.setBounds(area.removeFromLeft(juce::jmin(380, area.getWidth() / 2)));
     area.removeFromLeft(8);
     position.setBounds(area);

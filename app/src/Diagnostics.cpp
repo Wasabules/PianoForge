@@ -326,6 +326,10 @@ int runUiSnapshots(const juce::StringArray& arguments)
         bar.fileChanged();
         bar.setBounds(0, 0, 1416, 40);
         save(bar, "player-bar");
+        bar.setSpeed(1.5); // the time at the speed, and the file's
+        bar.refresh();
+        save(bar, "player-bar-150");
+        bar.setSpeed(1.0);
         host.filePlayer.load(nullptr);
         bar.fileChanged();
         save(bar, "player-bar-empty");

@@ -1,7 +1,8 @@
 # PianoForge in a browser
 
 The modal engine and its room, compiled to WebAssembly, played from a page: an 88-key keyboard (mouse, computer
-keyboard, Web MIDI), the sustain and sostenuto pedals, the room and the engine's options.
+keyboard, Web MIDI), the sustain and sostenuto pedals, the room, the engine's options, and a MIDI file player (the
+lab's own sequence player, to the sample in the audio worklet; open or drop a .mid file, Ctrl+Space to play).
 
 - `src/exports.cpp`: the engine's C interface (`pf_*`), a standalone module with no Emscripten JavaScript.
 - `site/`: the page (`index.html`, `app.js`, `style.css`) and the audio worklet (`worklet.js`), which instantiates

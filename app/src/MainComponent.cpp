@@ -785,7 +785,7 @@ void MainComponent::openMidiFile(const juce::File& file)
         return;
     }
     const int seconds = juce::roundToInt(sequence->length);
-    const auto summary = sequence->name + " (" + juce::String(sequence->notes) + " notes, "
+    const auto summary = juce::String::fromUTF8(sequence->name.c_str()) + " (" + juce::String(sequence->notes) + " notes, "
                        + (seconds >= 60 ? juce::String(seconds / 60) + " min " : juce::String()) + juce::String(seconds % 60) + " s)";
     host.filePlayer.load(std::move(sequence));
     playerBar->fileChanged();

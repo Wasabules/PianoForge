@@ -3,7 +3,9 @@
 //
 // The profile arrives as bytes (the page never sends it to a server: the user picks the file, the browser keeps
 // it): pf_alloc() a buffer, copy them in, pf_load_profile(), pf_free(). MIDI events queue up with pf_event() and
-// take effect at the start of the next pf_render(), which writes pf_left() / pf_right().
+// take effect at the start of the next pf_render(), which writes pf_left() / pf_right(). A MIDI file (pf_midi_*)
+// plays to the sample with them, through the engine's SequencePlayer, the lab's own.
+#include <pianoforge/midi_sequence.hpp>
 #include <pianoforge/modal_engine.hpp>
 #include <pianoforge/modal_profile.hpp>
 #include <pianoforge/room.hpp>
@@ -19,10 +21,11 @@
 namespace {
 
 constexpr int kMaxFrames = 1024;  // a render quantum is 128 frames today; room for larger ones
-constexpr int kMaxEvents = 512;   // per render
+constexpr int kMaxEvents = 4608;  // per render: the keyboards', and a release of everything by the file player
 
 pf::ModalEngine* g_engine = nullptr;
 pf::Room* g_room = nullptr;
+pf::SequencePlayer* g_player = nullptr;
 pf::VelocityCurve g_curve;        // MIDI keyboards only (the on-screen keyboard plays its velocity as is)
 float g_left[kMaxFrames], g_right[kMaxFrames];
 pf::Event g_events[kMaxEvents];
@@ -39,9 +42,11 @@ int pf_init(int sampleRate)
 {
     delete g_engine;
     delete g_room;
+    delete g_player;
     g_rate = sampleRate > 0 ? sampleRate : 48000.0;
     g_engine = new pf::ModalEngine();
     g_room = new pf::Room();
+    g_player = new pf::SequencePlayer();
     g_engine->prepare(g_rate, kMaxFrames);
     g_room->prepare(g_rate);
     g_eventCount = 0;
@@ -114,6 +119,8 @@ void pf_render(int frames)
     if (g_engine == nullptr)
         return;
     float* outputs[2] = { g_left, g_right };
+    // The keyboards' events (offset 0) first, then the file's, in order: ascending offsets.
+    g_eventCount += g_player->render(g_events + g_eventCount, kMaxEvents - g_eventCount, frames, g_rate);
     g_engine->process(outputs, 2, frames, g_events, g_eventCount);
     g_eventCount = 0;
     g_room->process(g_left, g_right, frames);
@@ -202,6 +209,40 @@ void pf_set_velocity_curve(int inputMin, int inputMax, float p0, float p1, float
     s.points = { p0, p1, p2, p3, p4 };
     g_curve.set(s);
 }
+
+// ---- The MIDI file player ----
+
+/// Reads a Standard MIDI File from its bytes and makes it the one played (stopped, at its start). Returns 0, or 1
+/// (pf_error() says why).
+int pf_midi_load(const unsigned char* data, int size)
+{
+    if (g_player == nullptr || data == nullptr || size <= 0) {
+        g_error = "no player or no data";
+        return 1;
+    }
+    g_error.clear();
+    auto sequence = pf::readMidiFile(data, (std::size_t) size, g_error);
+    if (sequence == nullptr)
+        return 1;
+    g_player->load(std::move(sequence));
+    return 0;
+}
+
+void pf_midi_close() { if (g_player != nullptr) g_player->load(nullptr); }
+int pf_midi_notes() { return g_player != nullptr && g_player->sequence() ? g_player->sequence()->notes : 0; }
+int pf_midi_tracks() { return g_player != nullptr && g_player->sequence() ? g_player->sequence()->tracks : 0; }
+int pf_midi_drums_left_out() { return g_player != nullptr && g_player->sequence() && g_player->sequence()->drumsLeftOut ? 1 : 0; }
+double pf_midi_length() { return g_player != nullptr && g_player->sequence() ? g_player->sequence()->length : 0.0; }
+void pf_midi_play() { if (g_player != nullptr) g_player->play(); }
+void pf_midi_pause() { if (g_player != nullptr) g_player->pause(); }
+void pf_midi_stop() { if (g_player != nullptr) g_player->stop(); }
+void pf_midi_seek(double seconds) { if (g_player != nullptr) g_player->seek(seconds); }
+void pf_midi_speed(double factor) { if (g_player != nullptr) g_player->setSpeed(factor); }
+void pf_midi_loop(int on) { if (g_player != nullptr) g_player->setLoop(on != 0); }
+double pf_midi_position() { return g_player != nullptr ? g_player->position() : 0.0; }
+int pf_midi_playing() { return g_player != nullptr && g_player->wantsToPlay() ? 1 : 0; }
+/// The file's notes sounding on a key (for the keyboard's display).
+int pf_midi_sounding(int key) { return g_player != nullptr ? g_player->sounding(key) : 0; }
 
 // ---- Information for the page ----
 

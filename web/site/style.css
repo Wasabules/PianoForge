@@ -64,6 +64,15 @@ output { display: inline-block; min-width: 48px; color: var(--dim); }
 
 main { padding: 14px 16px 16px; }
 
+.player { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; }
+.player h2 { margin: 0 6px 0 0; }
+.player .transport { width: 38px; padding: 5px 0; }
+.player .transport.on { background: var(--accent); border-color: var(--accent); color: #0d1a24; }
+.player .name { flex: 0 1 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player input[type="range"]#midiPosition { flex: 1 1 200px; width: auto; }
+.player .time { min-width: 0; color: var(--text); font-variant-numeric: tabular-nums; }
+body.dropping .player { outline: 2px solid var(--accent); }
+
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
 .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 10px 14px; }
 .card p { margin: 4px 0; }
