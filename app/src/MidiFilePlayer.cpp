@@ -20,12 +20,12 @@ std::shared_ptr<const MidiFilePlayer::Sequence> MidiFilePlayer::read(const juce:
     return sequence;
 }
 
-void MidiFilePlayer::render(juce::MidiBuffer& midi, int numSamples, double sampleRate) noexcept
+void MidiFilePlayer::render(juce::MidiBuffer& midi, int numSamples, double sampleRate, int stride, int offset) noexcept
 {
     const int count = pf::SequencePlayer::render(scratch.data(), (int) scratch.size(), numSamples, sampleRate);
     for (int i = 0; i < count; ++i) {
         const auto& e = scratch[(std::size_t) i];
-        midi.addEvent(juce::MidiMessage(e.status, e.data1, e.data2), (int) e.offset);
+        midi.addEvent(juce::MidiMessage(e.status, e.data1, e.data2), offset + (int) e.offset * stride);
     }
 }
 

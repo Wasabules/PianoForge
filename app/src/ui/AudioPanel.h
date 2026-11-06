@@ -23,6 +23,7 @@ private:
     void timerCallback() override;
     void fillMirrorDevices();
     void openMirror();
+    void applyRateMode(int mode); // 0: below the device's rate, 1: at it; restarts the device
 
     juce::AudioDeviceManager& devices;
     AudioHost& host;
@@ -32,7 +33,9 @@ private:
     juce::StringArray mirrorDevices;
     juce::Label mirrorStatus, mirrorNote, feedStatus, feedNote;
     juce::TextButton refreshDevices { "Refresh" };
-    juce::Rectangle<int> deviceArea, mirrorArea, feedArea;
+    juce::ComboBox rateChoice; // 1: the engine at 44.1 / 48 kHz under a faster device, 2: at the device's rate
+    juce::Label rateStatus, rateNote;
+    juce::Rectangle<int> deviceArea, rateArea, mirrorArea, feedArea;
 };
 
 } // namespace pf::app

@@ -105,6 +105,7 @@ MainComponent::MainComponent()
     deviceManager.initialise(0, 2, savedAudio.get(), true, {}, &preferred);
     curveSettings = parseCurve(settings->getValue("velocityCurve"));
     velocityCurve.set(curveSettings);
+    host.rateMode = settings->getIntValue("engineRateMode", 0) == 1 ? 1 : 0; // before the device starts the host
     deviceManager.addAudioCallback(&host);
     deviceManager.addMidiInputDeviceCallback({}, &keyboardInput);
     deviceManager.addChangeListener(this);
@@ -873,8 +874,9 @@ juce::StringArray MainComponent::deviceLines() const
         return { "No audio output open" };
     const double fs = d->getCurrentSampleRate();
     const int block = d->getCurrentBufferSizeSamples();
+    const juce::String engine = host.rateFactor() > 1 ? ", engine at " + juce::String(host.currentRate() / 1000.0, 1) + " kHz" : juce::String();
     return { d->getName() + " (" + d->getTypeName() + ")",
-             juce::String(fs / 1000.0, 1) + " kHz, blocks of " + juce::String(block) + " (" + juce::String(1000.0 * block / fs, 1)
+             juce::String(fs / 1000.0, 1) + " kHz" + engine + ", blocks of " + juce::String(block) + " (" + juce::String(1000.0 * block / fs, 1)
                  + " ms), output latency ~" + juce::String(1000.0 * (d->getOutputLatencyInSamples() + block) / fs, 1) + " ms" };
 }
 
@@ -886,9 +888,9 @@ juce::StringArray MainComponent::adviceLines() const
         return tips;
     const double fs = d->getCurrentSampleRate();
     const int block = d->getCurrentBufferSizeSamples();
-    if (fs > 50000.0)
+    if (fs > 50000.0 && host.rateFactor() == 1)
         tips.add("At " + juce::String(juce::roundToInt(fs / 1000.0)) + " kHz the engine does " + juce::String(fs / 48000.0, 1)
-                 + " times the work of 48 kHz for nothing audible: the corpus is at 44.1 kHz. Use 44.1 or 48 kHz.");
+                 + " times the work of 48 kHz for nothing audible: in Audio, let the engine run at 44.1 or 48 kHz.");
     if (1000.0 * block / fs > 6.0)
         tips.add("Blocks of " + juce::String(1000.0 * block / fs, 1) + " ms add as much latency between key and sound: "
                  "128 samples (2.9 ms at 44.1 kHz) is comfortable for this engine.");

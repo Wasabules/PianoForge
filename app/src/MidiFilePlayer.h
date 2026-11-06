@@ -19,9 +19,10 @@ public:
     /// Message thread: reads a MIDI file (nullptr and `error` filled when it cannot).
     static std::shared_ptr<const Sequence> read(const juce::File& file, juce::String& error);
 
-    /// Audio thread: adds the block's events to `midi` (positions 0 to numSamples - 1). No allocation (the buffer
-    /// has room), no lock.
-    void render(juce::MidiBuffer& midi, int numSamples, double sampleRate) noexcept;
+    /// Audio thread: adds the events of `numSamples` frames at `sampleRate` to `midi`, frame f at position
+    /// offset + f x stride (the engine below the device's rate: positions in the device's samples). No allocation
+    /// (the buffer has room), no lock.
+    void render(juce::MidiBuffer& midi, int numSamples, double sampleRate, int stride = 1, int offset = 0) noexcept;
 
 private:
     std::array<pf::Event, 4096> scratch {}; // a block's events: a release of everything fits (16 x 128 notes, pedals)

@@ -1,0 +1,31 @@
+# Listening distance: the same few takes rendered once per microphone perspective of the library (one Kontakt
+# state per perspective, prepared from noire-dry with only the microphone setting changed), to measure what the
+# distance does: direct-to-reverberant ratio, the gap before the first reflections, the stereo width, the highs,
+# and the room's own decay. The modal engine's distance model (pf::Room) is calibrated and checked against them.
+#   bench prepare --state noire-<perspective> --from-state noire-dry --note "..."
+#   bench render tools/bench/sessions/perspectives.toml --state noire-<perspective>
+
+[session]
+name = "perspectives"
+sample_rate = 44100  # Kontakt hosted by pedalboard always runs at 44.1 kHz (see bench/kontakt.py)
+
+# Held notes over the keyboard, soft and loud: the balance of direct and room while the note sounds, then the
+# room's tail once the damper lands.
+[[pass]]
+name = "notes"
+type = "note"
+notes = ["A0", "C2", "C4", "C6", "C8"]
+velocities = [40, 100]
+hold = 3.0
+tail = 4.0
+
+# Short strikes: the early reflections and the room's own decay, with little of the note behind them.
+[[pass]]
+name = "staccato"
+type = "sequence"
+takes = [
+  { name = "C4v100-staccato", duration = 6.0, events = [[0.5, "on", "C4", 100], [0.6, "off", "C4"]] },
+  { name = "C6v100-staccato", duration = 6.0, events = [[0.5, "on", "C6", 100], [0.6, "off", "C6"]] },
+  { name = "C2v100-staccato", duration = 6.0, events = [[0.5, "on", "C2", 100], [0.6, "off", "C2"]] },
+  { name = "chord-pedal", duration = 10.0, events = [[0.0, "cc", 64, 127], [0.5, "on", "C3", 80], [0.5, "on", "E3", 80], [0.5, "on", "G3", 80], [0.5, "on", "C4", 80], [1.5, "off", "C3"], [1.5, "off", "E3"], [1.5, "off", "G3"], [1.5, "off", "C4"], [5.0, "cc", 64, 0]] },
+]

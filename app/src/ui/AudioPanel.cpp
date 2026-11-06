@@ -34,22 +34,49 @@ AudioPanel::AudioPanel(juce::AudioDeviceManager& d, AudioHost& h, juce::Properti
     feedNote.setText("In OBS, add the \"PianoForge\" audio source (plugin in %ProgramData%/obs-studio/plugins/pianoforge-obs): "
                      "it reads this application directly, without a cable. Turn its monitoring off in OBS.",
                      juce::dontSendNotification);
-    for (auto* l : { &mirrorNote, &feedNote }) {
+    rateChoice.addItem("Engine at 44.1 or 48 kHz, brought up to the device's rate (recommended)", 1);
+    rateChoice.addItem("Engine at the device's rate", 2);
+    rateChoice.setSelectedId(settings.getIntValue("engineRateMode", 0) == 1 ? 2 : 1, juce::dontSendNotification);
+    rateChoice.onChange = [this] {
+        const int mode = rateChoice.getSelectedId() == 2 ? 1 : 0;
+        settings.setValue("engineRateMode", mode);
+        settings.saveIfNeeded();
+        applyRateMode(mode);
+    };
+    rateNote.setText("The Windows mixer imposes its rate on its devices (here, up to 192 kHz): the engine then runs at "
+                     "the device's rate divided by 2, 4 or 8 (44.1 or 48 kHz), four times less work at 192 kHz, and its "
+                     "sound is brought up to the device's (flat to 20 kHz, images 90 dB down, 0.7 ms). Recordings, takes "
+                     "and streams are at the engine's rate.",
+                     juce::dontSendNotification);
+    for (auto* l : { &mirrorNote, &feedNote, &rateNote }) {
         l->setColour(juce::Label::textColourId, theme::dim);
         l->setFont(theme::font(12.0f));
         l->setJustificationType(juce::Justification::topLeft);
     }
     for (auto* c : std::initializer_list<juce::Component*> { &mirrorChoice, &refreshDevices, &mirrorStatus, &mirrorNote,
-                                                             &feedStatus, &feedNote })
+                                                             &feedStatus, &feedNote, &rateChoice, &rateStatus, &rateNote })
         addAndMakeVisible(*c);
     mirrorStatus.setText("Off", juce::dontSendNotification);
-    setSize(660, 760);
+    if (settings.getIntValue("engineRateMode", 0) == 1) // the device started in the default mode: again in this one
+        applyRateMode(1);
+    setSize(660, 880);
     startTimerHz(4);
 }
 
 AudioPanel::~AudioPanel()
 {
     stopTimer();
+}
+
+void AudioPanel::applyRateMode(int mode)
+{
+    if (host.rateMode.load() == mode)
+        return;
+    host.rateMode = mode;
+    if (devices.getCurrentAudioDevice() != nullptr) { // the engine's rate is set when the device starts
+        devices.closeAudioDevice();
+        devices.restartLastAudioDevice();
+    }
 }
 
 void AudioPanel::fillMirrorDevices()
@@ -92,6 +119,12 @@ void AudioPanel::timerCallback()
     feedStatus.setText(host.feedOn() ? "Feeding the OBS plugin" : "Not feeding: another PianoForge is feeding the OBS plugin",
                        juce::dontSendNotification);
     feedStatus.setColour(juce::Label::textColourId, host.feedOn() ? theme::good : theme::busy);
+    if (const double device = host.deviceRate(); device > 0.0)
+        rateStatus.setText("Engine at " + juce::String(host.currentRate() / 1000.0, 1) + " kHz, device at " + juce::String(device / 1000.0, 1)
+                               + " kHz" + (host.rateFactor() > 1 ? " (x" + juce::String(host.rateFactor()) + ", brought up)" : juce::String()),
+                           juce::dontSendNotification);
+    else
+        rateStatus.setText("No device running", juce::dontSendNotification);
 }
 
 juce::String AudioPanel::mirrorSummary() const
@@ -103,6 +136,7 @@ void AudioPanel::paint(juce::Graphics& g)
 {
     g.fillAll(theme::background);
     theme::drawCard(g, deviceArea, "Audio device and MIDI inputs");
+    theme::drawCard(g, rateArea, "Engine rate");
     theme::drawCard(g, mirrorArea, "Mirror output");
     theme::drawCard(g, feedArea, "OBS plugin");
 }
@@ -113,6 +147,8 @@ void AudioPanel::resized()
     feedArea = area.removeFromBottom(96);
     area.removeFromBottom(10);
     mirrorArea = area.removeFromBottom(130);
+    area.removeFromBottom(10);
+    rateArea = area.removeFromBottom(120);
     area.removeFromBottom(10);
     deviceArea = area;
     selector.setBounds(deviceArea.reduced(6, 4).withTrimmedTop(20));
@@ -126,6 +162,14 @@ void AudioPanel::resized()
     mirrorStatus.setBounds(row);
     inner.removeFromTop(4);
     mirrorNote.setBounds(inner);
+
+    inner = rateArea.reduced(12, 8).withTrimmedTop(20);
+    row = inner.removeFromTop(26);
+    rateChoice.setBounds(row.removeFromLeft(420));
+    row.removeFromLeft(8);
+    rateStatus.setBounds(row);
+    inner.removeFromTop(4);
+    rateNote.setBounds(inner);
 
     inner = feedArea.reduced(12, 8).withTrimmedTop(20);
     feedStatus.setBounds(inner.removeFromTop(20));

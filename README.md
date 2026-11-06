@@ -40,6 +40,11 @@ PianoForge.exe --selftest corpus/reference/noire-dry/single-notes selftest.txt
 
 Play a MIDI file live: File > Open MIDI file (Ctrl+O), drop it on the window, or pass it on the command line
 (`PianoForge.exe song.mid`). It plays to the sample with what the keyboards play, and is recorded with it.
+Tracks... picks the parts to play (a part is a track's channel; drums off by default); -oct, -, +, +oct
+transpose the file by semitones or octaves.
+
+When the device runs faster than 50 kHz (the Windows mixer can impose 192 kHz), the engine runs at the device's
+rate divided by 2, 4 or 8 (44.1 or 48 kHz) and its sound is brought up to the device's: Audio > Engine rate.
 
 A room around the piano (algorithmic reverberation, no latency on the direct sound): the Room button in the
 toolbar, its settings in Engine > Room settings (Ctrl+M). Heard, recorded, streamed and in take renders alike.

@@ -684,6 +684,78 @@ int runSelfTest(const juce::StringArray& arguments)
                     + juce::String(tail, 1) + " dB over it 1 to 2 s after the release (expected > 6)");
     }
 
+    // 8f. The engine below the device's rate: a device at 4 x 44.1 kHz (what the Windows mixer can impose) runs
+    //     the engine at 44.1 kHz and brings its sound up. Blocks of 1001 device samples, so that a frame straddles
+    //     two blocks (the carry). The same chord as at 44.1 kHz, at the same level; nothing above 24 kHz but the
+    //     upsampler's residue (a seam between two blocks would be a click, broadband); the device's rate mode keeps
+    //     the engine at the device's rate.
+    {
+        player.playWholeTake = false;
+        const double device = 4.0 * fs;
+        auto play = [&](double rate, int block, std::vector<float>& out, int& factor, double& engineRate) {
+            AudioHost host { player };
+            host.start(rate, block);
+            factor = host.rateFactor();
+            engineRate = host.currentRate();
+            std::vector<float> l((size_t) block), rr((size_t) block);
+            float* outputs[2] = { l.data(), rr.data() };
+            const int blocks = (int) (1.2 * rate) / block;
+            for (int k = 0; k < blocks; ++k) {
+                if (k == 2)
+                    for (const int note : { 48, 60, 67, 76 })
+                        host.send(juce::MidiMessage::noteOn(1, note, (juce::uint8) 100));
+                host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, block, {});
+                out.insert(out.end(), l.begin(), l.end());
+            }
+        };
+        std::vector<float> base, high;
+        int baseFactor = 0, highFactor = 0;
+        double baseRate = 0.0, highRate = 0.0;
+        play(fs, 512, base, baseFactor, baseRate);
+        play(device, 1001, high, highFactor, highRate);
+        // From the onset (the chord does not land at the same time in blocks of different lengths).
+        auto level = [](const std::vector<float>& x, double rate, double a, double b) {
+            std::size_t onset = 0;
+            while (onset < x.size() && std::abs(x[onset]) < 1e-4f)
+                ++onset;
+            double e = 0.0;
+            for (std::size_t i = onset + (std::size_t) (a * rate); i < onset + (std::size_t) (b * rate) && i < x.size(); ++i)
+                e += (double) x[(size_t) i] * x[(size_t) i];
+            return 10.0 * std::log10(e / ((b - a) * rate) + 1e-30);
+        };
+        double levelGap = 0.0;
+        for (double t = 0.0; t < 0.95; t += 0.1)
+            levelGap = std::max(levelGap, std::abs(level(high, device, t, t + 0.1) - level(base, fs, t, t + 0.1)));
+        // Above 24.1 kHz (the first image of 20 kHz), against the whole: Hann-windowed DFT of 8192 samples at 0.3 s.
+        const int n = 8192, from = (int) (0.3 * device);
+        double total = 0.0, above = 0.0;
+        std::vector<double> w((size_t) n);
+        for (int j = 0; j < n; ++j) {
+            w[(size_t) j] = (0.5 - 0.5 * std::cos(2.0 * juce::MathConstants<double>::pi * j / n)) * high[(size_t) (from + j)];
+            total += w[(size_t) j] * w[(size_t) j];
+        }
+        for (int bin = (int) std::ceil(24100.0 / device * n); bin <= n / 2; ++bin) {
+            double re = 0.0, im = 0.0;
+            const double step = 2.0 * juce::MathConstants<double>::pi * bin / n;
+            for (int j = 0; j < n; ++j) {
+                re += w[(size_t) j] * std::cos(step * j);
+                im -= w[(size_t) j] * std::sin(step * j);
+            }
+            above += (bin == n / 2 ? 1.0 : 2.0) * (re * re + im * im) / n; // Parseval: one-sided, both halves
+        }
+        const double imagesDb = 10.0 * std::log10(above / std::max(total, 1e-30) + 1e-30);
+        AudioHost atDevice { player };
+        atDevice.rateMode = 1;
+        atDevice.start(device, 1001);
+        r.check(baseFactor == 1 && highFactor == 4 && baseRate == fs && highRate == fs && levelGap < 0.1 && imagesDb < -80.0
+                    && atDevice.currentRate() == device && atDevice.rateFactor() == 1,
+                "engine below the device's rate: at " + juce::String(device / 1000.0, 1) + " kHz the engine runs at "
+                    + juce::String(highRate / 1000.0, 1) + " kHz (x" + juce::String(highFactor) + "), level within "
+                    + juce::String(levelGap, 3) + " dB of 44.1 kHz (expected < 0.1), " + juce::String(imagesDb, 1)
+                    + " dB above 24 kHz (expected < -80); the device's rate mode: engine at "
+                    + juce::String(atDevice.currentRate() / 1000.0, 1) + " kHz");
+    }
+
     // 9. Modal engine, when the corpus state has a modal profile (forge export).
     if (const auto path = folder.getParentDirectory().getChildFile("modal-profile.bin"); path.existsAsFile()) {
         std::string error;
