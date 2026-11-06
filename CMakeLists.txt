@@ -8,6 +8,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(CTest) # BUILD_TESTING, on by default
 
+# WebAssembly (emcmake): the engine, its tests (run by Node) and the browser module (web/); no JUCE, no app.
+if(EMSCRIPTEN)
+    add_subdirectory(engine)
+    add_subdirectory(web)
+    return()
+endif()
+
 # JUCE is only used by the shell (app/). The engine (engine/) does not depend on it.
 include(FetchContent)
 FetchContent_Declare(JUCE

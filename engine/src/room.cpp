@@ -324,7 +324,7 @@ void Room::process(float* left, float* right, int n) noexcept
     }
     cleared = false;
     float wetPeak = 0.0f;
-    NoDenormals noDenormals;
+    [[maybe_unused]] NoDenormals noDenormals;
     const Vectors& v = kVectors;
     for (int k = 0; k < n; ++k) {
         // Glides, and the fade of a change of size or pre-delay.
@@ -438,6 +438,14 @@ void Room::process(float* left, float* right, int n) noexcept
     if (!on && wet < 1e-6f) {
         reset(); // faded out: cleared, and bypassed from the next block
         return;
+    }
+    // States that decay once the input is silent, set to zero before they go denormal (WebAssembly has no
+    // flush-to-zero; see ModeBank::flushDead).
+    for (int c = 0; c < 2; ++c) {
+        if (std::abs(hpY[c]) < 1e-20f)
+            hpY[c] = 0.0f;
+        if (std::abs(lpY[c]) < 1e-20f)
+            lpY[c] = 0.0f;
     }
     // Asleep once the input has been silent longer than anything takes to cross the room (pre-delay, reflections,
     // diffusion, the longest line) and a whole block of reverberation stayed under -120 dB.

@@ -13,6 +13,8 @@
 
 #if defined(__AVX2__)
 #include <immintrin.h>
+#elif defined(__wasm_simd128__)
+#include <wasm_simd128.h>
 #endif
 
 namespace pf {
@@ -189,6 +191,16 @@ public:
         }
     }
 
+    /// The phasors of modes that have died out (|u| under 1e-12, -240 dB) set to zero: they would otherwise go on
+    /// decaying into denormal numbers, which the CPU computes about 100 times slower. The native build flushes them
+    /// in hardware (flush-to-zero); WebAssembly cannot.
+    static void flushDead(float* xr, float* xi, std::size_t n) noexcept
+    {
+        for (std::size_t k = 0; k < n; ++k)
+            if (xr[k] * xr[k] + xi[k] * xi[k] < 1e-24f)
+                xr[k] = xi[k] = 0.0f;
+    }
+
 private:
     static std::size_t roundUp(std::size_t n) noexcept { return (n + kLanes - 1) / kLanes * kLanes; }
 
@@ -234,6 +246,54 @@ private:
     }
 #endif
 
+#if defined(__wasm_simd128__) && !defined(__AVX2__)
+    /// WebAssembly (128-bit SIMD, no fused multiply-add): G groups of 8 modes as 2 G vectors of 4, the same
+    /// arithmetic as the AVX2 path.
+    template <int G>
+    void renderGroupsWasm(std::size_t o, float* accL, float* accR, int n) noexcept
+    {
+        constexpr int V = 2 * G;
+        v128_t xr[V], xi[V], qr[V], qi[V];
+        for (int j = 0; j < V; ++j) {
+            const std::size_t k = o + (std::size_t) j * 4;
+            xr[j] = wasm_v128_load(&ur[k]);
+            xi[j] = wasm_v128_load(&ui[k]);
+            qr[j] = wasm_v128_load(&pr[k]);
+            qi[j] = wasm_v128_load(&pi[k]);
+        }
+        const float* al = &lr[o];
+        const float* bl = &li[o];
+        const float* ar = &rr[o];
+        const float* br = &ri[o];
+        for (int s = 0; s < n; ++s) {
+            float* oL = accL + (std::size_t) s * kLanes;
+            float* oR = accR + (std::size_t) s * kLanes;
+            v128_t l[2] = { wasm_v128_load(oL), wasm_v128_load(oL + 4) };
+            v128_t r[2] = { wasm_v128_load(oR), wasm_v128_load(oR + 4) };
+            for (int j = 0; j < V; ++j) {
+                const std::size_t k = (std::size_t) j * 4;
+                const int h = j & 1; // the half of the 8 lanes this vector adds into
+                l[h] = wasm_f32x4_sub(wasm_f32x4_add(l[h], wasm_f32x4_mul(wasm_v128_load(al + k), xr[j])),
+                                      wasm_f32x4_mul(wasm_v128_load(bl + k), xi[j]));
+                r[h] = wasm_f32x4_sub(wasm_f32x4_add(r[h], wasm_f32x4_mul(wasm_v128_load(ar + k), xr[j])),
+                                      wasm_f32x4_mul(wasm_v128_load(br + k), xi[j]));
+                const v128_t nr = wasm_f32x4_sub(wasm_f32x4_mul(xr[j], qr[j]), wasm_f32x4_mul(xi[j], qi[j]));
+                xi[j] = wasm_f32x4_add(wasm_f32x4_mul(xr[j], qi[j]), wasm_f32x4_mul(xi[j], qr[j]));
+                xr[j] = nr;
+            }
+            wasm_v128_store(oL, l[0]);
+            wasm_v128_store(oL + 4, l[1]);
+            wasm_v128_store(oR, r[0]);
+            wasm_v128_store(oR + 4, r[1]);
+        }
+        for (int j = 0; j < V; ++j) {
+            const std::size_t k = o + (std::size_t) j * 4;
+            wasm_v128_store(&ur[k], xr[j]);
+            wasm_v128_store(&ui[k], xi[j]);
+        }
+    }
+#endif
+
     void renderBlock(float* left, float* right, int n) noexcept
     {
         float* accL = acc.data();
@@ -241,7 +301,15 @@ private:
         std::fill(accL, accL + (std::size_t) n * kLanes, 0.0f);
         std::fill(accR, accR + (std::size_t) n * kLanes, 0.0f);
         const std::size_t groups = roundUp((std::size_t) count) / kLanes;
-#if defined(__AVX2__) && (defined(__FMA__) || defined(_MSC_VER)) // MSVC: /arch:AVX2 implies FMA
+#if defined(__wasm_simd128__) && !defined(__AVX2__)
+        {
+            std::size_t g = 0;
+            for (; g + 2 <= groups; g += 2)
+                renderGroupsWasm<2>(g * kLanes, accL, accR, n);
+            for (; g < groups; ++g)
+                renderGroupsWasm<1>(g * kLanes, accL, accR, n);
+        }
+#elif defined(__AVX2__) && (defined(__FMA__) || defined(_MSC_VER)) // MSVC: /arch:AVX2 implies FMA
         // Each phasor update waits for the previous one (a multiply then a fused multiply-add, about 8 cycles):
         // several groups are interleaved in the sample loop so that their updates overlap.
         std::size_t g = 0;
@@ -285,6 +353,7 @@ private:
             }
         }
 #endif
+        flushDead(ur.data(), ui.data(), groups * kLanes);
         for (int s = 0; s < n; ++s) {
             float l = 0.0f, r = 0.0f;
             for (int j = 0; j < kLanes; ++j) {
@@ -455,6 +524,57 @@ private:
     }
 #endif
 
+#if defined(__wasm_simd128__) && !defined(__AVX2__)
+    /// WebAssembly: G lane groups of one string as 2 G vectors of 4 (as renderLanesAvx).
+    template <int G>
+    void renderLanesWasm(std::size_t o, const float* input, float* accL, float* accR, int n) noexcept
+    {
+        constexpr int V = 2 * G;
+        v128_t xr[V], xi[V], qr[V], qi[V], b[V];
+        for (int j = 0; j < V; ++j) {
+            const std::size_t k = o + (std::size_t) j * 4;
+            xr[j] = wasm_v128_load(&ur[k]);
+            xi[j] = wasm_v128_load(&ui[k]);
+            qr[j] = wasm_v128_load(&pr[k]);
+            qi[j] = wasm_v128_load(&pi[k]);
+            b[j] = wasm_v128_load(&gain[k]);
+        }
+        const float* al = &lr[o];
+        const float* bl = &li[o];
+        const float* ar = &rr[o];
+        const float* br = &ri[o];
+        for (int s = 0; s < n; ++s) {
+            float* oL = accL + (std::size_t) s * kLanes;
+            float* oR = accR + (std::size_t) s * kLanes;
+            const v128_t x = wasm_f32x4_splat(input != nullptr ? input[s] : 0.0f);
+            v128_t l[2] = { wasm_v128_load(oL), wasm_v128_load(oL + 4) };
+            v128_t r[2] = { wasm_v128_load(oR), wasm_v128_load(oR + 4) };
+            for (int j = 0; j < V; ++j) {
+                const std::size_t k = (std::size_t) j * 4;
+                const int h = j & 1;
+                l[h] = wasm_f32x4_sub(wasm_f32x4_add(l[h], wasm_f32x4_mul(wasm_v128_load(al + k), xr[j])),
+                                      wasm_f32x4_mul(wasm_v128_load(bl + k), xi[j]));
+                r[h] = wasm_f32x4_sub(wasm_f32x4_add(r[h], wasm_f32x4_mul(wasm_v128_load(ar + k), xr[j])),
+                                      wasm_f32x4_mul(wasm_v128_load(br + k), xi[j]));
+                // u <- p u + b x
+                const v128_t nr = wasm_f32x4_add(wasm_f32x4_sub(wasm_f32x4_mul(xr[j], qr[j]), wasm_f32x4_mul(xi[j], qi[j])),
+                                                 wasm_f32x4_mul(b[j], x));
+                xi[j] = wasm_f32x4_add(wasm_f32x4_mul(xr[j], qi[j]), wasm_f32x4_mul(xi[j], qr[j]));
+                xr[j] = nr;
+            }
+            wasm_v128_store(oL, l[0]);
+            wasm_v128_store(oL + 4, l[1]);
+            wasm_v128_store(oR, r[0]);
+            wasm_v128_store(oR + 4, r[1]);
+        }
+        for (int j = 0; j < V; ++j) {
+            const std::size_t k = o + (std::size_t) j * 4;
+            wasm_v128_store(&ur[k], xr[j]);
+            wasm_v128_store(&ui[k], xi[j]);
+        }
+    }
+#endif
+
     void renderBlock(int g, const float* input, float* left, float* right, int n) noexcept
     {
         float* accL = acc.data();
@@ -463,7 +583,12 @@ private:
         std::fill(accR, accR + (std::size_t) n * kLanes, 0.0f);
         const std::size_t end = last(g);
         std::size_t o = first(g);
-#if defined(__AVX2__) && (defined(__FMA__) || defined(_MSC_VER))
+#if defined(__wasm_simd128__) && !defined(__AVX2__)
+        for (; o + 2 * kLanes <= end; o += 2 * kLanes)
+            renderLanesWasm<2>(o, input, accL, accR, n);
+        for (; o + kLanes <= end; o += kLanes)
+            renderLanesWasm<1>(o, input, accL, accR, n);
+#elif defined(__AVX2__) && (defined(__FMA__) || defined(_MSC_VER))
         for (; o + 2 * kLanes <= end; o += 2 * kLanes)
             renderLanesAvx<2>(o, input, accL, accR, n);
         for (; o + kLanes <= end; o += kLanes)
@@ -501,6 +626,7 @@ private:
             }
         }
 #endif
+        ModeBank::flushDead(ur.data() + first(g), ui.data() + first(g), last(g) - first(g)); // (see ModeBank)
         for (int s = 0; s < n; ++s) {
             float l = 0.0f, r = 0.0f;
             for (int j = 0; j < kLanes; ++j) {

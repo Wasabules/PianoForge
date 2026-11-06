@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <fstream>
 
 namespace pf {
 
@@ -152,16 +151,8 @@ void DamperCurves::evaluateGroups(int note, double holdSeconds, float* gains, in
                 = (float) std::pow(10.0, (value(t0, g, k) * (1 - wv) + value(t1, g, k) * wv) / 20.0);
 }
 
-std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path& path, std::string& error)
+std::shared_ptr<const ModalProfile> parseModalProfile(std::vector<char> data, const std::string& source, std::string& error)
 {
-    std::ifstream in(path, std::ios::binary | std::ios::ate);
-    if (!in) {
-        error = "cannot open " + path.string();
-        return nullptr;
-    }
-    std::vector<char> data((std::size_t) in.tellg());
-    in.seekg(0);
-    in.read(data.data(), (std::streamsize) data.size());
     Reader r(std::move(data));
 
     char magic[8] {};
@@ -169,7 +160,7 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
     const auto version = std::memcmp(magic, "PFMODAL1", 8) == 0 ? r.get<std::uint32_t>() : 0u;
     // Version 2 adds the fade time of each partial; version 3, tagged sections after the notes.
     if (version < 1 || version > 3) {
-        error = "not a modal profile (version 1 to 3): " + path.string();
+        error = "not a modal profile (version 1 to 3): " + source;
         return nullptr;
     }
     auto p = std::make_shared<ModalProfile>();
@@ -299,7 +290,7 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
         const auto length = r.get<std::uint32_t>();
         const auto end = r.position() + length;
         if (!r.ok() || end > r.length()) {
-            error = "corrupt section in " + path.string();
+            error = "corrupt section in " + source;
             return nullptr;
         }
         if (std::memcmp(tag, "SYMP", 4) == 0) {
@@ -421,13 +412,13 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
             }
         }
         if (r.position() > end) {
-            error = "section longer than declared in " + path.string();
+            error = "section longer than declared in " + source;
             return nullptr;
         }
         r.seek(end);
     }
     if (!r.ok() || !r.atEnd()) {
-        error = "truncated or corrupt profile: " + path.string();
+        error = "truncated or corrupt profile: " + source;
         return nullptr;
     }
     return p;

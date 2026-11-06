@@ -6,3 +6,6 @@ build/
 
 # Données locales : rendus de bibliothèques commerciales (EULA) et états propres à cette machine
 corpus/
+
+# Compiled WebAssembly module (web/: emcmake build, copied next to the page)
+web/site/pianoforge.wasm

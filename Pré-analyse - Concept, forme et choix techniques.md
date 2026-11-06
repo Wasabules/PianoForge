@@ -703,6 +703,31 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
 
     L'autotest de l'app vérifie qu'une note jouée par l'hôte audio garde son son direct (−0,2 dB d'écart) et gagne une queue de 8 dB après le relâchement. Au repos à 192 kHz, la charge reste à 0 %.
 
+**Version navigateur, WebAssembly (6 novembre 2026).** JUCE 9 ne compile vers WebAssembly que `juce_core` : ni interface ni audio. L'atelier ne peut donc pas être porté tel quel. En revanche, le moteur modal et la salle, en C++ sans JUCE, tournent dans le navigateur (`web/`).
+  - *Le module.* `web/src/exports.cpp` expose une interface C (`pf_*`), compilée par Emscripten 6.0.13 (emsdk dans `~/emsdk`, comme pour RevForge) en un module WebAssembly autonome de 130 Ko. Il n'a pas de JavaScript Emscripten ; sa seule importation est la notification de croissance de la mémoire. L'AudioWorklet l'instancie sur le fil audio du navigateur, par blocs de 128 échantillons, comme dans RevForge.
+  - *Le moteur rendu portable.*
+    - L'analyse du profil se fait depuis la mémoire (`parseModalProfile`), et la lecture du fichier est rangée à part : le module web n'a pas de système de fichiers.
+    - L'installation d'un profil n'attend plus le fil audio dans le navigateur, puisqu'elle s'y fait.
+    - Le flux OBS reste propre à l'application native.
+    - Les tests du moteur tournent sous Node (`ctest --test-dir build/wasm`) et passent tous, y compris les mesures acoustiques de la salle.
+  - *Trois corrections, venues des mesures.* Le premier module coûtait 130 % du temps réel pour 64 voix pédale enfoncée, contre 17 à 20 % en natif.
+    - *Les dénormaux* : WebAssembly ne permet pas le « flush-to-zero ». Les partiels éteints (sous 1e-38) restaient dans les voix, et le coût montait de 18 à 270 % en 8 s, alors même que les voix diminuaient. Les phaseurs morts (|u| < 1e-12, −240 dB) sont maintenant remis à zéro à chaque bloc, en natif aussi, sans effet audible. Les états de filtres de la salle qui s'éteignent subissent le même traitement.
+    - *Les chemins SIMD WebAssembly explicites* (128 bits, sans FMA) pour les bancs de résonateurs et les cordes libres : le chemin générique sur 8 voies se vectorisait mal, surtout pour les cordes.
+    - *La mémoire initiale de 320 Mo* : les agrandissements successifs coûtaient 2,5 s à l'analyse du profil, contre 0,1 s maintenant.
+  - *Résultats* (`web/check.mjs`, Node 22) :
+    - le profil s'analyse en 0,1 s ;
+    - le son est celui du moteur natif à 0,03 dB près par fenêtre. Les échantillons s'écartent de −50 dB sur les notes longues, par une dérive de phase due aux arrondis sans FMA ;
+    - 64 voix pédale enfoncée avec les cordes libres coûtent 55 à 60 % du fil audio à 48 kHz, salle comprise, soit environ 3 fois le natif, et ce coût reste stable dans le temps.
+
+    Pour ne pas calculer pour un périphérique à 192 kHz, la page demande un contexte audio à 44,1 kHz, la fréquence du profil ; le navigateur convertit lui-même vers la sortie.
+  - *La page* (`web/site/`, sans outil de construction) reprend les couleurs de l'atelier :
+    - un clavier de 88 touches, jouable à la souris (plus bas sur la touche, plus fort) et au clavier de l'ordinateur ; les touches sont repérées par leur position physique, donc AZERTY et QWERTY marchent sans réglage ;
+    - la pédale forte (Espace) et le sostenuto (B) ;
+    - Web MIDI, avec la vélocité maximale du clavier MIDI réglable ;
+    - le volume, la salle (préréglages de l'atelier et niveau), les options du moteur, la résonance sympathique et le La.
+  - *Le profil ne quitte jamais le navigateur.* On choisit `modal-profile.bin` une fois ; la page le garde dans IndexedDB et le transmet au fil audio. Calibré sur Noire, il ne peut pas être publié : la page ne pourra être mise en ligne qu'avec un profil tiré d'une source libre.
+  - *Essai dans un vrai navigateur* (Edge sans fenêtre, profil temporaire, son coupé) : profil chargé dans le fil audio (88 × 16), moteur à 44,1 kHz, latence de sortie annoncée d'environ 10 ms. Un C4 joué au clavier de l'ordinateur avec la pédale donne 1 voix, la couche 96, le voyant de pédale et la touche enfoncée. Aucune erreur dans la console. La latence réelle dépend du système et du navigateur (10 à 40 ms), loin de l'ASIO.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

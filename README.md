@@ -44,6 +44,8 @@ Play a MIDI file live: File > Open MIDI file (Ctrl+O), drop it on the window, or
 A room around the piano (algorithmic reverberation, no latency on the direct sound): the Room button in the
 toolbar, its settings in Engine > Room settings (Ctrl+M). Heard, recorded, streamed and in take renders alike.
 
+In a browser (WebAssembly, the modal engine and the room, Web MIDI): see `web/README.md`.
+
 Offline render of a MIDI file, through the reference player or the modal engine:
 
 ```

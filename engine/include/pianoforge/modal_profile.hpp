@@ -144,5 +144,8 @@ struct ModalProfile {
 
 /// Loads modal-profile.bin. Returns nullptr and fills `error` on failure.
 std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path& path, std::string& error);
+/// The same from the file's bytes, already in memory (`source` names them in the errors): for a build without a
+/// file system (WebAssembly), where the profile arrives as a download.
+std::shared_ptr<const ModalProfile> parseModalProfile(std::vector<char> bytes, const std::string& source, std::string& error);
 
 } // namespace pf

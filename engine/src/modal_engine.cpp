@@ -208,6 +208,7 @@ void ModalEngine::retuneStrings() noexcept
 void ModalEngine::install(std::shared_ptr<const ModalProfile> profile)
 {
     published.store(nullptr, std::memory_order_release);
+#if !defined(__EMSCRIPTEN__) // in a browser, the profile is installed on the audio thread itself: nothing to wait for
     if (owned != nullptr) {
         // The audio thread sees the null pointer on its next block and says so; then the voices are ours.
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
@@ -215,6 +216,7 @@ void ModalEngine::install(std::shared_ptr<const ModalProfile> profile)
                && std::chrono::steady_clock::now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
+#endif
     owned = std::move(profile);
     allocate();
     published.store(owned.get(), std::memory_order_release);
@@ -235,7 +237,7 @@ void ModalEngine::allSoundOff() noexcept
 
 void ModalEngine::process(float* const* outputs, int numChannels, int n, const Event* events, int numEvents) noexcept
 {
-    NoDenormals noDenormals;
+    [[maybe_unused]] NoDenormals noDenormals;
     for (int c = 0; c < numChannels; ++c)
         if (outputs[c] != nullptr)
             std::fill(outputs[c], outputs[c] + n, 0.0f);

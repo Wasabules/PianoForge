@@ -1,0 +1,400 @@
+// PianoForge in a browser: the page (keyboard, MIDI, settings, the profile kept in this browser) and the audio
+// worklet that runs the engine (worklet.js, pianoforge.wasm).
+const $ = (id) => document.getElementById(id);
+
+// ---- Settings kept in this browser (per viewer, best effort) ----
+const store = {
+  get(key, fallback) {
+    try {
+      const v = localStorage.getItem('pianoforge.' + key);
+      return v === null ? fallback : JSON.parse(v);
+    } catch { return fallback; }
+  },
+  set(key, value) {
+    try { localStorage.setItem('pianoforge.' + key, JSON.stringify(value)); } catch { /* private window */ }
+  },
+};
+
+// ---- The profile, kept in IndexedDB (never uploaded) ----
+const profileDb = {
+  open() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('pianoforge', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('files');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  },
+  async run(mode, action) {
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('files', mode);
+      const request = action(tx.objectStore('files'));
+      tx.oncomplete = () => resolve(request?.result);
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+  get() { return this.run('readonly', (s) => s.get('modal-profile')).catch(() => undefined); },
+  put(entry) { return this.run('readwrite', (s) => s.put(entry, 'modal-profile')); },
+  remove() { return this.run('readwrite', (s) => s.delete('modal-profile')); },
+};
+
+// ---- State ----
+const ROOM_PRESETS = [ // as the lab's (app/src/ui/RoomPanel.cpp): size, decay s, brightness, pre-delay ms, level dB, width
+  { name: 'Studio', size: 0.15, decay: 0.8, brightness: 0.6, predelayMs: 4, levelDb: -18, width: 0.8 },
+  { name: 'Chamber', size: 0.35, decay: 1.4, brightness: 0.55, predelayMs: 10, levelDb: -16, width: 1 },
+  { name: 'Concert hall', size: 0.65, decay: 2.2, brightness: 0.5, predelayMs: 20, levelDb: -15, width: 1 },
+  { name: 'Large hall', size: 0.85, decay: 3.0, brightness: 0.45, predelayMs: 28, levelDb: -15, width: 1 },
+  { name: 'Cathedral', size: 1.0, decay: 5.5, brightness: 0.35, predelayMs: 45, levelDb: -16, width: 1 },
+];
+const OPTIONS = [ // pf_set_option
+  ['Soundboard body', true], ['Attack residual', true], ['Sympathetic resonance', true],
+  ['Held keys resonate', true], ['Pedal catches releases', true], ['Release noise', true],
+];
+const COMPUTER_KEYS = ['KeyA', 'KeyW', 'KeyS', 'KeyE', 'KeyD', 'KeyF', 'KeyT', 'KeyG', 'KeyY', 'KeyH', 'KeyU', 'KeyJ',
+  'KeyK', 'KeyO', 'KeyL', 'KeyP', 'Semicolon']; // physical places: QWERTY names, AZERTY keys alike
+
+let context = null, node = null, profile = null, midi = null;
+let octave = store.get('octave', 4), velocity = store.get('velocity', 100);
+const held = new Map();        // computer key code -> note
+const pointers = new Map();    // pointer id -> note
+const sounding = new Uint8Array(128); // notes down, any source (for the keyboard's display)
+const keys = new Map();        // note -> element
+
+function message(text, kind = '') {
+  $('message').textContent = text;
+  $('message').className = 'message ' + kind;
+}
+
+function send(command, transfer) {
+  if (node) node.port.postMessage(command, transfer ?? []);
+}
+
+// ---- The keyboard ----
+function buildKeyboard() {
+  const board = $('keyboard');
+  const whites = [];
+  for (let note = 21; note <= 108; note++) {
+    const black = [1, 3, 6, 8, 10].includes(note % 12);
+    const key = document.createElement('div');
+    key.className = black ? 'black' : 'white';
+    key.dataset.note = note;
+    if (!black) {
+      if (note % 12 === 0) key.innerHTML = `<span class="label">C${note / 12 - 1}</span>`;
+      board.appendChild(key);
+      whites.push(key);
+    } else {
+      board.appendChild(key); // positioned after layout
+    }
+    keys.set(note, key);
+  }
+  const place = () => {
+    const width = board.clientWidth / whites.length;
+    let white = 0;
+    for (let note = 21; note <= 108; note++) {
+      const key = keys.get(note);
+      if (key.className.startsWith('white')) { white++; continue; }
+      key.style.width = `${width * 0.6}px`;
+      key.style.left = `${white * width - width * 0.3}px`;
+    }
+  };
+  new ResizeObserver(place).observe(board);
+  place();
+
+  const noteAt = (event) => {
+    const element = document.elementFromPoint(event.clientX, event.clientY);
+    return element?.dataset?.note ? { note: Number(element.dataset.note), element } : null;
+  };
+  const strike = (pointerId, hit, event) => {
+    const rect = hit.element.getBoundingClientRect();
+    const v = Math.max(1, Math.min(127, Math.round(1 + 126 * (event.clientY - rect.top) / rect.height)));
+    noteOn(hit.note, v, false);
+    pointers.set(pointerId, hit.note);
+  };
+  board.addEventListener('pointerdown', (event) => {
+    const hit = noteAt(event);
+    if (!hit) return;
+    board.setPointerCapture(event.pointerId);
+    strike(event.pointerId, hit, event);
+  });
+  board.addEventListener('pointermove', (event) => { // a glissando
+    if (!pointers.has(event.pointerId)) return;
+    const hit = noteAt(event);
+    if (hit && hit.note !== pointers.get(event.pointerId)) {
+      noteOff(pointers.get(event.pointerId));
+      strike(event.pointerId, hit, event);
+    }
+  });
+  const release = (event) => {
+    if (!pointers.has(event.pointerId)) return;
+    noteOff(pointers.get(event.pointerId));
+    pointers.delete(event.pointerId);
+  };
+  board.addEventListener('pointerup', release);
+  board.addEventListener('pointercancel', release);
+}
+
+function show(note, down) {
+  if (note < 0 || note > 127) return;
+  sounding[note] = Math.max(0, sounding[note] + (down ? 1 : -1));
+  keys.get(note)?.classList.toggle('down', sounding[note] > 0);
+}
+
+function noteOn(note, v, curved) {
+  send({ type: 'midi', status: 0x90, data1: note, data2: v, curved });
+  show(note, true);
+}
+
+function noteOff(note) {
+  send({ type: 'midi', status: 0x80, data1: note, data2: 64, curved: false });
+  show(note, false);
+}
+
+function pedal(controller, down) {
+  send({ type: 'midi', status: 0xb0, data1: controller, data2: down ? 127 : 0, curved: false });
+}
+
+// ---- The computer keyboard ----
+function typing(event) {
+  return event.target instanceof HTMLInputElement && event.target.type !== 'range' && event.target.type !== 'checkbox';
+}
+
+window.addEventListener('keydown', (event) => {
+  if (typing(event) || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.code === 'Space') { event.preventDefault(); if (!event.repeat) pedal(64, true); return; }
+  if (event.repeat) return;
+  const index = COMPUTER_KEYS.indexOf(event.code);
+  if (index >= 0) {
+    const note = 12 * (octave + 1) + index;
+    if (!held.has(event.code) && note >= 21 && note <= 108) {
+      held.set(event.code, note);
+      noteOn(note, velocity, false);
+    }
+  } else if (event.code === 'KeyZ' || event.code === 'KeyX') {
+    octave = Math.max(0, Math.min(7, octave + (event.code === 'KeyX' ? 1 : -1)));
+    $('octave').textContent = octave;
+    store.set('octave', octave);
+  } else if (event.code === 'KeyC' || event.code === 'KeyV') {
+    velocity = Math.max(1, Math.min(127, velocity + (event.code === 'KeyV' ? 10 : -10)));
+    $('velocityOut').textContent = velocity;
+    store.set('velocity', velocity);
+  } else if (event.code === 'KeyB') {
+    pedal(66, true);
+  }
+});
+
+window.addEventListener('keyup', (event) => {
+  if (event.code === 'Space') { pedal(64, false); return; }
+  if (event.code === 'KeyB') { pedal(66, false); return; }
+  const note = held.get(event.code);
+  if (note !== undefined) {
+    held.delete(event.code);
+    noteOff(note);
+  }
+});
+
+window.addEventListener('blur', () => { // keys released while the page was not looking
+  for (const note of held.values()) noteOff(note);
+  held.clear();
+});
+
+// ---- MIDI keyboards (Web MIDI) ----
+async function connectMidi() {
+  if (!navigator.requestMIDIAccess) {
+    $('midiLine').textContent = 'MIDI: this browser has no Web MIDI (Chrome, Edge and Firefox do)';
+    return;
+  }
+  try {
+    midi = await navigator.requestMIDIAccess({ sysex: false });
+  } catch (error) {
+    $('midiLine').textContent = 'MIDI: not allowed (' + error.message + ')';
+    return;
+  }
+  const attach = () => {
+    const names = [];
+    for (const input of midi.inputs.values()) {
+      input.onmidimessage = ({ data }) => {
+        const [status, data1 = 0, data2 = 0] = data;
+        const type = status & 0xf0;
+        if (type !== 0x80 && type !== 0x90 && type !== 0xb0) return;
+        send({ type: 'midi', status, data1, data2, curved: true });
+        if (type === 0x90 && data2 > 0) show(data1, true);
+        else if (type === 0x80 || type === 0x90) show(data1, false);
+      };
+      names.push(input.name);
+    }
+    $('midiLine').textContent = names.length ? 'MIDI: ' + names.join(', ') : 'MIDI: no keyboard connected';
+  };
+  midi.onstatechange = attach;
+  attach();
+}
+
+// ---- Settings ----
+function settings() {
+  const preset = ROOM_PRESETS[Number($('roomPreset').value)] ?? ROOM_PRESETS[2];
+  return {
+    volume: Number($('volume').value),
+    room: { ...preset, on: $('roomOn').checked, levelDb: Number($('roomLevel').value) },
+    options: OPTIONS.map((_, i) => $('option' + i).checked),
+    sympathetic: Number($('sympathetic').value),
+    a4: Number($('a4').value) || 440,
+    curveMax: Math.max(20, Math.min(127, Number($('curveMax').value) || 127)),
+  };
+}
+
+function apply() {
+  const s = settings();
+  $('volumeOut').textContent = `${s.volume.toFixed(1)} dB`;
+  $('roomLevelOut').textContent = `${s.room.levelDb} dB`;
+  $('sympatheticOut').textContent = `${s.sympathetic} dB`;
+  store.set('settings', { ...s, roomPreset: Number($('roomPreset').value) });
+  send({ type: 'volume', db: s.volume });
+  send({ type: 'room', ...s.room });
+  s.options.forEach((on, option) => send({ type: 'option', option, on }));
+  send({ type: 'sympathetic', db: s.sympathetic });
+  send({ type: 'tuning', a4: s.a4 });
+  send({ type: 'curve', inputMin: 1, inputMax: s.curveMax, points: [0, 0.25, 0.5, 0.75, 1] });
+}
+
+function buildSettings() {
+  ROOM_PRESETS.forEach((p, i) => $('roomPreset').add(new Option(p.name, String(i))));
+  OPTIONS.forEach(([name, on], i) => {
+    const label = document.createElement('label');
+    label.innerHTML = `<input id="option${i}" type="checkbox"${on ? ' checked' : ''}> ${name}`;
+    $('options').appendChild(label);
+  });
+  const saved = store.get('settings', null);
+  $('roomPreset').value = String(saved?.roomPreset ?? 2);
+  if (saved) {
+    $('volume').value = saved.volume;
+    $('roomOn').checked = saved.room.on;
+    $('roomLevel').value = saved.room.levelDb;
+    saved.options.forEach((on, i) => { $('option' + i).checked = on; });
+    $('sympathetic').value = saved.sympathetic;
+    $('a4').value = saved.a4;
+    $('curveMax').value = saved.curveMax;
+  }
+  $('roomPreset').addEventListener('change', () => { // a preset brings its level
+    $('roomLevel').value = ROOM_PRESETS[Number($('roomPreset').value)].levelDb;
+    apply();
+  });
+  for (const id of ['volume', 'roomOn', 'roomLevel', 'sympathetic', 'a4', 'curveMax'])
+    $(id).addEventListener('input', apply);
+  $('options').addEventListener('change', apply);
+  $('octave').textContent = octave;
+  $('velocityOut').textContent = velocity;
+}
+
+// ---- The profile ----
+function describeProfile() {
+  $('profileLine').textContent = profile
+    ? `${profile.name}, ${(profile.size / 1e6).toFixed(1)} MB` + (profile.notes ? ` (${profile.notes} notes x ${profile.layers} layers)` : '')
+    : 'No profile: choose modal-profile.bin';
+  $('forget').disabled = !profile;
+}
+
+function sendProfile() {
+  if (!node || !profile) return;
+  message('Loading the profile into the engine...');
+  const copy = profile.bytes.slice(0); // the page keeps its own
+  send({ type: 'profile', bytes: copy }, [copy]);
+}
+
+$('profileFile').addEventListener('change', async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const bytes = await file.arrayBuffer();
+  profile = { name: file.name, size: bytes.byteLength, bytes };
+  describeProfile();
+  try { await profileDb.put({ name: file.name, bytes }); } catch { message('Kept for this session only (the browser refused to store it).'); }
+  sendProfile();
+});
+
+$('forget').addEventListener('click', async () => {
+  await profileDb.remove();
+  profile = null;
+  describeProfile();
+  message('The profile is no longer kept in this browser.', 'good');
+});
+
+// ---- Start: the audio context, the worklet, the module ----
+$('start').addEventListener('click', async () => {
+  if (context) { // a second click: stop
+    send({ type: 'allSoundOff' });
+    await context.close();
+    context = node = null;
+    $('start').textContent = 'Start';
+    $('engineLine').textContent = 'Stopped';
+    return;
+  }
+  try {
+    // At the profile's rate (44.1 kHz): the attack residual plays as recorded, and the engine does not work for a
+    // device set to 96 or 192 kHz (the browser converts to the device's rate). Otherwise, the browser's own rate.
+    try {
+      context = new AudioContext({ latencyHint: 'interactive', sampleRate: 44100 });
+    } catch {
+      context = new AudioContext({ latencyHint: 'interactive' });
+    }
+    await context.audioWorklet.addModule('worklet.js');
+    const wasm = await (await fetch('pianoforge.wasm')).arrayBuffer();
+    node = new AudioWorkletNode(context, 'pianoforge', {
+      numberOfInputs: 0,
+      outputChannelCount: [2],
+      processorOptions: { wasm },
+    });
+    node.connect(context.destination);
+    node.port.onmessage = ({ data }) => received(data);
+    $('start').textContent = 'Stop';
+    connectMidi();
+  } catch (error) {
+    message('Cannot start the audio: ' + error.message, 'bad');
+    context = node = null;
+  }
+});
+
+function received(data) {
+  switch (data.type) {
+    case 'ready': {
+      $('engineLine').textContent = 'Modal engine running';
+      const latency = (context.baseLatency || 0) + (context.outputLatency || 0);
+      $('audioLine').textContent = `${(data.sampleRate / 1000).toFixed(1)} kHz, blocks of 128 (the browser converts to the device's rate)`;
+      $('latencyLine').textContent = latency > 0 ? `Output latency about ${(latency * 1000).toFixed(0)} ms (browser and system)` : 'Output latency: not reported by this browser';
+      apply();
+      if (profile) sendProfile();
+      else message('Choose modal-profile.bin to hear the piano.');
+      break;
+    }
+    case 'profile':
+      if (data.ok) {
+        profile.notes = data.notes;
+        profile.layers = data.layers;
+        describeProfile();
+        message('Ready: play the keyboard, the mouse, the computer keyboard or a MIDI keyboard.', 'good');
+      } else {
+        message('The profile did not load: ' + data.error, 'bad');
+      }
+      break;
+    case 'info':
+      $('voicesLine').textContent = `${data.voices} ${data.voices === 1 ? 'voice' : 'voices'} of 64, ${data.resonators.toLocaleString('en')} resonators`;
+      if (data.lastNote >= 0)
+        $('noteLine').textContent = `Last note ${data.lastNote}, velocity ${data.lastVelocity} (layer ${data.lastLayer})`;
+      $('pedal').classList.toggle('on', data.sustain);
+      $('sostenuto').classList.toggle('on', data.sostenuto);
+      $('meterFill').style.width = `${Math.min(100, Math.max(0, (20 * Math.log10(data.peak + 1e-9) + 60) / 60 * 100))}%`;
+      break;
+    case 'error':
+      message('The engine did not start: ' + data.message, 'bad');
+      break;
+    default:
+      break;
+  }
+}
+
+// ---- Page start ----
+buildKeyboard();
+buildSettings();
+profileDb.get().then((entry) => {
+  if (entry) profile = { name: entry.name, size: entry.bytes.byteLength, bytes: entry.bytes };
+  describeProfile();
+  $('start').disabled = false;
+});

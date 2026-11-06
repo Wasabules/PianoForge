@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PianoForge</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <h1>PianoForge</h1>
+    <button id="start" class="primary" disabled>Start</button>
+    <label class="field">Volume <input id="volume" type="range" min="-24" max="24" step="0.5" value="6"><output id="volumeOut">6.0 dB</output></label>
+    <span class="field">
+      <label><input id="roomOn" type="checkbox" checked> Room</label>
+      <select id="roomPreset"></select>
+      <input id="roomLevel" type="range" min="-40" max="0" step="0.5" value="-15" title="The reverberation against the piano">
+      <output id="roomLevelOut">-15 dB</output>
+    </span>
+    <span id="pedal" class="lamp" title="Sustain pedal (Space)">Pedal</span>
+    <span id="sostenuto" class="lamp" title="Sostenuto pedal (B)">Sost.</span>
+    <span id="meter" class="meter"><span id="meterFill"></span></span>
+  </header>
+
+  <main>
+    <section class="cards">
+      <div class="card">
+        <h2>Profile</h2>
+        <p id="profileLine" class="big">No profile</p>
+        <p class="dim">The profile (modal-profile.bin, written by <code>forge export</code>) stays in this browser: it is never uploaded.</p>
+        <p>
+          <label class="button">Choose a file... <input id="profileFile" type="file" accept=".bin" hidden></label>
+          <button id="forget" disabled>Forget it</button>
+        </p>
+      </div>
+      <div class="card">
+        <h2>Engine</h2>
+        <p id="engineLine" class="big">Stopped</p>
+        <p id="voicesLine" class="dim">-</p>
+        <p id="noteLine" class="dim">-</p>
+      </div>
+      <div class="card">
+        <h2>Audio and MIDI</h2>
+        <p id="audioLine" class="big">-</p>
+        <p id="latencyLine" class="dim">-</p>
+        <p id="midiLine" class="dim">MIDI: not connected</p>
+      </div>
+      <div class="card">
+        <h2>Settings</h2>
+        <details>
+          <summary>Engine and keyboard</summary>
+          <div id="options" class="options"></div>
+          <label class="field">Sympathetic level <input id="sympathetic" type="range" min="-24" max="12" step="0.5" value="0"><output id="sympatheticOut">0 dB</output></label>
+          <label class="field">A4 <input id="a4" type="number" min="415" max="466" step="0.1" value="440"> Hz</label>
+          <label class="field" title="The highest velocity the MIDI keyboard really sends (Korg B2: about 114)">MIDI keyboard top velocity <input id="curveMax" type="number" min="20" max="127" step="1" value="127"></label>
+        </details>
+      </div>
+    </section>
+
+    <p id="message" class="message"></p>
+    <p class="hint">Computer keyboard from C<span id="octave">4</span>: A W S E D F T G Y H U J K O L P (QWERTY places; Q Z S E... on AZERTY) &nbsp; Z / X octave &nbsp; C / V velocity <output id="velocityOut">100</output> &nbsp; Space pedal &nbsp; B sostenuto. The mouse plays too: lower on a key is louder.</p>
+    <div id="keyboard" class="keyboard" aria-label="88-key keyboard"></div>
+  </main>
+</body>
+</html>
