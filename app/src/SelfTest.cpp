@@ -441,7 +441,7 @@ int runSelfTest(const juce::StringArray& arguments)
             int inBlock, outBlock;
         };
         for (const auto& c : { Case { 44100.0, 48000.0, 150e-6, 128, 480 }, Case { 44100.0, 44100.0, -80e-6, 64, 441 } }) {
-            DriftResampler d;
+            DriftFifo d;
             d.prepare(c.inRate, c.outRate, c.inBlock, c.outBlock);
             const double outTrue = c.outRate * (1.0 + c.drift), seconds = 120.0;
             std::vector<float> inL((size_t) c.inBlock), inR((size_t) c.inBlock), outL, outR((size_t) c.outBlock);

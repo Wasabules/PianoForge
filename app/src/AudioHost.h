@@ -4,6 +4,7 @@
 #include "MirrorOutput.h"
 #include "TakeRecorder.h"
 
+#include <pianoforge/audio_feed.hpp>
 #include <pianoforge/engine.hpp>
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -20,12 +21,13 @@ namespace pf::app {
 /// reached the engine (lock-free) so that takes can be saved afterwards.
 class AudioHost final : public juce::AudioIODeviceCallback {
 public:
-    explicit AudioHost(pf::Engine& e) : engine(e) {}
+    explicit AudioHost(pf::Engine& e) : engine(e) { feedOpen = feed.create(); }
 
     juce::MidiMessageCollector collector; // MIDI from keyboards (MIDI thread) and from the UI (message thread)
     juce::MidiKeyboardState keyboardState; // on-screen keyboard; also displays the notes received
     LiveRecorder live;                     // records what the device plays (start / stop from the interface)
-    MirrorOutput mirror;                   // a copy for streaming software, on another device (OBS)
+    MirrorOutput mirror;                   // a copy for streaming software, on another device
+    bool feedOn() const noexcept { return feedOpen; } // the audio feed of the OBS plugin (obs/)
 
     /// Message thread: sends a message as if it came from a keyboard.
     void send(const juce::MidiMessage& m)
@@ -41,6 +43,7 @@ public:
         midi.ensureSize(16384);
         engine.prepare(sampleRate, blockSize);
         mirror.mainFormat(sampleRate, blockSize);
+        feed.setFormat((std::uint32_t) std::lround(sampleRate), (std::uint32_t) std::max(blockSize, 1));
         samplesElapsed = 0;
         recordingRate = sampleRate;
         segment.fetch_add(1);
@@ -99,6 +102,7 @@ public:
         engine.process(outputs, numOutputs, n, events.data(), count);
         live.push(outputs, numOutputs, n, samplesElapsed); // a copy into a lock-free FIFO: nothing waits on it
         mirror.push(outputs, numOutputs, n);               // likewise
+        feed.write(outputs, numOutputs, n);                // the OBS plugin's feed: a copy into shared memory
         samplesElapsed += n;
     }
 
@@ -106,6 +110,8 @@ private:
     static constexpr int kMaxEvents = 1024;
     static constexpr int kRecordCapacity = 1 << 16;
     pf::Engine& engine;
+    pf::AudioFeedWriter feed; // before the callbacks start; written by the audio thread only
+    bool feedOpen = false;
     juce::MidiBuffer midi;
     std::array<pf::Event, kMaxEvents> events {};
     std::atomic<bool> ready { false };

@@ -19,3 +19,18 @@ FetchContent_MakeAvailable(JUCE)
 
 add_subdirectory(engine)
 add_subdirectory(app)
+
+# The OBS plugin (obs/): on Windows when OBS Studio is installed, on Linux when libobs is.
+if(WIN32)
+    set(obs_found_default OFF)
+    if(EXISTS "C:/Program Files/obs-studio/bin/64bit/obs.dll")
+        set(obs_found_default ON)
+    endif()
+else()
+    find_package(libobs QUIET)
+    set(obs_found_default ${libobs_FOUND})
+endif()
+option(PIANOFORGE_OBS_PLUGIN "Build the OBS Studio plugin (the PianoForge audio source)" ${obs_found_default})
+if(PIANOFORGE_OBS_PLUGIN)
+    add_subdirectory(obs)
+endif()

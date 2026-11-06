@@ -1,7 +1,8 @@
 # PianoForge core: pure C++20, no framework.
 add_library(pianoforge_engine STATIC
     src/modal_profile.cpp
-    src/modal_engine.cpp)
+    src/modal_engine.cpp
+    src/audio_feed.cpp)
 add_library(pianoforge::engine ALIAS pianoforge_engine)
 target_include_directories(pianoforge_engine PUBLIC include)
 target_compile_features(pianoforge_engine PUBLIC cxx_std_20)
@@ -35,4 +36,7 @@ if(BUILD_TESTING)
     add_executable(modal_engine_test tests/modal_engine_test.cpp)
     target_link_libraries(modal_engine_test PRIVATE pianoforge::engine)
     add_test(NAME modal_engine COMMAND modal_engine_test)
+    add_executable(audio_feed_test tests/audio_feed_test.cpp)
+    target_link_libraries(audio_feed_test PRIVATE pianoforge::engine)
+    add_test(NAME audio_feed COMMAND audio_feed_test)
 endif()

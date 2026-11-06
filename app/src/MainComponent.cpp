@@ -165,7 +165,7 @@ MainComponent::MainComponent()
     applyTuning();
 
     // Stream output: a copy of the sound on another device (a virtual cable for OBS), the main device untouched.
-    mirrorLabel.setText("Stream output (OBS)", juce::dontSendNotification);
+    mirrorLabel.setText("Mirror output", juce::dontSendNotification);
     mirrorChoice.setTooltip("A copy of the sound on another device, through the Windows mixer: pick a virtual cable "
                             "(VB-Audio Hi-Fi Cable Input) and add its output to OBS as an audio input. The main output "
                             "(ASIO) is not affected.");
@@ -175,8 +175,12 @@ MainComponent::MainComponent()
     else
         mirrorChoice.setSelectedId(1, juce::dontSendNotification);
     mirrorChoice.onChange = [this] { openMirror(); saveSettings(); };
-    for (auto* c : std::initializer_list<juce::Component*> { &mirrorLabel, &mirrorChoice, &mirrorStatus })
+    for (auto* c : std::initializer_list<juce::Component*> { &mirrorLabel, &mirrorChoice, &mirrorStatus, &feedStatus })
         addAndMakeVisible(*c);
+    feedStatus.setText(host.feedOn() ? "OBS plugin: the \"PianoForge\" audio source reads this application directly"
+                                     : "OBS plugin: no feed (another PianoForge is feeding it)",
+                       juce::dontSendNotification);
+    feedStatus.setColour(juce::Label::textColourId, juce::Colours::grey);
 
     saveTakeButton.setButtonText("Save last take");
     saveTakeButton.onClick = [this] { saveLastTake(); };
@@ -273,7 +277,7 @@ MainComponent::MainComponent()
         corpusStatus.setText("No corpus found: use 'Change corpus...' and pick corpus/reference/noire-dry/single-notes",
                              juce::dontSendNotification);
 
-    setSize(1400, 630);
+    setSize(1400, 652);
     startTimerHz(20);
 }
 
@@ -866,10 +870,13 @@ void MainComponent::resized()
     row.removeFromLeft(8);
     temperamentRoot.setBounds(row.removeFromLeft(90).reduced(0, 2));
     row.removeFromLeft(24);
-    mirrorLabel.setBounds(row.removeFromLeft(130));
+    mirrorLabel.setBounds(row.removeFromLeft(100));
     mirrorChoice.setBounds(row.removeFromLeft(300).reduced(0, 2));
     row.removeFromLeft(8);
     mirrorStatus.setBounds(row);
+
+    area.removeFromTop(2);
+    feedStatus.setBounds(area.removeFromTop(20));
 
     area.removeFromTop(6);
     row = area.removeFromTop(28);

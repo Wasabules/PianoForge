@@ -89,7 +89,7 @@ private:
     juce::Label tuningLabel;
     juce::Slider referenceA4;
     juce::ComboBox temperamentChoice, temperamentRoot;
-    juce::Label mirrorLabel, mirrorStatus;
+    juce::Label mirrorLabel, mirrorStatus, feedStatus;
     juce::ComboBox mirrorChoice;           // id 1: off, then the devices
     juce::StringArray mirrorDevices;
     juce::TextButton audioButton, corpusButton, curveButton, saveTakeButton, takesFolderButton;
