@@ -11,6 +11,7 @@
 #include "ui/EnginePanel.h"
 #include "ui/Meters.h"
 #include "ui/PerformancePanel.h"
+#include "ui/PlayerBar.h"
 #include "ui/ToolWindow.h"
 
 #include <pianoforge/modal_engine.hpp>
@@ -24,11 +25,13 @@
 namespace pf::app {
 
 /// The main window: the menus, a toolbar (engine, recording, volume, velocity, pedal, audio load, level), a
-/// dashboard of four cards (engine, last note, audio, session), the 88-key keyboard and a status bar. The
+/// dashboard of four cards (engine, last note, audio, session), the MIDI file player, the 88-key keyboard and a
+/// status bar. A MIDI file opens from the menus or by dropping it on the window. The
 /// settings of the engines, the audio and streaming, the velocity curve and the performance details have their
 /// own windows (menus Engine, Audio and Keyboard).
 class MainComponent final : public juce::Component,
                             public juce::MenuBarModel,
+                            public juce::FileDragAndDropTarget,
                             private juce::Timer,
                             private juce::KeyListener,
                             private juce::ChangeListener {
@@ -42,6 +45,14 @@ public:
     juce::StringArray getMenuBarNames() override;
     juce::PopupMenu getMenuForIndex(int index, const juce::String& name) override;
     void menuItemSelected(int id, int) override;
+
+    /// Opens a MIDI file in the player (menus, drag and drop, or the command line: "Open with" PianoForge).
+    void openMidiFile(const juce::File& file);
+
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int, int) override;
+    void fileDragEnter(const juce::StringArray&, int, int) override { playerBar->setDropHighlight(true); }
+    void fileDragExit(const juce::StringArray&) override { playerBar->setDropHighlight(false); }
 
 private:
     void timerCallback() override;
@@ -58,6 +69,8 @@ private:
     void chooseCorpus();
     void loadCorpus(const juce::File& folder);
     void loadModalProfile();
+    void chooseMidiFile();
+    void closeMidiFile();
     void openVelocityCurve();
     void updateRenderedLayers();
     void showWindow(std::unique_ptr<ToolWindow>& window, const juce::String& title, juce::Component& content);
@@ -105,6 +118,7 @@ private:
     std::unique_ptr<AudioPanel> audioPanel;
     PerformancePanel performancePanel;
     std::unique_ptr<ToolWindow> engineWindow, audioWindow, performanceWindow;
+    std::unique_ptr<PlayerBar> playerBar;
     std::unique_ptr<VelocityCurveWindow> curveWindow;
 
     // Toolbar.
@@ -128,7 +142,7 @@ private:
     juce::String recordingStem, lastSaved;
     double messageUntil = 0.0;
     int octave = 4;             // scientific octave of the first computer-keyboard note (C4 = middle C)
-    bool spaceDown = false, focusGiven = false, bankInstalled = false;
+    bool spaceDown = false, pedalFromSpace = false, focusGiven = false, bankInstalled = false;
     bool constructed = false;   // no saving while the settings are being read back
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)

@@ -10,7 +10,9 @@ constexpr int kLayoutAzerty = 1, kLayoutQwerty = 2;
 
 enum MenuId {
     // File
-    kRecord = 1, kRecordMidi, kRecordWav, kSaveTake, kOpenRecordings, kOpenTakes, kChangeCorpus, kQuit,
+    kRecord = 1, kRecordMidi, kRecordWav, kSaveTake, kOpenRecordings, kOpenTakes, kChangeCorpus, kQuit, kOpenMidi,
+    // Player
+    kPlayPause = 80, kStopPlayer, kBack, kForward, kLoop, kCloseMidi, kSpeed = 100,
     // Engine
     kEngineReference = 20, kEngineModal, kEngineOption = 30, kEngineSettings = 50,
     // Audio
@@ -20,6 +22,13 @@ enum MenuId {
     // Help
     kShortcuts = 90, kAbout,
 };
+
+constexpr int kSpeedPresets[] = { 50, 75, 100, 125, 150, 200 }; // percent, menu Player > Speed
+
+bool isMidiFile(const juce::File& f)
+{
+    return f.hasFileExtension("mid;midi;smf;kar");
+}
 
 /// Finds the corpus: saved setting, then $PIANOFORGE_CORPUS, then walking up from the executable.
 juce::File findCorpus(const juce::String& saved)
@@ -109,6 +118,10 @@ MainComponent::MainComponent()
         auto* d = deviceManager.getCurrentAudioDevice();
         loadTracker.reset(host.load, d != nullptr ? d->getXRunCount() : -1);
     };
+    playerBar = std::make_unique<PlayerBar>(host.filePlayer, *settings);
+    playerBar->onOpen = [this] { chooseMidiFile(); };
+    playerBar->onClicked = [this] { keyboard.grabKeyboardFocus(); };
+    addAndMakeVisible(*playerBar);
 
     // Toolbar: engine (switchable while playing, for A/B listening), recording, volume, velocity, pedal, load, level.
     referenceButton.setTooltip("The reference: Noire's recordings, played back (Ctrl+1)");
@@ -182,7 +195,7 @@ MainComponent::MainComponent()
     else
         showMessage("No corpus found: File > Change corpus..., and pick corpus/reference/noire-dry/single-notes", theme::busy);
 
-    setSize(1440, 520);
+    setSize(1440, 570);
     constructed = true;
     startTimerHz(20);
 }
@@ -214,7 +227,7 @@ MainComponent::~MainComponent()
 
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return { "File", "Engine", "Audio", "Keyboard", "Help" };
+    return { "File", "Player", "Engine", "Audio", "Keyboard", "Help" };
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
@@ -228,8 +241,11 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         i.shortcutKeyDescription = shortcut;
         return i;
     };
+    const bool fileLoaded = host.filePlayer.sequence() != nullptr;
     switch (index) {
     case 0: {
+        menu.addItem(item(kOpenMidi, "Open MIDI file...", "Ctrl+O"));
+        menu.addSeparator();
         menu.addItem(item(kRecord, host.live.recording() ? "Stop recording" : "Record", "Ctrl+R"));
         juce::PopupMenu formats;
         formats.addItem(item(kRecordWav, "WAV (the sound, 32-bit float)", {}, recordWav, !host.live.recording()));
@@ -246,6 +262,24 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         break;
     }
     case 1: {
+        menu.addItem(item(kOpenMidi, "Open MIDI file...", "Ctrl+O"));
+        menu.addSeparator();
+        menu.addItem(item(kPlayPause, host.filePlayer.wantsToPlay() ? "Pause" : "Play", "Ctrl+Space", false, fileLoaded));
+        menu.addItem(item(kStopPlayer, "Stop (back to the start)", "Ctrl+Home", false, fileLoaded));
+        menu.addItem(item(kBack, "Back 5 s", "Ctrl+Left", false, fileLoaded));
+        menu.addItem(item(kForward, "Forward 5 s", "Ctrl+Right", false, fileLoaded));
+        menu.addSeparator();
+        menu.addItem(item(kLoop, "Loop", "Ctrl+L", host.filePlayer.isLooping()));
+        juce::PopupMenu speeds;
+        for (int i = 0; i < (int) std::size(kSpeedPresets); ++i)
+            speeds.addItem(item(kSpeed + i, juce::String(kSpeedPresets[i]) + " %", {},
+                                juce::roundToInt(host.filePlayer.getSpeed() * 100.0) == kSpeedPresets[i]));
+        menu.addSubMenu("Speed", speeds);
+        menu.addSeparator();
+        menu.addItem(item(kCloseMidi, "Close the MIDI file", {}, false, fileLoaded));
+        break;
+    }
+    case 2: {
         menu.addItem(item(kEngineReference, "Reference: Noire samples", "Ctrl+1", !modalSelected()));
         menu.addItem(item(kEngineModal, "Modal: PianoForge engine", "Ctrl+2", modalSelected()));
         menu.addSeparator();
@@ -258,13 +292,13 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         menu.addItem(item(kEngineSettings, "Engine settings (tuning, re-strike, levels)...", "Ctrl+E"));
         break;
     }
-    case 2:
+    case 3:
         menu.addItem(item(kAudioSettings, "Audio, MIDI and streaming...", "Ctrl+,"));
         menu.addItem(item(kPerformance, "Performance...", "Ctrl+P"));
         menu.addSeparator();
         menu.addItem(item(kResetDropouts, "Reset the dropout counters"));
         break;
-    case 3:
+    case 4:
         menu.addItem(item(kVelocityCurve, "Velocity curve..."));
         menu.addSeparator();
         menu.addItem(item(kAzerty, "Computer keyboard: AZERTY", {}, keyLayout == kLayoutAzerty));
@@ -275,7 +309,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         menu.addItem(item(kVelocityDown, "Velocity -10", "C"));
         menu.addItem(item(kVelocityUp, "Velocity +10", "V"));
         break;
-    case 4:
+    case 5:
         menu.addItem(item(kShortcuts, "Keyboard shortcuts", "F1"));
         menu.addItem(item(kAbout, "About PianoForge"));
         break;
@@ -292,7 +326,18 @@ void MainComponent::menuItemSelected(int id, int)
         enginePanel->setOn(o, !enginePanel->isOn(o));
         return;
     }
+    if (id >= kSpeed && id < kSpeed + (int) std::size(kSpeedPresets)) {
+        playerBar->setSpeed(kSpeedPresets[id - kSpeed] / 100.0);
+        return;
+    }
     switch (id) {
+    case kOpenMidi: chooseMidiFile(); break;
+    case kPlayPause: playerBar->togglePlay(); break;
+    case kStopPlayer: playerBar->stop(); break;
+    case kBack: playerBar->nudge(-5.0); break;
+    case kForward: playerBar->nudge(5.0); break;
+    case kLoop: playerBar->setLoop(!host.filePlayer.isLooping()); break;
+    case kCloseMidi: closeMidiFile(); break;
     case kRecord: toggleRecording(); break;
     case kRecordMidi: recordMidi = !recordMidi; saveSettings(); break;
     case kRecordWav: recordWav = !recordWav; saveSettings(); break;
@@ -336,6 +381,8 @@ void MainComponent::showShortcuts()
             + (azerty ? "  Q Z S E D F T G Y H U J K O L P M: the keys from C to E\n  W / X: octave down / up\n"
                       : "  A W S E D F T G Y H U J K O L P ;: the keys from C to E\n  Z / X: octave down / up\n")
             + "  C / V: velocity -10 / +10\n  Space: sustain pedal\n\n"
+              "MIDI file player\n  Ctrl+O: open a MIDI file (or drop it on the window)\n  Ctrl+Space: play / pause\n"
+              "  Ctrl+Home: stop, back to the start\n  Ctrl+Left / Ctrl+Right: 5 s back / forward\n  Ctrl+L: loop\n\n"
               "Application\n  Ctrl+R: record / stop\n  Ctrl+S: save the last take\n  Ctrl+1 / Ctrl+2: reference / modal engine\n"
               "  Ctrl+E: engine settings\n  Ctrl+,: audio, MIDI and streaming\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
               "The mouse plays too: lower on a key is louder.");
@@ -386,7 +433,22 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
 {
     const auto mods = key.getModifiers();
     if (mods.isCommandDown()) {
-        switch (key.getKeyCode()) {
+        const int code = key.getKeyCode();
+        if (code == juce::KeyPress::spaceKey) {
+            playerBar->togglePlay();
+            return true;
+        }
+        if (code == juce::KeyPress::homeKey) {
+            playerBar->stop();
+            return true;
+        }
+        if (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey) {
+            playerBar->nudge(code == juce::KeyPress::leftKey ? -5.0 : 5.0);
+            return true;
+        }
+        switch (code) {
+        case 'O': chooseMidiFile(); return true;
+        case 'L': playerBar->setLoop(!host.filePlayer.isLooping()); return true;
         case 'R': toggleRecording(); return true;
         case 'S': saveLastTake(); return true;
         case 'E': showWindow(engineWindow, "Engine settings", *enginePanel); return true;
@@ -416,10 +478,17 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
 
 bool MainComponent::keyStateChanged(bool, juce::Component*)
 {
+    // Space is the pedal; Ctrl+Space is the player's play / pause, and leaves the pedal alone.
     const bool space = juce::KeyPress::isKeyCurrentlyDown(juce::KeyPress::spaceKey);
     if (space != spaceDown) {
         spaceDown = space;
-        sendSustain(space);
+        if (space && !juce::ModifierKeys::getCurrentModifiersRealtime().isCommandDown()) {
+            sendSustain(true);
+            pedalFromSpace = true;
+        } else if (!space && pedalFromSpace) {
+            sendSustain(false);
+            pedalFromSpace = false;
+        }
     }
     return false; // let the on-screen keyboard handle the other keys
 }
@@ -659,6 +728,63 @@ void MainComponent::loadModalProfile()
     });
 }
 
+void MainComponent::chooseMidiFile()
+{
+    auto* settings = properties.getUserSettings();
+    const juce::File folder(settings->getValue("midiFolder"));
+    fileChooser = std::make_unique<juce::FileChooser>("Open a MIDI file", folder.isDirectory() ? folder : juce::File(),
+                                                      "*.mid;*.midi;*.smf;*.kar");
+    fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                             [this](const juce::FileChooser& fc) {
+                                 if (const auto file = fc.getResult(); file.existsAsFile())
+                                     openMidiFile(file);
+                                 keyboard.grabKeyboardFocus();
+                             });
+}
+
+void MainComponent::openMidiFile(const juce::File& file)
+{
+    juce::String error;
+    auto sequence = MidiFilePlayer::read(file, error); // small files: read here, in a few milliseconds
+    if (sequence == nullptr) {
+        showMessage("Cannot open the MIDI file: " + error, theme::bad);
+        return;
+    }
+    const int seconds = juce::roundToInt(sequence->length);
+    const auto summary = sequence->name + " (" + juce::String(sequence->notes) + " notes, "
+                       + (seconds >= 60 ? juce::String(seconds / 60) + " min " : juce::String()) + juce::String(seconds % 60) + " s)";
+    host.filePlayer.load(std::move(sequence));
+    playerBar->fileChanged();
+    auto* settings = properties.getUserSettings();
+    settings->setValue("midiFolder", file.getParentDirectory().getFullPathName());
+    settings->saveIfNeeded();
+    showMessage("Opened " + summary + ": Ctrl+Space plays it, with its own velocities (no velocity curve).", theme::good);
+}
+
+void MainComponent::closeMidiFile()
+{
+    host.filePlayer.load(nullptr);
+    playerBar->fileChanged();
+}
+
+bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    for (const auto& f : files)
+        if (isMidiFile(juce::File(f)))
+            return true;
+    return false;
+}
+
+void MainComponent::filesDropped(const juce::StringArray& files, int, int)
+{
+    playerBar->setDropHighlight(false);
+    for (const auto& f : files)
+        if (const juce::File file(f); isMidiFile(file)) {
+            openMidiFile(file);
+            break;
+        }
+}
+
 void MainComponent::changeListenerCallback(juce::ChangeBroadcaster*)
 {
     saveSettings(); // the audio device changed
@@ -761,8 +887,9 @@ void MainComponent::refreshDashboard()
                             layer > 0 ? (modalSelected() ? "modal layer " + juce::String(layer) + ", levels interpolated per partial"
                                                          : "take recorded at velocity " + juce::String(layer))
                                       : juce::String("no data for this note"),
-                            in > 0 ? "MIDI keyboard: velocity " + juce::String(in) + " -> " + juce::String(out) + " (velocity curve)"
-                                   : juce::String("mouse or computer keyboard"),
+                            host.filePlayer.isPlaying() ? juce::String("from the MIDI file (its own velocities)")
+                            : in > 0 ? "MIDI keyboard: velocity " + juce::String(in) + " -> " + juce::String(out) + " (velocity curve)"
+                                     : juce::String("mouse or computer keyboard"),
                             "computer keyboard from C" + juce::String(octave) });
     } else {
         noteCard.setLines({ "Nothing played yet", midiInputs(), "computer keyboard from C" + juce::String(octave) });
@@ -807,6 +934,8 @@ void MainComponent::timerCallback()
     recordButton.setButtonText(host.live.recording()
                                    ? juce::String::formatted("Stop  %d:%04.1f", (int) host.live.seconds() / 60, std::fmod(host.live.seconds(), 60.0))
                                    : juce::String("Record"));
+
+    playerBar->refresh();
 
     // Corpus loading.
     if (loader.isLoading()) {
@@ -911,7 +1040,7 @@ void MainComponent::resized()
 
     // Keyboard and its hint.
     area.reduce(12, 0);
-    auto keys = area.removeFromBottom(juce::jlimit(120, 280, area.getHeight() - 118 - 12 - 26 - 16));
+    auto keys = area.removeFromBottom(juce::jlimit(120, 280, area.getHeight() - 118 - 12 - 26 - 16 - 50));
     keyboard.setBounds(keys);
     keyboard.setKeyWidth((float) keys.getWidth() / 52.0f); // 52 white keys from A0 to C8
     area.removeFromBottom(4);
@@ -925,6 +1054,8 @@ void MainComponent::resized()
         card->setBounds(cards.removeFromLeft(width));
         cards.removeFromLeft(gap);
     }
+    area.removeFromTop(10);
+    playerBar->setBounds(area.removeFromTop(40));
 }
 
 } // namespace pf::app

@@ -49,6 +49,12 @@ public:
         }
         juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
         window = std::make_unique<Window>(getApplicationName());
+        for (const auto& argument : arguments) // a MIDI file on the command line ("Open with" PianoForge) goes to the player
+            if (const auto file = juce::File::getCurrentWorkingDirectory().getChildFile(argument.unquoted());
+                file.existsAsFile() && file.hasFileExtension("mid;midi;smf;kar")) {
+                window->content().openMidiFile(file);
+                break;
+            }
     }
 
     void shutdown() override
@@ -66,16 +72,20 @@ private:
                              DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar(true);
-            auto* content = new MainComponent();
-            setContentOwned(content, true);
-            setMenuBar(content);
+            main = new MainComponent();
+            setContentOwned(main, true);
+            setMenuBar(main);
             setResizable(true, true);
             setResizeLimits(1100, 500, 4000, 1600);
             centreWithSize(getWidth(), getHeight());
             setVisible(true);
         }
         ~Window() override { setMenuBar(nullptr); }
+        MainComponent& content() { return *main; }
         void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }
+
+    private:
+        MainComponent* main = nullptr; // owned by the window (its content)
     };
 
     theme::LookAndFeel lookAndFeel;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "LiveRecorder.h"
+#include "MidiFilePlayer.h"
 #include "MirrorOutput.h"
 #include "TakeRecorder.h"
 
@@ -31,8 +32,8 @@ struct AudioLoad {
 };
 
 /// Connects the audio device to the engine: gathers MIDI (connected keyboards, on-screen keyboard, UI
-/// commands), times it to the sample, hands it to the engine on every block, and records every event that
-/// reached the engine (lock-free) so that takes can be saved afterwards.
+/// commands, the MIDI file player), times it to the sample, hands it to the engine on every block, and records
+/// every event that reached the engine (lock-free) so that takes can be saved afterwards.
 class AudioHost final : public juce::AudioIODeviceCallback {
 public:
     explicit AudioHost(pf::Engine& e) : engine(e) { feedOpen = feed.create(); }
@@ -41,6 +42,7 @@ public:
     juce::MidiKeyboardState keyboardState; // on-screen keyboard; also displays the notes received
     LiveRecorder live;                     // records what the device plays (start / stop from the interface)
     MirrorOutput mirror;                   // a copy for streaming software, on another device
+    MidiFilePlayer filePlayer;             // a MIDI file, played to the sample with what the keyboards play
     bool feedOn() const noexcept { return feedOpen; } // the audio feed of the OBS plugin (obs/)
 
     /// Message thread: sends a message as if it came from a keyboard.
@@ -54,7 +56,7 @@ public:
     void start(double sampleRate, int blockSize)
     {
         collector.reset(sampleRate);
-        midi.ensureSize(16384);
+        midi.ensureSize(65536); // room for a busy block plus the player's releases: no allocation
         engine.prepare(sampleRate, blockSize);
         mirror.mainFormat(sampleRate, blockSize);
         feed.setFormat((std::uint32_t) std::lround(sampleRate), (std::uint32_t) std::max(blockSize, 1));
@@ -101,6 +103,7 @@ public:
         const auto startTicks = juce::Time::getHighResolutionTicks(); // QueryPerformanceCounter: no system call
         midi.clear();
         collector.removeNextBlockOfMessages(midi, n);
+        filePlayer.render(midi, n, recordingRate.load(std::memory_order_relaxed)); // before the keyboard: it shows the notes
         keyboardState.processNextMidiBuffer(midi, 0, n, true);
         int count = 0;
         for (const auto meta : midi) {

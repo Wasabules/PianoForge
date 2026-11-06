@@ -5,6 +5,7 @@
 #include "ui/AudioPanel.h"
 #include "ui/EnginePanel.h"
 #include "ui/PerformancePanel.h"
+#include "ui/PlayerBar.h"
 #include "ui/Theme.h"
 #include "KeyboardInput.h"
 #include "ReferencePlayer.h"
@@ -313,6 +314,20 @@ int runUiSnapshots(const juce::StringArray& arguments)
                            { "At 192 kHz the engine does 4.0 times the work of 48 kHz for nothing audible: the corpus is at 44.1 kHz. Use 44.1 or 48 kHz.",
                              "Blocks of 10.0 ms add as much latency between key and sound: 128 samples (2.9 ms at 44.1 kHz) is comfortable for this engine." });
         save(performance, "performance");
+        PlayerBar bar(host.filePlayer, settings);
+        auto sequence = std::make_shared<MidiFilePlayer::Sequence>();
+        sequence->name = "nocturne-op9-2";
+        sequence->notes = 1406;
+        sequence->tracks = 2;
+        sequence->length = 271.0;
+        sequence->events.push_back({ 0.0, 0x90, 60, 64 });
+        host.filePlayer.load(sequence);
+        bar.fileChanged();
+        bar.setBounds(0, 0, 1416, 40);
+        save(bar, "player-bar");
+        host.filePlayer.load(nullptr);
+        bar.fileChanged();
+        save(bar, "player-bar-empty");
         settings.getFile().deleteFile();
     }
     juce::LookAndFeel::setDefaultLookAndFeel(nullptr);

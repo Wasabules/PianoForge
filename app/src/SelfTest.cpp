@@ -2,6 +2,7 @@
 
 #include "AudioHost.h"
 #include "KeyboardInput.h"
+#include "MidiFilePlayer.h"
 #include "OfflineRender.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
@@ -510,6 +511,89 @@ int runSelfTest(const juce::StringArray& arguments)
                                + " ms (target " + juce::String(1000.0 * d.targetSeconds(), 1) + "), "
                                + juce::String((int) (d.underruns() + d.overruns() - settledUnderruns)) + " dropouts once settled, "
                                + "1 kHz sine residual " + juce::String(residualDb, 1) + " dB");
+        }
+    }
+
+    // 8d. MIDI file player: a file written to disk (a tempo change, a drum note on channel 10), read back and
+    //     played through the audio host, must reach the engine to the sample at 100 % and at 150 %; a seek and a
+    //     pause must release what sounds and put the pedal back as the file has it.
+    {
+        juce::MidiMessageSequence track;
+        track.addEvent(juce::MidiMessage::tempoMetaEvent(600000), 0.0); // 100 beats per minute: 0.6 s per quarter
+        const std::vector<std::pair<int, juce::MidiMessage>> script = {
+            { 960, juce::MidiMessage::noteOn(1, 60, (juce::uint8) 90) }, { 960, juce::MidiMessage::noteOn(10, 36, (juce::uint8) 100) },
+            { 1440, juce::MidiMessage::controllerEvent(1, 64, 127) },    { 1920, juce::MidiMessage::noteOn(1, 64, (juce::uint8) 70) },
+            { 2400, juce::MidiMessage::noteOff(1, 60) },                 { 2880, juce::MidiMessage::noteOff(1, 64) },
+            { 3840, juce::MidiMessage::controllerEvent(1, 64, 0) } };
+        for (const auto& [tick, m] : script)
+            track.addEvent(m, tick);
+        juce::MidiFile file;
+        file.setTicksPerQuarterNote(960);
+        file.addTrack(track);
+        const auto path = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("pianoforge-selftest-player.mid");
+        path.deleteFile();
+        {
+            juce::FileOutputStream out(path);
+            file.writeTo(out);
+        }
+        juce::String error;
+        const auto sequence = MidiFilePlayer::read(path, error);
+        path.deleteFile();
+        const double expected[] = { 0.6, 0.9, 1.2, 1.5, 1.8, 2.4 }; // the six events of channel 1, in seconds
+        r.check(sequence != nullptr && sequence->notes == 2 && sequence->drumsLeftOut && sequence->events.size() == 6
+                    && std::abs(sequence->length - 2.4) < 1e-9,
+                "MIDI file read back: " + (sequence == nullptr ? error
+                                                               : juce::String(sequence->notes) + " notes, " + juce::String((int) sequence->events.size())
+                                                                     + " events, " + juce::String(sequence->length, 3) + " s, drums "
+                                                                     + (sequence->drumsLeftOut ? "left out" : "kept"))
+                    + " (expected 2 notes, 6 events, 2.400 s, drums left out)");
+
+        player.playWholeTake = false;
+        std::vector<float> l(512), rr(512);
+        float* outputs[2] = { l.data(), rr.data() };
+        for (const double speed : { 1.0, 1.5 }) {
+            AudioHost host { player };
+            host.start(fs, 512);
+            host.filePlayer.load(sequence);
+            host.filePlayer.setSpeed(speed);
+            host.filePlayer.play();
+            std::vector<RecordedEvent> got;
+            for (int k = 0; k < (int) (3.0 * fs) / 512; ++k)
+                host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, 512, {});
+            host.drainRecorded(got);
+            double offBy = got.size() == 6 ? 0.0 : 1e9;
+            for (size_t e = 0; e < got.size() && e < 6; ++e)
+                offBy = juce::jmax(offBy, std::abs((double) got[e].sample - expected[e] / speed * fs));
+            r.check(offBy <= 0.501 && !host.filePlayer.wantsToPlay(),
+                    "MIDI file at " + juce::String(juce::roundToInt(speed * 100.0)) + " %: " + juce::String((int) got.size())
+                        + " events reached the engine, at most " + juce::String(offBy, 2) + " samples from their time (expected 6, <= 0.5), "
+                        + (host.filePlayer.wantsToPlay() ? "still playing" : "stopped at the end"));
+        }
+        {
+            AudioHost host { player };
+            host.start(fs, 512);
+            host.filePlayer.load(sequence);
+            host.filePlayer.play();
+            auto run = [&](double seconds) {
+                for (int k = 0; k < juce::roundToInt(seconds * fs / 512.0); ++k)
+                    host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, 512, {});
+                std::vector<RecordedEvent> got;
+                host.drainRecorded(got);
+                juce::StringArray text;
+                for (const auto& e : got)
+                    text.add(juce::String::toHexString((int) e.status) + " " + juce::String((int) e.data1) + " " + juce::String((int) e.data2));
+                return text.joinIntoString(", ");
+            };
+            run(1.3);                         // C4 and E4 sounding, pedal down
+            host.filePlayer.seek(2.0);        // both released, pedal up, then down again as the file has it at 2 s
+            const auto seek = run(0.1);
+            host.filePlayer.pause();          // the pedal up
+            const auto pause = run(0.1);
+            host.filePlayer.play();           // the pedal down again, then up at 2.4 s
+            const auto resume = run(0.6);
+            r.check(seek == "80 60 0, 80 64 0, b0 64 0, b0 64 127" && pause == "b0 64 0" && resume == "b0 64 127, b0 64 0",
+                    "MIDI file seek and pause: seek [" + seek + "], pause [" + pause + "], resume [" + resume
+                        + "] (expected [80 60 0, 80 64 0, b0 64 0, b0 64 127], [b0 64 0], [b0 64 127, b0 64 0])");
         }
     }
 

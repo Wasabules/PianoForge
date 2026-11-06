@@ -38,6 +38,9 @@ ctest --test-dir build/windows-msvc -C Release
 PianoForge.exe --selftest corpus/reference/noire-dry/single-notes selftest.txt
 ```
 
+Play a MIDI file live: File > Open MIDI file (Ctrl+O), drop it on the window, or pass it on the command line
+(`PianoForge.exe song.mid`). It plays to the sample with what the keyboards play, and is recorded with it.
+
 Offline render of a MIDI file, through the reference player or the modal engine:
 
 ```
