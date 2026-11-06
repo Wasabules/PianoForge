@@ -1,5 +1,6 @@
 #include "SelfTest.h"
 
+#include "AudioExport.h"
 #include "AudioHost.h"
 #include "KeyboardInput.h"
 #include "MidiFilePlayer.h"
@@ -754,6 +755,138 @@ int runSelfTest(const juce::StringArray& arguments)
                     + juce::String(levelGap, 3) + " dB of 44.1 kHz (expected < 0.1), " + juce::String(imagesDb, 1)
                     + " dB above 24 kHz (expected < -80); the device's rate mode: engine at "
                     + juce::String(atDevice.currentRate() / 1000.0, 1) + " kHz");
+    }
+
+    // 8g. Recording formats: a 32-bit float WAV (a 1 kHz sine at -6 dBFS on the left, 440 Hz at -12 dBFS on the
+    //     right, 3 s) converted into each format, read back. WAV 24 and FLAC: the same samples, to the 24-bit
+    //     rounding; MP3 and Opus: the duration (plus the encoder's delay and padding) and each channel's level.
+    //     Then a 96 kHz master to MP3 (brought down to 48 kHz), and a whole background job.
+    {
+        const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("pianoforge-selftest-formats");
+        dir.deleteRecursively();
+        dir.createDirectory();
+        auto writeMaster = [&](const juce::File& file, double rate) {
+            const int n = (int) (3.0 * rate);
+            juce::AudioBuffer<float> x(2, n);
+            for (int i = 0; i < n; ++i) {
+                x.setSample(0, i, (float) (0.5 * std::sin(2.0 * juce::MathConstants<double>::pi * 1000.0 * i / rate)));
+                x.setSample(1, i, (float) (0.25 * std::sin(2.0 * juce::MathConstants<double>::pi * 440.0 * i / rate)));
+            }
+            std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
+            juce::WavAudioFormat wav;
+            if (auto w = wav.createWriterFor(stream, juce::AudioFormatWriterOptions {}.withSampleRate(rate).withNumChannels(2).withBitsPerSample(32)
+                                                     .withSampleFormat(juce::AudioFormatWriterOptions::SampleFormat::floatingPoint)))
+                w->writeFromAudioSampleBuffer(x, 0, n);
+            return x;
+        };
+        struct Read {
+            juce::AudioBuffer<float> x;
+            double rate = 0.0;
+        };
+        auto readBack = [](const juce::File& file) {
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+            Read got;
+            if (std::unique_ptr<juce::AudioFormatReader> reader { formats.createReaderFor(file) }) {
+                got.rate = reader->sampleRate;
+                got.x.setSize((int) reader->numChannels, (int) reader->lengthInSamples);
+                reader->read(&got.x, 0, (int) reader->lengthInSamples, 0, true, true);
+            }
+            return got;
+        };
+        auto levelDb = [](const Read& g, int c) { // RMS from 1 to 2 s
+            double e = 0.0;
+            const int a = (int) (1.0 * g.rate), b = std::min(g.x.getNumSamples(), (int) (2.0 * g.rate));
+            for (int i = a; i < b && c < g.x.getNumChannels(); ++i)
+                e += (double) g.x.getSample(c, i) * g.x.getSample(c, i);
+            return 10.0 * std::log10(e / std::max(1, b - a) + 1e-30);
+        };
+        const double rate = 48000.0;
+        const auto master = dir.getChildFile("master.wav");
+        const auto source = writeMaster(master, rate);
+        const double refL = 10.0 * std::log10(0.125), refR = 10.0 * std::log10(0.03125); // a sine's mean square
+        juce::StringArray lines;
+        bool ok = true;
+        std::vector<float> wav24Samples;
+        for (const auto& f : soundFormats()) {
+            if (!canWrite(f.format)) {
+                lines.add(juce::String(f.shortName) + " not on this system");
+                continue;
+            }
+            const auto target = dir.getChildFile(juce::String("out-") + f.key + f.extension);
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            const auto result = convertSound(master, target, f.format);
+            const double ms = juce::Time::getMillisecondCounterHiRes() - t0;
+            const auto g = readBack(target);
+            if (result.failed() || g.x.getNumSamples() == 0) {
+                ok = false;
+                lines.add(juce::String(f.shortName) + ": " + (result.failed() ? result.getErrorMessage() : juce::String("cannot read it back")));
+                continue;
+            }
+            const double seconds = g.x.getNumSamples() / g.rate;
+            juce::String line = juce::String(f.shortName) + " " + juce::String(seconds, 3) + " s at " + juce::String(g.rate / 1000.0, 1) + " kHz, "
+                              + juce::String(target.getSize() / 1024) + " KB in " + juce::String(juce::roundToInt(ms)) + " ms";
+            if (f.format == SoundFormat::wav24 || f.format == SoundFormat::flac || f.format == SoundFormat::wavFloat) {
+                float largest = 0.0f;
+                bool sameAsWav24 = f.format != SoundFormat::flac || wav24Samples.size() == (size_t) g.x.getNumSamples();
+                for (int j = 0; j < g.x.getNumSamples() && j < source.getNumSamples(); ++j) {
+                    largest = std::max(largest, std::abs(g.x.getSample(0, j) - source.getSample(0, j)));
+                    if (f.format == SoundFormat::flac && sameAsWav24 && g.x.getSample(0, j) != wav24Samples[(size_t) j])
+                        sameAsWav24 = false;
+                }
+                if (f.format == SoundFormat::wav24)
+                    wav24Samples.assign(g.x.getReadPointer(0), g.x.getReadPointer(0) + g.x.getNumSamples());
+                const float bound = f.format == SoundFormat::wavFloat ? 0.0f : 1.0f / 8388608.0f; // half a 24-bit step
+                const bool good = g.x.getNumSamples() == source.getNumSamples() && largest <= bound && sameAsWav24;
+                ok = ok && good;
+                line << ", largest difference " << (largest > 0.0f ? juce::String(20.0 * std::log10(largest), 1) + " dBFS" : juce::String("none"))
+                     << (f.format == SoundFormat::flac ? (sameAsWav24 ? ", the WAV 24's samples" : ", NOT the WAV 24's samples") : "");
+            } else {
+                const double dl = levelDb(g, 0) - refL, dr = levelDb(g, 1) - refR;
+                const double extra = seconds - 3.0;
+                const double kbps = target.getSize() * 8.0 / 1000.0 / 3.0;
+                const bool good = extra > -0.001 && extra < 0.15 && std::abs(dl) < 0.3 && std::abs(dr) < 0.3
+                               && (f.format != SoundFormat::mp3 || std::abs(kbps - 320.0) < 20.0);
+                ok = ok && good;
+                line << ", levels " << juce::String(dl, 2) << " / " << juce::String(dr, 2) << " dB, " << juce::String(juce::roundToInt(kbps)) << " kbit/s";
+            }
+            lines.add(line);
+        }
+        // 96 kHz to MP3: brought down to 48 kHz first.
+        if (canWrite(SoundFormat::mp3)) {
+            const auto hiMaster = dir.getChildFile("master-96k.wav");
+            writeMaster(hiMaster, 96000.0);
+            const auto target = dir.getChildFile("out-96k.mp3");
+            const auto result = convertSound(hiMaster, target, SoundFormat::mp3);
+            const auto g = readBack(target);
+            const double dl = levelDb(g, 0) - refL;
+            const bool good = result.wasOk() && g.rate == 48000.0 && std::abs(dl) < 0.3;
+            ok = ok && good;
+            lines.add("96 kHz to MP3: " + (result.failed() ? result.getErrorMessage() : "at " + juce::String(g.rate / 1000.0, 1) + " kHz, level " + juce::String(dl, 2) + " dB"));
+        }
+        // A background job: the master removed once every format is made.
+        {
+            const auto jobMaster = dir.getChildFile("take.master.wav");
+            writeMaster(jobMaster, rate);
+            RecordingExporter exporter;
+            RecordingExporter::Job job;
+            job.master = jobMaster;
+            job.removeMaster = true;
+            job.label = "take";
+            job.targets.emplace_back(SoundFormat::flac, dir.getChildFile("take.flac"));
+            job.targets.emplace_back(SoundFormat::opus, dir.getChildFile("take.opus"));
+            exporter.submit(std::move(job));
+            const auto until = juce::Time::getMillisecondCounterHiRes() + 20000.0;
+            while (exporter.busy() && juce::Time::getMillisecondCounterHiRes() < until)
+                juce::Thread::sleep(10);
+            const auto reports = exporter.takeReports();
+            const bool good = reports.size() == 1 && reports[0].ok && !jobMaster.exists() && dir.getChildFile("take.flac").existsAsFile()
+                           && dir.getChildFile("take.opus").existsAsFile();
+            ok = ok && good;
+            lines.add("background job: " + (reports.empty() ? juce::String("no report") : reports[0].text) + (jobMaster.exists() ? ", master left" : ", master removed"));
+        }
+        dir.deleteRecursively();
+        r.check(ok, "recording formats: " + lines.joinIntoString("; "));
     }
 
     // 9. Modal engine, when the corpus state has a modal profile (forge export).

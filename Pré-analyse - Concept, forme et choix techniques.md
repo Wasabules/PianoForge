@@ -746,6 +746,25 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
   - *Réglage*, dans Audio > Engine rate : automatique (recommandé) ou à la fréquence du périphérique. Un changement redémarre le périphérique. Le tableau de bord affiche les deux fréquences, et le conseil « 192 kHz » ne s'affiche plus quand le moteur tourne plus bas.
   - *Tests.* `upsampler_test`, natif et sous Node : gain à 0,05 dB près à 1 et 19 kHz, images à −96,5 dB (×2) et −100,3 dB (×4), latence de la moitié du filtre, décimation sans repliement (−111 à −115 dB). Autotest 8f : avec un périphérique à 176,4 kHz et des blocs de 1001, le moteur tourne à 44,1 kHz (×4). Le niveau est celui d'un rendu à 44,1 kHz à 0,001 dB près, fenêtre par fenêtre. Au-dessus de 24 kHz, on mesure −115,6 dB : aucune couture entre les blocs. En mode « fréquence du périphérique », le moteur tourne à 176,4 kHz. L'autotest 8 (prise re-rendue à l'identique) reste exact à 44,1 kHz.
 
+**Formats d'enregistrement (6 novembre 2026).** L'enregistrement en direct (Ctrl+R) reste un WAV 32 bits flottant, écrit pendant le jeu. Sur le fil audio, il n'y a toujours qu'une copie dans une file sans verrou ; un fil d'écriture vide cette file sur le disque. Les autres formats sont fabriqués à partir de ce WAV quand l'enregistrement s'arrête, sur un fil de fond.
+  - *Pourquoi à la fin plutôt qu'en temps réel.* Aucun encodeur ne tourne pendant le jeu, donc rien ne peut coûter un décrochage. Si une conversion échoue, le WAV 32 bits reste là : rien n'est perdu. Et c'est rapide : 3 s de son se convertissent en 20 à 120 ms selon le format, soit une heure de jeu en moins de deux minutes pour le MP3, plus lent que les autres.
+  - *Formats*, à cocher dans File > Record formats :
+    - WAV 32 bits flottant (le son tel que joué) ;
+    - WAV 24 bits ;
+    - FLAC 24 bits (sans perte, les mêmes échantillons que le WAV 24, environ le tiers de la taille) ;
+    - MP3 320 kbit/s, par l'encodeur de Media Foundation, livré avec Windows 8 et suivants (absent des éditions « N » sans le Media Feature Pack, et de Linux) ;
+    - Opus 192 kbit/s (JUCE 9, sur tous les systèmes), plus fidèle que Vorbis au même débit.
+
+    Un seul WAV à la fois, puisque les deux porteraient le même nom. Le MIDI reste à part, aligné à l'échantillon sur les fichiers sans perte. Les fichiers compressés commencent après le délai de leur encodeur (quelques dizaines de millisecondes pour le MP3).
+  - *Détails.* Le MP3 ne prend que 32, 44,1 ou 48 kHz : au-dessus, le son est d'abord ramené à 44,1 ou 48 kHz par `pf::Downsampler`. Il reçoit du 16 bits, avec un tramage triangulaire. Opus travaille à 48 kHz et rééchantillonne lui-même. Le WAV 24 bits garde les métadonnées Broadcast WAV du WAV 32 bits.
+  - *Fichiers.* Si le WAV 32 bits n'est pas coché, l'enregistrement s'écrit dans `<nom>.master.wav`, effacé une fois toutes les conversions réussies. Si une conversion échoue, ou si l'on quitte pendant une conversion, il est renommé `<nom>.wav`. La carte Session affiche la conversion en cours (« Converting FLAC 40 % »), et la barre d'état la liste des fichiers produits.
+  - *Autotest 8g.* Un WAV 32 bits de 3 s (1 kHz à −6 dBFS à gauche, 440 Hz à −12 dBFS à droite) est converti dans chaque format, puis relu :
+    - WAV 24 et FLAC : écart de −141 dBFS, sous le demi-pas de 24 bits, et le FLAC a exactement les échantillons du WAV 24 ;
+    - MP3 : 3,048 s, niveaux à 0,01 dB près, 326 kbit/s mesurés ;
+    - Opus : 3,000 s, niveaux à 0,01 dB près, 198 kbit/s ;
+    - un WAV à 96 kHz donne un MP3 à 48 kHz au même niveau ;
+    - un travail de fond complet (FLAC et Opus) se termine en 0,1 s et efface le master.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

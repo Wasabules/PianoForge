@@ -10,6 +10,8 @@ target_sources(PianoForgeApp PRIVATE
     src/ReferencePlayer.cpp
     src/TakeRecorder.cpp
     src/LiveRecorder.cpp
+    src/AudioExport.cpp
+    src/Mp3Encoder.cpp
     src/MirrorOutput.cpp
     src/MidiFilePlayer.cpp
     src/ui/Meters.cpp
@@ -61,3 +63,7 @@ target_link_libraries(PianoForgeApp
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
+
+if(WIN32) # Media Foundation: the MP3 encoder
+    target_link_libraries(PianoForgeApp PRIVATE mf mfplat mfreadwrite mfuuid ole32)
+endif()

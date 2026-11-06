@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AudioExport.h"
 #include "AudioHost.h"
 #include "EngineSwitch.h"
 #include "KeyboardInput.h"
@@ -143,7 +144,12 @@ private:
     juce::Rectangle<int> statusArea;
 
     int keyLayout = 1;          // 1 AZERTY, 2 QWERTY
-    bool recordMidi = true, recordWav = true;
+    bool recordMidi = true;
+    std::vector<SoundFormat> recordFormats { SoundFormat::wavFloat }; // the sound's formats (File > Record formats)
+    bool recordsFormat(SoundFormat f) const { return std::find(recordFormats.begin(), recordFormats.end(), f) != recordFormats.end(); }
+    void toggleRecordFormat(SoundFormat f);
+    juce::String recordingExtensions() const;
+    RecordingExporter exporter; // the formats made from the live recording once it stops
     juce::String recordingStem, lastSaved;
     double messageUntil = 0.0;
     int octave = 4;             // scientific octave of the first computer-keyboard note (C4 = middle C)

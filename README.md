@@ -43,6 +43,10 @@ Play a MIDI file live: File > Open MIDI file (Ctrl+O), drop it on the window, or
 Tracks... picks the parts to play (a part is a track's channel; drums off by default); -oct, -, +, +oct
 transpose the file by semitones or octaves.
 
+Record (Ctrl+R) writes the sound live as a 32-bit float WAV; when it stops, the formats ticked in File > Record
+formats are made from it in the background: WAV 24-bit, FLAC 24-bit, MP3 320 kbit/s (Windows' Media Foundation
+encoder), Opus 192 kbit/s; plus the MIDI, aligned to the sample. Recordings go to Documents/PianoForge/Recordings.
+
 When the device runs faster than 50 kHz (the Windows mixer can impose 192 kHz), the engine runs at the device's
 rate divided by 2, 4 or 8 (44.1 or 48 kHz) and its sound is brought up to the device's: Audio > Engine rate.
 

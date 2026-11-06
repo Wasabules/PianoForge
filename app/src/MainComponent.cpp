@@ -10,7 +10,7 @@ constexpr int kLayoutAzerty = 1, kLayoutQwerty = 2;
 
 enum MenuId {
     // File
-    kRecord = 1, kRecordMidi, kRecordWav, kSaveTake, kOpenRecordings, kOpenTakes, kChangeCorpus, kQuit, kOpenMidi,
+    kRecord = 1, kRecordMidi, kSaveTake, kOpenRecordings, kOpenTakes, kChangeCorpus, kQuit, kOpenMidi,
     // Player
     kPlayPause = 80, kStopPlayer, kBack, kForward, kLoop, kCloseMidi, kSpeed = 100,
     // Engine
@@ -21,6 +21,8 @@ enum MenuId {
     kVelocityCurve = 70, kAzerty, kQwerty, kOctaveDown, kOctaveUp, kVelocityDown, kVelocityUp,
     // Help
     kShortcuts = 90, kAbout,
+    // File > Record formats (one per sound format)
+    kRecordFormat = 200,
 };
 
 constexpr int kSpeedPresets[] = { 50, 75, 100, 125, 150, 200 }; // percent, menu Player > Speed
@@ -140,10 +142,17 @@ MainComponent::MainComponent()
     modalButton.onClick = [this] { selectEngine(true); };
     selectEngine(settings->getIntValue("engine", 1) == 2);
 
-    recordButton.setTooltip("Record what you play: WAV and MIDI aligned to the sample (Ctrl+R)");
+    recordButton.setTooltip("Record what you play: the sound in the formats ticked in File > Record formats, and the MIDI (Ctrl+R)");
     recordButton.onClick = [this] { toggleRecording(); };
     recordMidi = settings->getBoolValue("recordMidi", true);
-    recordWav = settings->getBoolValue("recordWav", true);
+    // The sound's formats: "wav32 flac mp3"...; before them, a single WAV switch.
+    if (const auto keys = juce::StringArray::fromTokens(settings->getValue("recordFormats", settings->getBoolValue("recordWav", true) ? "wav32" : ""), " ", {});
+        true) {
+        recordFormats.clear();
+        for (const auto& f : soundFormats())
+            if (keys.contains(f.key) && canWrite(f.format))
+                recordFormats.push_back(f.format);
+    }
     pedalButton.setTooltip("The sustain pedal (Space)");
     pedalButton.setClickingTogglesState(false);
     pedalButton.onClick = [this] { sendSustain(!pedalButton.getToggleState()); };
@@ -255,8 +264,15 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         menu.addSeparator();
         menu.addItem(item(kRecord, host.live.recording() ? "Stop recording" : "Record", "Ctrl+R"));
         juce::PopupMenu formats;
-        formats.addItem(item(kRecordWav, "WAV (the sound, 32-bit float)", {}, recordWav, !host.live.recording()));
-        formats.addItem(item(kRecordMidi, "MIDI (aligned with the WAV)", {}, recordMidi, !host.live.recording()));
+        formats.addSectionHeader("The sound (converted when the recording stops)");
+        for (int i = 0; i < (int) soundFormats().size(); ++i) {
+            const auto& f = soundFormats()[(size_t) i];
+            const bool can = canWrite(f.format);
+            formats.addItem(item(kRecordFormat + i, juce::String(f.menuName) + (can ? "" : "  (not on this system)"), {},
+                                 recordsFormat(f.format), can && !host.live.recording()));
+        }
+        formats.addSeparator();
+        formats.addItem(item(kRecordMidi, "MIDI (aligned with the sound)", {}, recordMidi, !host.live.recording()));
         menu.addSubMenu("Record formats", formats);
         menu.addItem(item(kSaveTake, "Save last take (MIDI and WAV render)", "Ctrl+S"));
         menu.addSeparator();
@@ -336,6 +352,10 @@ void MainComponent::menuItemSelected(int id, int)
         enginePanel->setOn(o, !enginePanel->isOn(o));
         return;
     }
+    if (id >= kRecordFormat && id < kRecordFormat + (int) soundFormats().size()) {
+        toggleRecordFormat(soundFormats()[(size_t) (id - kRecordFormat)].format);
+        return;
+    }
     if (id >= kSpeed && id < kSpeed + (int) std::size(kSpeedPresets)) {
         playerBar->setSpeed(kSpeedPresets[id - kSpeed] / 100.0);
         return;
@@ -350,7 +370,6 @@ void MainComponent::menuItemSelected(int id, int)
     case kCloseMidi: closeMidiFile(); break;
     case kRecord: toggleRecording(); break;
     case kRecordMidi: recordMidi = !recordMidi; saveSettings(); break;
-    case kRecordWav: recordWav = !recordWav; saveSettings(); break;
     case kSaveTake: saveLastTake(); break;
     case kOpenRecordings: recordingsFolder().createDirectory(); recordingsFolder().startAsProcess(); break;
     case kOpenTakes: takesFolder().createDirectory(); takesFolder().startAsProcess(); break;
@@ -586,7 +605,7 @@ void MainComponent::toggleRecording()
         finishRecording();
         return;
     }
-    if (!recordMidi && !recordWav) {
+    if (!recordMidi && recordFormats.empty()) {
         showMessage("Nothing to record: tick a format in File > Record formats.", theme::busy);
         return;
     }
@@ -595,7 +614,10 @@ void MainComponent::toggleRecording()
         return;
     }
     recordingStem = "PianoForge " + juce::Time::getCurrentTime().formatted("%Y-%m-%d %H-%M-%S");
-    const auto wavFile = recordWav ? recordingsFolder().getChildFile(recordingStem + ".wav") : juce::File();
+    // The live recording: the 32-bit float WAV, kept under the recording's name when it is one of the formats,
+    // else a master the conversions start from and then remove.
+    const auto wavFile = recordFormats.empty() ? juce::File()
+                         : recordingsFolder().getChildFile(recordingStem + (recordsFormat(SoundFormat::wavFloat) ? ".wav" : ".master.wav"));
     const auto engineName = modalSelected() ? juce::String("modal engine") : juce::String("reference player");
     if (const auto started = host.live.start(wavFile, host.currentRate(), host.currentSegment(),
                                              "PianoForge live recording (" + engineName + ")");
@@ -624,7 +646,7 @@ void MainComponent::finishRecording()
     if (recordMidi) {
         if (auto take = takes.span(span.segment, span.start, span.end)) {
             take->text = "PianoForge live recording " + recordingStem + ", " + juce::String(juce::roundToInt(span.sampleRate))
-                       + " Hz: one tick per sample, tick 0 is the first sample of the WAV of the same name";
+                       + " Hz: one tick per sample, tick 0 is the first sample of the sound files of the same name";
             const auto midiFile = recordingsFolder().getChildFile(recordingStem + ".mid");
             recordingsFolder().createDirectory();
             midiFile.deleteFile();
@@ -635,16 +657,57 @@ void MainComponent::finishRecording()
             }
         }
     }
-    if (span.wav.existsAsFile())
-        saved.add(".wav");
-    lastSaved = recordingStem + " " + saved.joinIntoString(" + ") + " (" + juce::String((double) (span.end - span.start) / span.sampleRate, 1)
-              + " s, " + juce::String(notes) + " notes)";
-    auto text = "Recorded " + lastSaved + " in " + recordingsFolder().getFullPathName();
+    // The other formats, from the live recording, in the background.
+    RecordingExporter::Job job;
+    if (span.wav.existsAsFile()) {
+        if (recordsFormat(SoundFormat::wavFloat))
+            saved.add(".wav");
+        job.master = span.wav;
+        job.removeMaster = !recordsFormat(SoundFormat::wavFloat);
+        job.label = recordingStem;
+        for (const auto f : recordFormats)
+            if (f != SoundFormat::wavFloat)
+                job.targets.emplace_back(f, recordingsFolder().getChildFile(recordingStem + infoFor(f).extension));
+    }
+    juce::StringArray pending;
+    for (const auto& [f, file] : job.targets)
+        pending.add(infoFor(f).shortName);
+    lastSaved = recordingStem + " " + saved.joinIntoString(" + ") + (pending.isEmpty() ? "" : (saved.isEmpty() ? "" : " + ") + pending.joinIntoString(" + "))
+              + " (" + juce::String((double) (span.end - span.start) / span.sampleRate, 1) + " s, " + juce::String(notes) + " notes)";
+    auto text = "Recorded " + lastSaved + " in " + recordingsFolder().getFullPathName()
+              + (pending.isEmpty() ? juce::String() : ", converting to " + pending.joinIntoString(", ") + "...");
+    if (!job.targets.empty())
+        exporter.submit(std::move(job));
     if (span.dropped > 0)
         text << "  WARNING: " << juce::String(span.dropped) << " samples lost (the disk did not keep up)";
     if (span.error.isNotEmpty())
         text << "  " << span.error;
     showMessage(text, span.dropped > 0 || span.error.isNotEmpty() ? theme::busy : theme::good);
+}
+
+void MainComponent::toggleRecordFormat(SoundFormat f)
+{
+    if (recordsFormat(f)) {
+        recordFormats.erase(std::find(recordFormats.begin(), recordFormats.end(), f));
+    } else {
+        // One WAV: both would have the same name.
+        const auto otherWav = f == SoundFormat::wavFloat ? SoundFormat::wav24 : f == SoundFormat::wav24 ? SoundFormat::wavFloat : f;
+        if (otherWav != f && recordsFormat(otherWav))
+            recordFormats.erase(std::find(recordFormats.begin(), recordFormats.end(), otherWav));
+        recordFormats.push_back(f);
+        std::sort(recordFormats.begin(), recordFormats.end());
+    }
+    saveSettings();
+}
+
+juce::String MainComponent::recordingExtensions() const
+{
+    juce::StringArray e;
+    for (const auto f : recordFormats)
+        e.addIfNotAlreadyThere(infoFor(f).extension);
+    if (recordMidi)
+        e.add(".mid");
+    return e.joinIntoString(" ");
 }
 
 void MainComponent::saveLastTake()
@@ -839,7 +902,10 @@ void MainComponent::saveSettings()
     s->setValue("velocityCurve", formatCurve(curveSettings));
     s->setValue("engine", modalSelected() ? 2 : 1);
     s->setValue("recordMidi", recordMidi);
-    s->setValue("recordWav", recordWav);
+    juce::StringArray formats;
+    for (const auto f : recordFormats)
+        formats.add(infoFor(f).key);
+    s->setValue("recordFormats", formats.joinIntoString(" "));
     s->saveIfNeeded();
 }
 
@@ -946,11 +1012,11 @@ void MainComponent::refreshDashboard()
     if (host.live.recording()) {
         const double t = host.live.seconds();
         sessionCard.setLines({ juce::String::formatted("Recording  %d:%04.1f", (int) t / 60, std::fmod(t, 60.0)),
-                               recordingStem + (recordWav ? " .wav" : "") + (recordMidi ? " .mid" : ""),
+                               recordingStem + " " + recordingExtensions(),
                                host.feedOn() ? "OBS plugin fed" : "OBS plugin not fed (another PianoForge)", audioPanel->mirrorSummary() },
                              theme::record);
     } else {
-        sessionCard.setLines({ "Not recording",
+        sessionCard.setLines({ exporter.busy() ? "Converting " + exporter.progressText() : juce::String("Not recording"),
                                lastSaved.isEmpty() ? juce::String("Ctrl+R records, Ctrl+S saves the last take") : "Last: " + lastSaved,
                                host.feedOn() ? "OBS plugin fed" : "OBS plugin not fed (another PianoForge)", audioPanel->mirrorSummary() });
     }
@@ -968,6 +1034,8 @@ void MainComponent::timerCallback()
     takes.add(drained, host.currentSegment(), host.currentRate());
     if (host.live.endedByDevice()) // the device stopped or changed: the recording ends there
         finishRecording();
+    for (const auto& report : exporter.takeReports())
+        showMessage(report.text + (report.ok ? " in " + recordingsFolder().getFullPathName() : juce::String()), report.ok ? theme::good : theme::bad);
     recordButton.setButtonText(host.live.recording()
                                    ? juce::String::formatted("Stop  %d:%04.1f", (int) host.live.seconds() / 60, std::fmod(host.live.seconds(), 60.0))
                                    : juce::String("Record"));
