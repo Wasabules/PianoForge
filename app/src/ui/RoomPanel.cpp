@@ -9,6 +9,7 @@ namespace pf::app {
 namespace {
 
 constexpr int kCustomId = 100;
+constexpr int kUserBase = 200;      // the user's presets: kUserBase + their index
 constexpr int kDefaultPreset = 2;   // Concert hall
 constexpr int kDefaultPosition = 0; // at the keyboard
 constexpr int kModel = 2;           // the settings' model: 2, the listening position (1: a level against the dry sound)
@@ -98,21 +99,29 @@ RoomPanel::RoomPanel(pf::Room& r, juce::PropertiesFile& s) : room(r), settings(s
     keepLoudness.setTooltip("Moving away changes the balance between the piano and the room, not the volume");
     keepLoudness.onClick = [this] {
         apply();
+        if (preset.getSelectedId() >= kUserBase) // a preset of the user's holds it
+            edited();
         save();
     };
     presetLabel.setText("Preset", juce::dontSendNotification);
-    for (int i = 0; i < (int) presets().size(); ++i)
-        preset.addItem(presets()[(size_t) i].name, i + 1);
-    preset.addItem("Custom", kCustomId);
+    loadUserPresets();
+    rebuildPresetList(kCustomId);
     preset.onChange = [this] {
         if (loading)
             return;
         if (const int id = preset.getSelectedId(); id >= 1 && id <= (int) presets().size())
             loadPreset(id - 1);
+        else if (id >= kUserBase && id < kUserBase + (int) userPresets.size())
+            loadUserPreset(id - kUserBase);
+        deletePreset.setEnabled(preset.getSelectedId() >= kUserBase);
         save();
         if (onChange)
             onChange();
     };
+    savePreset.setTooltip("Keep this room and this listening position under a name of your own");
+    savePreset.onClick = [this] { askSavePreset(); };
+    deletePreset.setTooltip("Delete the preset of your own selected");
+    deletePreset.onClick = [this] { askDeletePreset(); };
     positionLabel.setText("Position", juce::dontSendNotification);
     for (int i = 0; i < (int) positions().size(); ++i)
         position.addItem(juce::String(positions()[(size_t) i].name) + " (" + juce::String(juce::roundToInt(positions()[(size_t) i].distance)) + " m)", i + 1);
@@ -183,8 +192,8 @@ RoomPanel::RoomPanel(pf::Room& r, juce::PropertiesFile& s) : room(r), settings(s
     note.setColour(juce::Label::textColourId, theme::dim);
     note.setFont(theme::font(12.0f));
     note.setJustificationType(juce::Justification::topLeft);
-    for (auto* c : std::initializer_list<juce::Component*> { &onButton, &presetLabel, &preset, &positionLabel, &position,
-                                                             &keepLoudness, &summary, &note })
+    for (auto* c : std::initializer_list<juce::Component*> { &onButton, &presetLabel, &preset, &savePreset, &deletePreset,
+                                                             &positionLabel, &position, &keepLoudness, &summary, &note })
         addAndMakeVisible(*c);
 
     // The saved settings, or the defaults. Settings of the earlier model (a level against the dry sound, other
@@ -193,6 +202,15 @@ RoomPanel::RoomPanel(pf::Room& r, juce::PropertiesFile& s) : room(r), settings(s
     int saved = settings.getIntValue("roomPreset", kDefaultPreset + 1);
     if (!current && !(saved >= 1 && saved <= (int) presets().size()))
         saved = kDefaultPreset + 1;
+    int selected = saved;
+    if (current && saved >= kUserBase) { // a preset of the user's, found by its name
+        const auto name = settings.getValue("roomPresetName");
+        selected = kCustomId;
+        for (int i = 0; i < (int) userPresets.size(); ++i)
+            if (userPresets[(size_t) i].name == name)
+                selected = kUserBase + i;
+        saved = kCustomId;
+    }
     if (current && saved == kCustomId) {
         const auto d = presetSettings(presets()[(size_t) kDefaultPreset]);
         const float defaults[count - 1] = { 0.0f, d.size, d.decaySeconds, d.brightness, d.width };
@@ -202,7 +220,8 @@ RoomPanel::RoomPanel(pf::Room& r, juce::PropertiesFile& s) : room(r), settings(s
     } else {
         loadPreset(saved - 1);
     }
-    preset.setSelectedId(saved, juce::dontSendNotification);
+    preset.setSelectedId(selected, juce::dontSendNotification);
+    deletePreset.setEnabled(selected >= kUserBase);
     const int savedPosition = current ? settings.getIntValue("roomPosition", kDefaultPosition + 1) : kDefaultPosition + 1;
     const double defaultDistance = savedPosition >= 1 && savedPosition <= (int) positions().size()
                                      ? positions()[(size_t) (savedPosition - 1)].distance
@@ -210,6 +229,8 @@ RoomPanel::RoomPanel(pf::Room& r, juce::PropertiesFile& s) : room(r), settings(s
     sliders[distance].setValue(current ? settings.getDoubleValue("roomDistance", defaultDistance) : defaultDistance, juce::dontSendNotification);
     position.setSelectedId(savedPosition, juce::dontSendNotification);
     keepLoudness.setToggleState(current ? settings.getBoolValue("roomKeepLoudness", true) : true, juce::dontSendNotification);
+    if (selected >= kUserBase) // a preset of the user's: its own room and position
+        loadUserPreset(selected - kUserBase);
     loading = false;
     apply();
     describe();
@@ -257,8 +278,171 @@ void RoomPanel::positionEdited()
         return;
     if (id != kCustomId)
         position.setSelectedId(kCustomId, juce::dontSendNotification);
+    if (preset.getSelectedId() >= kUserBase) // a preset of the user's holds the position too
+        edited();
     if (onChange)
         onChange();
+}
+
+juce::StringArray RoomPanel::presetNames() const
+{
+    juce::StringArray names;
+    for (const auto& p : presets())
+        names.add(p.name);
+    for (const auto& p : userPresets)
+        names.add(p.name);
+    return names;
+}
+
+int RoomPanel::presetIndex() const
+{
+    const int id = preset.getSelectedId();
+    if (id >= 1 && id <= (int) presets().size())
+        return id - 1;
+    if (id >= kUserBase && id < kUserBase + (int) userPresets.size())
+        return (int) presets().size() + id - kUserBase;
+    return -1;
+}
+
+void RoomPanel::selectPreset(int index)
+{
+    const int builtIn = (int) presets().size();
+    if (index >= 0 && index < builtIn)
+        preset.setSelectedId(index + 1, juce::sendNotificationSync);
+    else if (index >= builtIn && index < builtIn + (int) userPresets.size())
+        preset.setSelectedId(kUserBase + index - builtIn, juce::sendNotificationSync);
+}
+
+void RoomPanel::loadUserPresets()
+{
+    // Saved as JSON: [{ name, level, size, decay, brightness, width, distance (the settings' units), keepLoudness }].
+    userPresets.clear();
+    const auto list = juce::JSON::parse(settings.getValue("roomUserPresets", "[]"));
+    if (const auto* array = list.getArray())
+        for (const auto& item : *array) {
+            UserPreset p;
+            p.name = item.getProperty("name", juce::String()).toString().trim();
+            if (p.name.isEmpty())
+                continue;
+            for (int c = 0; c < count; ++c)
+                p.values[(size_t) c] = (double) item.getProperty(kControls[c].key, 0.0) * kControls[c].scale;
+            p.keepLoudness = (bool) item.getProperty("keepLoudness", true);
+            userPresets.push_back(p);
+        }
+}
+
+void RoomPanel::storeUserPresets()
+{
+    juce::Array<juce::var> list;
+    for (const auto& p : userPresets) {
+        auto* item = new juce::DynamicObject();
+        item->setProperty("name", p.name);
+        for (int c = 0; c < count; ++c)
+            item->setProperty(kControls[c].key, p.values[(size_t) c] / kControls[c].scale);
+        item->setProperty("keepLoudness", p.keepLoudness);
+        list.add(juce::var(item));
+    }
+    settings.setValue("roomUserPresets", juce::JSON::toString(juce::var(list), true));
+    settings.saveIfNeeded();
+}
+
+void RoomPanel::rebuildPresetList(int selectId)
+{
+    preset.clear(juce::dontSendNotification);
+    for (int i = 0; i < (int) presets().size(); ++i)
+        preset.addItem(presets()[(size_t) i].name, i + 1);
+    preset.addItem("Custom", kCustomId);
+    if (!userPresets.empty()) {
+        preset.addSectionHeading("My presets (room and position)");
+        for (int i = 0; i < (int) userPresets.size(); ++i)
+            preset.addItem(userPresets[(size_t) i].name, kUserBase + i);
+    }
+    preset.setSelectedId(selectId, juce::dontSendNotification);
+    deletePreset.setEnabled(selectId >= kUserBase);
+}
+
+void RoomPanel::loadUserPreset(int index)
+{
+    const auto& p = userPresets[(size_t) index];
+    const bool was = loading;
+    loading = true;
+    for (int c = 0; c < count; ++c)
+        sliders[(size_t) c].setValue(p.values[(size_t) c], juce::dontSendNotification);
+    keepLoudness.setToggleState(p.keepLoudness, juce::dontSendNotification);
+    int pos = kCustomId;
+    for (int i = 0; i < (int) positions().size(); ++i)
+        if (std::abs(positions()[(size_t) i].distance - p.values[distance]) < 0.05)
+            pos = i + 1;
+    position.setSelectedId(pos, juce::dontSendNotification);
+    loading = was;
+    apply();
+}
+
+void RoomPanel::askSavePreset()
+{
+    const int id = preset.getSelectedId();
+    const auto suggested = id >= kUserBase ? preset.getText() : juce::String();
+    auto* window = new juce::AlertWindow("Save the room", "A name for this room and this listening position "
+                                                          "(an existing name is replaced):",
+                                         juce::MessageBoxIconType::NoIcon, this);
+    window->addTextEditor("name", suggested, "Name");
+    window->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    window->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    window->enterModalState(true, juce::ModalCallbackFunction::create([this, window](int result) {
+        const auto name = window->getTextEditorContents("name").trim();
+        if (result != 1 || name.isEmpty())
+            return;
+        UserPreset p;
+        p.name = name;
+        for (int c = 0; c < count; ++c)
+            p.values[(size_t) c] = sliders[(size_t) c].getValue();
+        p.keepLoudness = keepLoudness.getToggleState();
+        int index = -1;
+        for (int i = 0; i < (int) userPresets.size(); ++i)
+            if (userPresets[(size_t) i].name == name)
+                index = i;
+        if (index >= 0)
+            userPresets[(size_t) index] = p;
+        else {
+            userPresets.push_back(p);
+            index = (int) userPresets.size() - 1;
+        }
+        storeUserPresets();
+        rebuildPresetList(kUserBase + index);
+        save();
+        if (onChange)
+            onChange();
+    }), true);
+}
+
+void RoomPanel::askDeletePreset()
+{
+    const int index = preset.getSelectedId() - kUserBase;
+    if (index < 0 || index >= (int) userPresets.size())
+        return;
+    const auto name = userPresets[(size_t) index].name;
+    juce::AlertWindow::showAsync(juce::MessageBoxOptions {}
+                                     .withIconType(juce::MessageBoxIconType::QuestionIcon)
+                                     .withTitle("Delete a preset")
+                                     .withMessage("Delete the preset \"" + name + "\"? The room as it sounds now stays.")
+                                     .withButton("Delete", 1)
+                                     .withButton("Cancel", 0)
+                                     .withAssociatedComponent(this),
+                                 [safe = juce::Component::SafePointer<RoomPanel>(this), name](int result) {
+                                     if (result == 0 || safe == nullptr)
+                                         return;
+                                     auto& self = *safe;
+                                     for (auto it = self.userPresets.begin(); it != self.userPresets.end(); ++it)
+                                         if (it->name == name) {
+                                             self.userPresets.erase(it);
+                                             break;
+                                         }
+                                     self.storeUserPresets();
+                                     self.rebuildPresetList(kCustomId);
+                                     self.save();
+                                     if (self.onChange)
+                                         self.onChange();
+                                 });
 }
 
 void RoomPanel::apply()
@@ -314,6 +498,7 @@ void RoomPanel::save()
     settings.setValue("roomModel", kModel);
     settings.setValue("roomOn", onButton.getToggleState());
     settings.setValue("roomPreset", preset.getSelectedId());
+    settings.setValue("roomPresetName", preset.getSelectedId() >= kUserBase ? preset.getText() : juce::String());
     settings.setValue("roomPosition", position.getSelectedId());
     settings.setValue("roomKeepLoudness", keepLoudness.getToggleState());
     for (int c = 0; c < count; ++c)
@@ -341,7 +526,11 @@ void RoomPanel::resized()
     onButton.setBounds(row.removeFromLeft(110));
     row.removeFromLeft(20);
     presetLabel.setBounds(row.removeFromLeft(60));
-    preset.setBounds(row.removeFromLeft(220).reduced(0, 2));
+    preset.setBounds(row.removeFromLeft(196).reduced(0, 2));
+    row.removeFromLeft(8);
+    savePreset.setBounds(row.removeFromLeft(74).reduced(0, 2));
+    row.removeFromLeft(4);
+    deletePreset.setBounds(row.removeFromLeft(70).reduced(0, 2));
     inner.removeFromTop(8);
     for (int c = 0; c < distance; ++c) {
         row = inner.removeFromTop(32);

@@ -43,6 +43,10 @@ Play a MIDI file live: File > Open MIDI file (Ctrl+O), drop it on the window, or
 Tracks... picks the parts to play (a part is a track's channel; drums off by default); -oct, -, +, +oct
 transpose the file by semitones or octaves.
 
+Keyboard > Pedal curve shapes the MIDI keyboard's sustain pedal like the velocity curve (the travel it really
+covers, where the half pedal falls); the Pedal button fills with the pedal's travel. Rooms and listening positions
+can be saved under names of your own (Room window: Save..., Delete; Engine > Room presets).
+
 The modal engine models each note's coupled strings (Weinreich): the soft pedal (CC67, the N key) makes the hammer
 miss a string, and Engine settings > Unison tuning draws the strings together (0 %: no beating) or apart.
 

@@ -9,6 +9,7 @@
 #include "ui/RoomPanel.h"
 #include "ui/Theme.h"
 #include "KeyboardInput.h"
+#include "VelocityCurveEditor.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
 
@@ -393,6 +394,36 @@ int runUiSnapshots(const juce::StringArray& arguments)
         save(bar, "player-bar-empty");
         RoomPanel roomPanel(host.room, settings);
         save(roomPanel, "room");
+        {   // A preset of the user's, saved, read back and selected at start.
+            juce::PropertiesFile own(folder.getChildFile("snapshot-presets.settings"), options);
+            own.setValue("roomModel", 2);
+            own.setValue("roomUserPresets", "[{\"name\":\"Living room, 3 m\",\"roomLevel\":-3.0,\"roomSize\":0.3,\"roomDecay\":0.7,"
+                                            "\"roomBrightness\":0.6,\"roomWidth\":0.9,\"roomDistance\":3.0,\"keepLoudness\":true}]");
+            own.setValue("roomPreset", 200);
+            own.setValue("roomPresetName", "Living room, 3 m");
+            own.setValue("roomDistance", 3.0);
+            own.setValue("roomPosition", 2);
+            pf::Room room;
+            RoomPanel withPreset(room, own);
+            save(withPreset, "room-user-preset");
+            own.getFile().deleteFile();
+        }
+        // The pedal curve: a pedal that never sends more than 120, the half pedal of the reference's measured curve.
+        juce::MidiMessageCollector collector;
+        pf::VelocityCurve velocities;
+        pf::PedalCurve pedal;
+        auto pedalSettings = pf::PedalCurve::defaults();
+        pedalSettings.inputMax = 120;
+        pedal.set(pedalSettings);
+        KeyboardInput keys(collector, velocities, &pedal);
+        collector.reset(44100.0);
+        keys.handleIncomingMidiMessage(nullptr, juce::MidiMessage::controllerEvent(1, 64, 40));
+        VelocityCurvePanel pedalPanel(pedalSettings, keys, {}, CurveKind::pedal);
+        std::array<float, 128> lift {};
+        for (int v = 0; v < 128; ++v) // as measured (forge half-pedal): resting at 12 and under, lifted from 20
+            lift[(std::size_t) v] = juce::jlimit(0.0f, 1.0f, (float) (v - 12) / 8.0f);
+        pedalPanel.setDamperLift(lift);
+        save(pedalPanel, "pedal-curve");
         settings.getFile().deleteFile();
     }
     juce::LookAndFeel::setDefaultLookAndFeel(nullptr);

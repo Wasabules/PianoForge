@@ -855,6 +855,14 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
   - Correctif : la table s'éteint désormais sous −120 dB. Entre 2 et 3 s, la bande 60–120 Hz est à −1 à +9 dB de Noire, au lieu du silence.
   - Reste, inaudible : la bande 500–2000 Hz des notes les plus aiguës après 0,5 s (−5 à −25 dB, à −88 à −96 dBFS), entre la table (≤ 700 Hz) et le fondamental.
 
+**Pédale, préréglages de salle et périphérique audio (7 novembre 2026).**
+  - *Courbe de pédale* (Keyboard > Pedal curve). Comme la courbe de vélocité, elle porte sur la plage que la pédale du clavier MIDI couvre vraiment (certaines n'atteignent jamais 0 ni 127, d'autres n'envoient que quelques paliers) et sur cinq points, avec une courbe monotone. Un apprentissage de la plage est proposé : enfoncer la pédale lentement jusqu'au bout, la relâcher. La fenêtre montre la bande où les étouffoirs ne font qu'effleurer les cordes, tirée de la courbe mesurée du profil : on y place la demi-pédale dans la course de sa pédale. La courbe ne s'applique qu'à la pédale du clavier MIDI, ni à la barre d'espace ni aux fichiers MIDI.
+  - *Le bouton Pedal* se remplit selon la course reçue par le moteur (CC64, quelle qu'en soit la source), avec le pourcentage en demi-pédale.
+  - *Préréglages de salle* : la salle et la position d'écoute s'enregistrent sous un nom (fenêtre Room : Save…, un nom existant est remplacé ; Delete, après confirmation). Ils apparaissent sous « My presets » dans la liste, et dans Engine > Room presets pour changer vite.
+  - *Le périphérique audio choisi n'est plus perdu.* Deux causes, corrigées :
+    - en changeant de type dans la fenêtre Audio, JUCE ouvrait le premier pilote du type (« ASIO Link Pro ») et non le dernier utilisé. L'application retient maintenant le dernier pilote de chaque type ;
+    - un périphérique qui ne s'ouvre pas au démarrage (pilote encore tenu par une application qui se ferme, ou par un autre programme) était remplacé, puis le remplaçant était enregistré à la place du choix. Le choix est maintenant gardé, l'application le réessaie pendant 15 s et l'annonce dans la barre d'état. Le pilote ASIO du FiiO accepte deux clients, donc ce second cas ne le touchait pas.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

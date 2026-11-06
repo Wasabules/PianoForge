@@ -74,6 +74,7 @@ private:
     void chooseMidiFile();
     void closeMidiFile();
     void openVelocityCurve();
+    void openPedalCurve();
     void updateRenderedLayers();
     void showWindow(std::unique_ptr<ToolWindow>& window, const juce::String& title, juce::Component& content);
     void showShortcuts();
@@ -105,7 +106,9 @@ private:
     AudioHost host { engines };
     pf::VelocityCurve velocityCurve;
     pf::VelocityCurve::Settings curveSettings;
-    KeyboardInput keyboardInput { host.collector, velocityCurve }; // hardware keyboards go through the curve
+    pf::PedalCurve pedalCurve;                                   // the MIDI keyboard's sustain pedal, through it
+    pf::PedalCurve::Settings pedalSettings = pf::PedalCurve::defaults();
+    KeyboardInput keyboardInput { host.collector, velocityCurve, &pedalCurve }; // hardware keyboards go through the curve
     TakeRecorder takes;                 // every event that reached the engine (message thread)
     std::vector<RecordedEvent> drained; // reused buffer
     std::thread takeRender;             // renders a saved take to WAV in the background
@@ -125,11 +128,35 @@ private:
     std::unique_ptr<RoomPanel> roomPanel;
     std::unique_ptr<ToolWindow> engineWindow, audioWindow, performanceWindow, roomWindow;
     std::unique_ptr<PlayerBar> playerBar;
-    std::unique_ptr<VelocityCurveWindow> curveWindow;
+    std::unique_ptr<VelocityCurveWindow> curveWindow, pedalWindow;
 
-    // Toolbar.
-    juce::TextButton referenceButton { "Reference" }, modalButton { "Modal" }, recordButton, pedalButton { "Pedal" },
-        roomButton { "Room" };
+    // Toolbar. The pedal button fills with the pedal's travel, as the engine receives it (a half pedal shows).
+    class PedalButton final : public juce::TextButton {
+    public:
+        PedalButton() : juce::TextButton("Pedal") {}
+        void setDepth(float d)
+        {
+            if (std::abs(d - depth) > 0.004f) {
+                depth = d;
+                repaint();
+            }
+        }
+        void paintButton(juce::Graphics& g, bool over, bool down) override
+        {
+            getLookAndFeel().drawButtonBackground(g, *this, findColour(juce::TextButton::buttonColourId), over, down);
+            const auto r = getLocalBounds().toFloat().reduced(1.5f);
+            g.setColour(findColour(juce::TextButton::buttonOnColourId));
+            g.fillRoundedRectangle(r.withWidth(r.getWidth() * juce::jlimit(0.0f, 1.0f, depth)), 4.0f);
+            g.setColour(findColour(depth > 0.55f ? juce::TextButton::textColourOnId : juce::TextButton::textColourOffId));
+            g.setFont(juce::FontOptions(14.0f));
+            g.drawText(depth > 0.0f && depth < 1.0f ? "Pedal " + juce::String(juce::roundToInt(depth * 100.0f)) + " %" : juce::String("Pedal"),
+                       getLocalBounds(), juce::Justification::centred);
+        }
+    private:
+        float depth = 0.0f;
+    };
+    juce::TextButton referenceButton { "Reference" }, modalButton { "Modal" }, recordButton, roomButton { "Room" };
+    PedalButton pedalButton;
     juce::Slider volume, velocity;
     juce::Label volumeLabel, velocityLabel;
     LoadMeter loadMeter;

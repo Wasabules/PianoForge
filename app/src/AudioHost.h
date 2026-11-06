@@ -105,6 +105,8 @@ public:
     }
 
     std::uint32_t currentSegment() const noexcept { return segment.load(); }
+    /// The last sustain pedal value the engine received (CC64, 0 to 127), whoever sent it.
+    std::atomic<int> pedalValue { 0 };
     /// The engine's rate (what is recorded and captured).
     double currentRate() const noexcept { return recordingRate.load(); }
     double deviceRate() const noexcept { return device.load(); }
@@ -157,6 +159,8 @@ public:
             events[(size_t) count++] = { (std::uint32_t) at, meta.data[0],
                                          (std::uint8_t) (meta.numBytes > 1 ? meta.data[1] : 0),
                                          (std::uint8_t) (meta.numBytes > 2 ? meta.data[2] : 0) };
+            if (meta.numBytes == 3 && (meta.data[0] & 0xF0) == 0xB0 && meta.data[1] == 64) // the sustain pedal, for the UI
+                pedalValue.store(meta.data[2], std::memory_order_relaxed);
         }
         if (count > 0) { // record what reaches the engine, at its exact position
             const auto seg = segment.load(std::memory_order_relaxed);

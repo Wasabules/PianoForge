@@ -98,4 +98,46 @@ private:
     std::array<std::atomic<std::uint8_t>, 128> table {};
 };
 
+/// Maps what a sustain pedal sends (CC64) onto the 0..127 the engines read. [inputMin, inputMax] is the travel the
+/// pedal really covers (some never reach 0 or 127, some send a few steps only); between them, the same monotone
+/// curve through kPoints points as the velocities'. At or under inputMin: 0 (up); at or over inputMax: 127 (down).
+/// map() is lock-free (MIDI thread); set() is meant for the UI thread.
+class PedalCurve {
+public:
+    using Settings = VelocityCurve::Settings;
+    static constexpr int kPoints = VelocityCurve::kPoints;
+
+    static Settings defaults() noexcept
+    {
+        Settings s;
+        s.inputMin = 0;
+        s.inputMax = 127;
+        return s;
+    }
+
+    PedalCurve() noexcept { set(defaults()); }
+
+    void set(const Settings& s) noexcept
+    {
+        for (int v = 0; v < 128; ++v)
+            table[(size_t) v].store(output(s, v), std::memory_order_relaxed);
+    }
+
+    std::uint8_t map(int value) const noexcept { return table[(size_t) std::clamp(value, 0, 127)].load(std::memory_order_relaxed); }
+
+    static std::uint8_t output(const Settings& s, int value) noexcept
+    {
+        const int lo = std::clamp(s.inputMin, 0, 126), hi = std::clamp(s.inputMax, lo + 1, 127);
+        if (value <= lo)
+            return 0;
+        if (value >= hi)
+            return 127;
+        const double x = (double) (value - lo) / (double) (hi - lo);
+        return (std::uint8_t) std::clamp((int) std::lround(VelocityCurve::evaluate(s, x) * 127.0), 0, 127);
+    }
+
+private:
+    std::array<std::atomic<std::uint8_t>, 128> table {};
+};
+
 } // namespace pf

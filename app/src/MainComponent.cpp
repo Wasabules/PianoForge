@@ -18,9 +18,11 @@ enum MenuId {
     // Audio
     kAudioSettings = 60, kPerformance, kResetDropouts,
     // Keyboard
-    kVelocityCurve = 70, kAzerty, kQwerty, kOctaveDown, kOctaveUp, kVelocityDown, kVelocityUp,
+    kVelocityCurve = 70, kAzerty, kQwerty, kOctaveDown, kOctaveUp, kVelocityDown, kVelocityUp, kPedalCurve,
     // Help
     kShortcuts = 90, kAbout,
+    // Engine > Room presets (one per preset, built-in then the user's)
+    kRoomPresetBase = 300,
     // File > Record formats (one per sound format)
     kRecordFormat = 200,
 };
@@ -61,6 +63,23 @@ pf::VelocityCurve::Settings parseCurve(const juce::String& text)
     s.inputMin = juce::jlimit(1, 126, parts[0].getIntValue());
     s.inputMax = juce::jlimit(s.inputMin + 1, 127, parts[1].getIntValue());
     for (int i = 0; i < pf::VelocityCurve::kPoints; ++i)
+        s.points[(size_t) i] = juce::jlimit(0.0f, 1.0f, points[i].getFloatValue());
+    return s;
+}
+
+/// The pedal curve, saved like the velocity curve; its input range may start at 0.
+pf::PedalCurve::Settings parsePedalCurve(const juce::String& text)
+{
+    auto s = pf::PedalCurve::defaults();
+    const auto parts = juce::StringArray::fromTokens(text, ";", "");
+    if (parts.size() != 3)
+        return s;
+    const auto points = juce::StringArray::fromTokens(parts[2], ",", "");
+    if (points.size() != pf::PedalCurve::kPoints)
+        return s;
+    s.inputMin = juce::jlimit(0, 126, parts[0].getIntValue());
+    s.inputMax = juce::jlimit(s.inputMin + 1, 127, parts[1].getIntValue());
+    for (int i = 0; i < pf::PedalCurve::kPoints; ++i)
         s.points[(size_t) i] = juce::jlimit(0.0f, 1.0f, points[i].getFloatValue());
     return s;
 }
@@ -122,6 +141,8 @@ MainComponent::MainComponent()
     }
     curveSettings = parseCurve(settings->getValue("velocityCurve"));
     velocityCurve.set(curveSettings);
+    pedalSettings = parsePedalCurve(settings->getValue("pedalCurve"));
+    pedalCurve.set(pedalSettings);
     host.rateMode = settings->getIntValue("engineRateMode", 0) == 1 ? 1 : 0; // before the device starts the host
     deviceManager.addAudioCallback(&host);
     deviceManager.addMidiInputDeviceCallback({}, &keyboardInput);
@@ -168,7 +189,8 @@ MainComponent::MainComponent()
             if (keys.contains(f.key) && canWrite(f.format))
                 recordFormats.push_back(f.format);
     }
-    pedalButton.setTooltip("The sustain pedal (Space)");
+    pedalButton.setTooltip("The sustain pedal (Space): it fills with the pedal's travel as the engine receives it; "
+                           "Keyboard > Pedal curve shapes the MIDI keyboard's pedal");
     pedalButton.setClickingTogglesState(false);
     pedalButton.onClick = [this] { sendSustain(!pedalButton.getToggleState()); };
     roomButton.setClickingTogglesState(false);
@@ -246,6 +268,7 @@ MainComponent::~MainComponent()
     performanceWindow.reset();
     roomWindow.reset();
     curveWindow.reset(); // it refers to curveSettings and keyboardInput
+    pedalWindow.reset();
     keyboard.removeKeyListener(this);
     deviceManager.removeChangeListener(this);
     deviceManager.removeMidiInputDeviceCallback({}, &keyboardInput);
@@ -330,6 +353,14 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         menu.addItem(item(kEngineSettings, "Engine settings (tuning, re-strike, levels)...", "Ctrl+E"));
         menu.addSeparator();
         menu.addItem(item(kRoomToggle, "Room: " + roomPanel->presetName(), {}, roomPanel->isOn()));
+        juce::PopupMenu rooms;
+        const auto names = roomPanel->presetNames();
+        for (int i = 0; i < names.size(); ++i) {
+            if (i == (int) RoomPanel::presets().size())
+                rooms.addSectionHeader("My presets");
+            rooms.addItem(item(kRoomPresetBase + i, names[i], {}, roomPanel->presetIndex() == i));
+        }
+        menu.addSubMenu("Room presets", rooms);
         menu.addItem(item(kRoomSettings, "Room settings...", "Ctrl+M"));
         break;
     }
@@ -341,6 +372,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         break;
     case 4:
         menu.addItem(item(kVelocityCurve, "Velocity curve..."));
+        menu.addItem(item(kPedalCurve, "Pedal curve..."));
         menu.addSeparator();
         menu.addItem(item(kAzerty, "Computer keyboard: AZERTY", {}, keyLayout == kLayoutAzerty));
         menu.addItem(item(kQwerty, "Computer keyboard: QWERTY", {}, keyLayout == kLayoutQwerty));
@@ -365,6 +397,10 @@ void MainComponent::menuItemSelected(int id, int)
     if (id >= kEngineOption && id < kEngineOption + (int) EnginePanel::Option::count) {
         const auto o = (EnginePanel::Option) (id - kEngineOption);
         enginePanel->setOn(o, !enginePanel->isOn(o));
+        return;
+    }
+    if (id >= kRoomPresetBase && id < kRoomPresetBase + roomPanel->presetNames().size()) {
+        roomPanel->selectPreset(id - kRoomPresetBase);
         return;
     }
     if (id >= kRecordFormat && id < kRecordFormat + (int) soundFormats().size()) {
@@ -399,6 +435,7 @@ void MainComponent::menuItemSelected(int id, int)
     case kPerformance: showWindow(performanceWindow, "Performance", performancePanel); break;
     case kResetDropouts: performancePanel.onReset(); break;
     case kVelocityCurve: openVelocityCurve(); break;
+    case kPedalCurve: openPedalCurve(); break;
     case kAzerty: setKeyLayout(kLayoutAzerty); break;
     case kQwerty: setKeyLayout(kLayoutQwerty); break;
     case kOctaveDown: shiftOctave(-1); break;
@@ -594,6 +631,21 @@ void MainComponent::openVelocityCurve()
     }
     curveWindow->setVisible(true);
     curveWindow->toFront(true);
+}
+
+void MainComponent::openPedalCurve()
+{
+    if (pedalWindow == nullptr) {
+        pedalWindow = std::make_unique<VelocityCurveWindow>(pedalSettings, keyboardInput, [this] {
+            pedalCurve.set(pedalSettings);
+            saveSettings();
+        }, CurveKind::pedal);
+        pedalWindow->centreAroundComponent(this, pedalWindow->getWidth(), pedalWindow->getHeight());
+    }
+    if (const auto profile = modal.sharedProfile()) // where the dampers graze the strings
+        pedalWindow->panel().setDamperLift(profile->pedalLift);
+    pedalWindow->setVisible(true);
+    pedalWindow->toFront(true);
 }
 
 void MainComponent::updateRenderedLayers()
@@ -991,6 +1043,7 @@ void MainComponent::saveSettings()
     s->setValue("velocity", (int) velocity.getValue());
     s->setValue("keyLayout", keyLayout);
     s->setValue("velocityCurve", formatCurve(curveSettings));
+    s->setValue("pedalCurve", formatCurve(pedalSettings));
     s->setValue("engine", modalSelected() ? 2 : 1);
     s->setValue("recordMidi", recordMidi);
     juce::StringArray formats;
@@ -1178,6 +1231,7 @@ void MainComponent::timerCallback()
     }
     const bool sustain = modalSelected() ? modal.sustainDown.load() : player.sustainDown.load();
     pedalButton.setToggleState(sustain, juce::dontSendNotification);
+    pedalButton.setDepth((float) host.pedalValue.load() / 127.0f);
 
     // Dashboard and status bar.
     refreshDashboard();

@@ -22,8 +22,12 @@ public:
 
     bool isOn() const { return onButton.getToggleState(); }
     void setOn(bool on);
-    /// "Concert hall, at the keyboard (1 m)".
+    /// "Concert hall, 1.0 m".
     juce::String presetName() const;
+    /// Every preset, for a menu: the built-in rooms, then the user's (a room and a listening position, named).
+    juce::StringArray presetNames() const;
+    int presetIndex() const;       // the selected one in presetNames(), -1: custom
+    void selectPreset(int index);  // as if chosen in the list
     std::function<void()> onChange; // the room switched on or off, another preset or position (the toolbar follows)
 
     void paint(juce::Graphics&) override;
@@ -42,6 +46,11 @@ public:
 
 private:
     enum Control { level, size, decay, brightness, width, distance, count };
+    struct UserPreset {
+        juce::String name;
+        std::array<double, count> values {}; // as the sliders show them
+        bool keepLoudness = true;
+    };
 
     void timerCallback() override; // the summary, once a drag settles
     void apply();
@@ -50,11 +59,19 @@ private:
     void edited();         // a room setting moved away from the preset: "Custom"
     void positionEdited(); // the distance moved away from the position: "Custom"
     void describe();
+    void loadUserPresets();
+    void storeUserPresets();
+    void rebuildPresetList(int selectId);
+    void loadUserPreset(int index);
+    void askSavePreset();
+    void askDeletePreset();
 
     pf::Room& room;
     juce::PropertiesFile& settings;
     juce::ToggleButton onButton { "Room" }, keepLoudness { "Keep loudness" };
     juce::ComboBox preset, position;
+    juce::TextButton savePreset { "Save..." }, deletePreset { "Delete" };
+    std::vector<UserPreset> userPresets;
     std::array<juce::Slider, count> sliders;
     std::array<juce::Label, count> labels;
     juce::Label presetLabel, positionLabel, summary, note;
