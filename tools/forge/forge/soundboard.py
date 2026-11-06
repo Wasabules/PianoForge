@@ -65,12 +65,13 @@ def shared_poles(segments: list[np.ndarray], order: int, rows: int) -> np.ndarra
 
 
 def fit_note(z: np.ndarray, fs_d: float, poles: np.ndarray, partial_freqs: list[float], half_width: float,
-             ridge: float = 1e-3) -> np.ndarray:
+             ridge: float = 1e-3, weight_per_s: float = WEIGHT_PER_S) -> np.ndarray:
     """Amplitudes (channels x poles) at the window start, by weighted least squares in the frequency domain on the
     bins farther than `half_width` from every partial. A resonance whose own frequency lies in an excluded band
     cannot be measured (the fit would trade it against its neighbours, with huge amplitudes cancelling each other
     in the bins kept): it is left at zero, the body being masked by the partial there anyway. A light ridge
-    (`ridge` times the mean diagonal of the normal matrix) keeps close resonances from cancelling each other."""
+    (`ridge` times the mean diagonal of the normal matrix) keeps close resonances from cancelling each other.
+    `weight_per_s`: the weight towards the tail (0: every instant alike, for a transient)."""
     n = z.shape[1]
     m = np.arange(n)
     # Weight towards the tail, times a Tukey taper: the resonances get the same window in the data and in the
@@ -79,7 +80,7 @@ def fit_note(z: np.ndarray, fs_d: float, poles: np.ndarray, partial_freqs: list[
     edge = max(1, int(0.1 * n))
     ramp = 0.5 * (1 - np.cos(np.pi * np.arange(edge) / edge))
     taper[:edge], taper[-edge:] = ramp, ramp[::-1]
-    weight = np.exp(WEIGHT_PER_S * m / fs_d) * taper
+    weight = np.exp(weight_per_s * m / fs_d) * taper
     lo, hi = BAND
     pole_freqs = (lo + hi) / 2 + np.angle(poles) * fs_d / (2 * np.pi)
     measurable = np.ones(len(poles), dtype=bool)

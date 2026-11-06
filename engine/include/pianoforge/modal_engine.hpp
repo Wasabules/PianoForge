@@ -25,9 +25,23 @@ namespace pf {
 ///   overall gain (the body is in the residual too).
 /// - Past its analysis window, where the forge found the recording far under the modes, a partial is faded out
 ///   (profile fade time, an extra -60 dB per kPartialFadeSeconds).
-/// - Key release: the measured damper curve of the note (level against the note held), applied to the voice.
-/// - Sustain pedal (CC64 >= 64): the dampers stay up. Re-strike: the previous voice of the note keeps ringing and
-///   fades to -40 dB within restrikeFadeSeconds, as in the reference player.
+/// - Key release: the measured damper curve of the note (level against the note held), applied to the voice, and
+///   per group of partials the measured level against it, applied to their poles (the high partials die faster
+///   under the felt). The
+///   pedal sets how fast the curve runs: not at all with the dampers lifted, fully with them resting on the
+///   strings, in between for a half pedal (profile pedal curve). With pedalCatch, pressing the pedal again stops
+///   the curve where it is, and what is left of the note rings on, as on a piano (the reference library lets the
+///   release run to its end).
+/// - Release noise: when a damper lands, the soundboard gets the knock measured on the reference for the nearest
+///   note and velocity (forge release-noise), scaled by how firmly the damper lands.
+/// - Sympathetic resonance: every string whose damper is up (sustain pedal, or its key held when
+///   heldKeysResonate) is a bank of resonators, its measured modes, driven by the voices of the other notes
+///   (forge sympathetic). A damper landing on a string adds the note's damping to its resonators.
+/// - Tuning: the profile plays as recorded at referenceA4 = 440 Hz; another reference and a temperament (cents
+///   against equal temperament per pitch class) scale every frequency of a note at its note-on (modes, residual),
+///   and retune the free strings.
+/// - Re-strike: the previous voice of the note keeps ringing and fades to -40 dB within restrikeFadeSeconds, as in
+///   the reference player.
 ///
 /// install() and prepare() run outside the audio thread and may allocate; process() does not allocate, lock or
 /// perform I/O.
@@ -53,11 +67,23 @@ public:
     std::atomic<float> outputGain { 1.0f };
     std::atomic<float> restrikeFadeSeconds { 0.8f };
     std::atomic<bool> bodyEnabled { true }, residualEnabled { true };
+    std::atomic<bool> sympatheticEnabled { true };
+    std::atomic<bool> heldKeysResonate { true }; // a piano does; the reference library does not
+    std::atomic<float> sympatheticGain { 1.0f };
+    std::atomic<bool> pedalCatch { true };       // a piano does; the reference library does not
+    std::atomic<bool> releaseNoiseEnabled { true };
+    /// Tuning (note-on; the free strings follow at the next block after tuningVersion changes).
+    std::atomic<float> referenceA4 { 440.0f };
+    std::array<std::atomic<float>, 12> pitchClassCents {}; // against equal temperament, index note % 12 (0 = C)
+    std::atomic<std::uint32_t> tuningVersion { 0 };
+    /// Frequency ratio of a note against the profile: (referenceA4 / 440) x 2^(cents / 1200).
+    double tuningRatio(int note) const noexcept;
 
     // Information for the user interface.
     std::atomic<int> lastNote { -1 }, lastVelocity { 0 }, lastLayerVelocity { 0 };
-    std::atomic<int> activeVoices { 0 }, activeModes { 0 };
+    std::atomic<int> activeVoices { 0 }, activeModes { 0 }, ringingStrings { 0 };
     std::atomic<bool> sustainDown { false };
+    std::atomic<float> pedalPosition { 0.0f }; // damper lift, 0 to 1
     std::atomic<float> outputPeak { 0.0f };
     std::atomic<std::uint32_t> stolenVoices { 0 }, noteOnsReceived { 0 };
 
@@ -69,15 +95,22 @@ private:
         float factor = 1.0f;
     };
     enum class Ramp : std::uint8_t { none, waiting, running };
-    /// From sample `at` (since the note-on), the modes [first, first + count) get the extra damping of a fade.
+    /// A partial's modes in the bank, [first, first + count), its damper group, and whether its fade has started.
+    struct PartialSlot {
+        int first = 0, count = 0, group = 0;
+        bool faded = false;
+    };
+    /// From sample `at` (since the note-on), the partial in slot `slot` gets the extra damping of a fade.
     struct PartialFade {
         std::int64_t at = 0;
-        int first = 0, count = 0;
+        int slot = 0;
     };
 
     struct Voice {
+        // released: key up with the damper curve started, or re-struck (first in line for stealing).
         bool active = false, keyDown = false, released = false, damperCurve = false, fadingOut = false;
-        int note = -1;
+        bool restruck = false; // fades out (restrikeFadeSeconds), whatever the dampers do
+        int note = -1, velocity = 0;
         const ModalProfile::Layer* layer = nullptr;
         ModeBank bank;
         std::vector<PartialRamp> ramps; // reserved for the largest layer
@@ -85,11 +118,19 @@ private:
         std::int64_t rampStart = 0, rampEnd = 0; // samples since the note-on
         std::vector<PartialFade> fades;          // ascending `at`, reserved for the largest layer
         std::size_t nextFade = 0;
+        std::vector<PartialSlot> slots;          // every partial in the bank, reserved for the largest layer
+        std::vector<float> groupGains;           // per damper group, its curve against the overall one (gains)
+        std::array<float, DamperCurves::kMaxGroups> groupFactor {}; // pole factor per sample over this block
+        bool groupDamping = false;               // the poles carry group factors
+        float driveGain = 0.0f, driveOnset = 0.0f; // drive of the free strings: velocity factor, rise so far
         double residualPos = 0.0;      // in residual frames
+        double residualStep = 1.0;     // residual frames per output sample (rates and tuning)
         float residualGain = 1.0f;
         float gain = 1.0f, decay = 1.0f; // exponential envelope (re-strike, fast fades)
-        std::int64_t sinceOn = 0, sinceRelease = 0;
+        std::int64_t sinceOn = 0;
         int curvePoints = 0;
+        double curvePos = 0.0;   // in curve points
+        float damperSpeed = 0.0f; // curve points run per point of time: 0 dampers lifted, 1 resting
         float curveGain = 1.0f;
         std::array<float, DamperCurves::kMaxPoints> releaseGains {};
         std::uint64_t age = 0;
@@ -99,21 +140,37 @@ private:
     void apply(const ModalProfile& p, const Event& e) noexcept;
     void noteOn(const ModalProfile& p, int note, int velocity) noexcept;
     void noteOff(const ModalProfile& p, int note) noexcept;
-    void releaseVoice(const ModalProfile& p, Voice& v) noexcept;
+    void updateDamping(const ModalProfile& p, Voice& v) noexcept;
+    void dampGroups(const ModalProfile& p, Voice& v, int n) noexcept;
+    void releaseKnock(const ModalProfile& p, const Voice& v, float strength) noexcept;
     void render(const ModalProfile& p, float* const* outputs, int numChannels, int start, int n) noexcept;
     bool produce(const ModalProfile& p, Voice& v, int n) noexcept;
     void renderBank(Voice& v, float* left, float* right, int n) noexcept;
+    void renderStrings(int n) noexcept;
 
     double sampleRate = 48000.0;
     int maxBlockSize = 0;
     float fadeFactor = 1.0f; // pole magnitude factor of a partial fade, per sample
+    float onsetFactor = 0.0f; // per sample: what is left of the drive's rise (exp(-1 / (onset fs)))
     std::array<Voice, kMaxVoices> voices;
     ModeBank body;
     float bodyGain = 1.0f, bodyDecay = 1.0f;
     bool bodyActive = false;
-    std::vector<float> bufferL, bufferR, mixL, mixR;
+    std::vector<float> bufferL, bufferR, bufferD, mixL, mixR; // bufferD: a voice's drive of the free strings
     std::uint64_t ageCounter = 0;
-    bool sustain = false;
+    float pedalLift = 0.0f; // 0: dampers resting, 1: lifted
+    float knockScale = 1.0f; // release noise of dampers landing together (see apply)
+
+    // Sympathetic resonance: one group of the bank per string; the drive of a string is every voice but its own.
+    DrivenBank strings;
+    std::array<int, 128> stringGroup {};          // -1: no string for this note
+    std::array<float, 128> stringDamper {};       // pole factor per sample of a damper resting on the string
+    std::array<float, 128> stringApplied {};      // pole factor currently applied
+    std::array<bool, 128> stringRinging {}, noteDriven {}, keyHeld {};
+    bool stringsCut = false;                      // all sound off: the strings fade out fast
+    std::uint32_t stringsTuning = 0;              // tuningVersion the strings are tuned to
+    void retuneStrings() noexcept;
+    std::vector<float> drive, driveOwn, driveScratch, stringsL, stringsR; // driveOwn: 128 x maxBlockSize
 
     std::shared_ptr<const ModalProfile> owned;          // message thread
     std::atomic<const ModalProfile*> published { nullptr };

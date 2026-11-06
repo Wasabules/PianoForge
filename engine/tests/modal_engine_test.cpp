@@ -150,6 +150,7 @@ void render(pf::ModalEngine& e, std::vector<pf::Event> events, int frames, std::
 int main()
 {
     const auto profile = makeProfile();
+    const auto ramped = makeRampProfile();
     std::vector<float> l, r;
 
     // 1. At a layer's velocity, the output is exactly that layer's modes (plus the body), from the note-on sample.
@@ -333,6 +334,191 @@ int main()
         e.install(nullptr);
         render(e, {}, 480, l, r);
         check(e.activeVoices.load() == 0 && rms(l, 0, 480) == 0.0, "no profile: silence");
+    }
+
+    // 7. The pedal sets the damper's speed: pressing it again stops the release where it is (pedalCatch, or the
+    //    release runs to its end), and a half pedal runs the curve slower.
+    {
+        const int off = 4800;
+        double held = 0.0, heldHalf = 0.0; // the note held, over the windows measured below
+        {
+            pf::ModalEngine e;
+            e.install(profile);
+            e.bodyEnabled = false;
+            e.prepare(kRate, 64);
+            render(e, { { 0, 0x90, 69, 100 } }, off + 6000, l, r);
+            held = rms(l, off + 4800, off + 5280);
+            heldHalf = rms(l, off + 4560, off + 5040);
+        }
+        auto levelAfter = [&](bool catching) {
+            pf::ModalEngine e;
+            e.install(profile);
+            e.bodyEnabled = false;
+            e.pedalCatch = catching;
+            e.prepare(kRate, 64);
+            // Key released, pedal pressed again 10 ms later (the curve is at -3 dB there).
+            render(e, { { 0, 0x90, 69, 100 }, { (std::uint32_t) off, 0x80, 69, 0 }, { (std::uint32_t) off + 480, 0xB0, 64, 127 } },
+                   off + 6000, l, r);
+            return 20.0 * std::log10(rms(l, off + 4800, off + 5280) / held + 1e-12);
+        };
+        const double caught = levelAfter(true), released = levelAfter(false);
+        std::printf("      re-pedalled 10 ms after the release: %.1f dB against the note held (no catch: %.1f dB)\n", caught, released);
+        check(std::abs(caught + 3.0) < 1.0, "pedal pressed again: what is left of the note rings on");
+        check(std::abs(released + 30.0) < 1.5, "without pedalCatch: the release runs on, as in the reference");
+
+        auto half = std::make_shared<pf::ModalProfile>(*profile);
+        half->pedalLift.fill(0.0f);
+        half->pedalLift[40] = 0.5f; // CC64 = 40: the curve at half speed
+        for (int v = 64; v < 128; ++v)
+            half->pedalLift[(std::size_t) v] = 1.0f;
+        pf::ModalEngine e;
+        e.install(half);
+        e.bodyEnabled = false;
+        e.prepare(kRate, 64);
+        render(e, { { 0, 0xB0, 64, 40 }, { 0, 0x90, 69, 100 }, { (std::uint32_t) off, 0x80, 69, 0 } }, off + 5200, l, r);
+        const double at = 20.0 * std::log10(rms(l, off + 4560, off + 5040) / heldHalf);
+        std::printf("      half pedal, 0.1 s after the release: %.1f dB (the curve's -15 dB at 0.05 s)\n", at);
+        check(std::abs(at + 15.0) < 1.0, "half pedal: the damper curve runs at the pedal's speed");
+    }
+
+    // 8. Tuning: the reference A4 and the temperament scale the note's frequencies.
+    {
+        auto peak = [&](const std::vector<float>& x, double lo, double hi) {
+            double best = 0.0, bestF = lo;
+            for (double f = lo; f <= hi; f += 0.02) {
+                std::complex<double> s = 0.0;
+                for (int i = 4800; i < 28800; ++i)
+                    s += (double) x[(std::size_t) i] * std::exp(std::complex<double>(0.0, -kTwoPi * f * i / kRate));
+                if (std::abs(s) > best) {
+                    best = std::abs(s);
+                    bestF = f;
+                }
+            }
+            return bestF;
+        };
+        auto measure = [&](float a4, float centsC) {
+            pf::ModalEngine e;
+            e.install(ramped);
+            e.residualEnabled = false;
+            e.referenceA4 = a4;
+            e.pitchClassCents[0] = centsC; // note 72 is a C
+            e.prepare(kRate, 64);
+            render(e, { { 0, 0x90, 72, 100 } }, 28800, l, r);
+            return peak(l, 290.0, 320.0);
+        };
+        const double at442 = measure(442.0f, 0.0f), quarter = measure(440.0f, 50.0f);
+        std::printf("      300 Hz partial: %.2f Hz at A4 = 442, %.2f Hz at +50 cents\n", at442, quarter);
+        check(std::abs(at442 - 300.0 * 442.0 / 440.0) < 0.1, "reference A4 = 442 Hz: every frequency scaled by 442 / 440");
+        check(std::abs(quarter - 300.0 * std::pow(2.0, 50.0 / 1200.0)) < 0.1, "temperament: a pitch class offset in cents");
+    }
+
+    // 9. Sympathetic resonance: a free string (A3, its second partial on the A4 played) rings with the pedal down,
+    //    or under its key held; with the pedal up and no key held, the output is the note's alone.
+    {
+        auto withString = std::make_shared<pf::ModalProfile>(*profile);
+        pf::ModalProfile::Note a3;
+        a3.midi = 57;
+        a3.layers.push_back(makeLayer(100, 1e-4f)); // its voice is nearly silent: a key held without a sound
+        withString->notes.push_back(std::move(a3));
+        withString->noteIndex[57] = 1;
+        pf::ModalProfile::String string;
+        string.midi = 57;
+        string.resonators.push_back({ 440.3, 0.8, 40.0f, { 1.0f, 0.0f }, { 1.0f, 0.0f } });
+        withString->strings.push_back(string);
+        withString->stringResonators = 1;
+        auto run = [&](bool sympathetic, bool heldKeys, std::vector<pf::Event> events) {
+            pf::ModalEngine e;
+            e.install(withString);
+            e.bodyEnabled = false;
+            e.sympatheticEnabled = sympathetic;
+            e.heldKeysResonate = heldKeys;
+            e.prepare(kRate, 64);
+            std::vector<float> out, unused;
+            render(e, std::move(events), 96000, out, unused);
+            return out;
+        };
+        auto difference = [&](const std::vector<float>& a, const std::vector<float>& b, int from, int to) {
+            double s = 0.0;
+            for (int i = from; i < to; ++i)
+                s += std::pow((double) a[(std::size_t) i] - b[(std::size_t) i], 2.0);
+            return std::sqrt(s / (to - from));
+        };
+        const std::vector<pf::Event> pedal { { 0, 0xB0, 64, 127 }, { 0, 0x90, 69, 100 }, { 4800, 0x80, 69, 0 } };
+        const auto on = run(true, true, pedal), off = run(false, true, pedal);
+        const double ring = difference(on, off, 48000, 96000);
+        std::printf("      pedal down: the free string at %.1f dB against the note, 1 to 2 s after it\n",
+                    20.0 * std::log10(ring / rms(off, 48000, 96000)));
+        check(ring > 1e-3 * rms(off, 48000, 96000), "pedal down: the free string sets ringing by the note");
+        const std::vector<pf::Event> up { { 0, 0x90, 69, 100 }, { 48000, 0x80, 69, 0 } };
+        check(difference(run(true, true, up), run(false, true, up), 0, 96000) == 0.0,
+              "pedal up, no key held: the note alone, sample for sample");
+        const std::vector<pf::Event> held { { 0, 0x90, 57, 100 }, { 2400, 0x90, 69, 100 }, { 48000, 0x80, 69, 0 } };
+        const auto heldOn = run(true, true, held), heldOff = run(true, false, held), none = run(false, true, held);
+        check(difference(heldOn, none, 24000, 48000) > 1e-3 * rms(none, 24000, 48000), "a key held: its string rings");
+        check(difference(heldOff, none, 0, 96000) == 0.0, "heldKeysResonate off: only the pedal frees the strings");
+    }
+
+    // 10. Damper groups: the high partials die faster than the overall curve says.
+    {
+        auto grouped = std::make_shared<pf::ModalProfile>(*ramped);
+        auto& d = grouped->dampers;
+        d.stepSeconds = 0.01;
+        d.notes = { 72 };
+        d.holds = { 1.0 };
+        d.logHolds = { 0.0 };
+        d.length = 21;
+        d.db.clear();
+        for (int k = 0; k < 21; ++k)
+            d.db.push_back(-0.5f * (float) k);        // overall: -10 dB at 0.2 s
+        d.groupFirst = { 1, 2 };
+        d.groupDb.clear();
+        for (int g = 0; g < 2; ++g)
+            for (int k = 0; k < 21; ++k)
+                d.groupDb.push_back(g == 0 ? 0.0f : -1.5f * (float) k); // partial 2: -30 dB more at 0.2 s
+        auto amplitude = [&](const std::vector<float>& x, int from, int to, double f) {
+            std::complex<double> s = 0.0;
+            for (int i = from; i < to; ++i)
+                s += (double) x[(std::size_t) i] * std::exp(std::complex<double>(0.0, -kTwoPi * f * i / kRate));
+            return 2.0 * std::abs(s) / (to - from);
+        };
+        pf::ModalEngine e;
+        e.install(grouped);
+        e.prepare(kRate, 64);
+        const int off = 14400; // after the residual (0.1 s) and the level ramp (0.05 s)
+        render(e, { { 0, 0x90, 72, 100 }, { (std::uint32_t) off, 0x80, 72, 0 } }, off + 14400, l, r);
+        const double before = amplitude(l, off - 4800, off, kRampF[1]) / amplitude(l, off - 4800, off, kRampF[0]);
+        const double after = amplitude(l, off + 9600, off + 14400, kRampF[1]) / amplitude(l, off + 9600, off + 14400, kRampF[0]);
+        const double drop = 20.0 * std::log10(after / before);
+        // Their natural decays differ too (6 and 2 per second): the windows are 0.3 s apart, -10.4 dB.
+        const double natural = 20.0 * std::log10(std::exp(-(kRampDecay[1] - kRampDecay[0]) * 0.3));
+        std::printf("      partial 2 against partial 1 over the release: %.1f dB (natural %.1f, group -30 at 0.2 s)\n", drop, natural);
+        check(std::abs(drop - natural + 30.0) < 4.0, "damper groups: the partials of the high group die faster");
+    }
+
+    // 11. Release noise: the soundboard gets the knock when the damper lands, not before.
+    {
+        auto knock = std::make_shared<pf::ModalProfile>(*profile);
+        knock->releaseNoise.notes = { 69 };
+        knock->releaseNoise.velocities = { 100 };
+        knock->releaseNoise.levelDb = { -80.0f };
+        knock->releaseNoise.left = { { 0.01f, 0.0f } };
+        knock->releaseNoise.right = { { 0.01f, 0.0f } };
+        auto run = [&](bool noise) {
+            pf::ModalEngine e;
+            e.install(knock);
+            e.releaseNoiseEnabled = noise;
+            e.prepare(kRate, 64);
+            std::vector<float> out, unused;
+            render(e, { { 0, 0x90, 69, 100 }, { 9600, 0x80, 69, 0 } }, 24000, out, unused);
+            return out;
+        };
+        const auto with = run(true), without = run(false);
+        double before = 0.0, after = 0.0;
+        for (int i = 0; i < 9600; ++i)
+            before = std::max(before, (double) std::abs(with[(std::size_t) i] - without[(std::size_t) i]));
+        for (int i = 9600; i < 24000; ++i)
+            after = std::max(after, (double) std::abs(with[(std::size_t) i] - without[(std::size_t) i]));
+        check(before == 0.0 && after > 5e-3, "release noise: the soundboard knock when the damper lands");
     }
 
     std::printf(failures ? "%d failure(s)\n" : "All modal engine tests passed\n", failures);

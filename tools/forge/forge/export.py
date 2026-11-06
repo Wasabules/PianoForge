@@ -11,7 +11,9 @@ Per note and per layer, the profile holds:
     before the modes settle), up to the start of the partials' analysis window and at least RESIDUAL_S, then faded
     out over RESIDUAL_FADE_S. Before that start, the modes are extrapolated back to the note-on, not measured: the
     residual is what keeps the attack exact. The window starts later in the bass, where the partials are close
-    (0.19 s for A0, 0.08 s from C2 up).
+    (0.19 s for A0, 0.08 s from C2 up). In the top octave the modes miss a third to half of the sound well past
+    that (C7 to C8: 3 to 10 dB under the take over the first half second): the residual runs on while it is
+    within RESIDUAL_QUIET_DB of the take, up to RESIDUAL_MAX_S.
 The layers are kept as they were measured: each one is a real strike, with its own beating phases. Interpolating
 amplitudes between two strikes gives neither (studies/velocity_linearity.py); the engine plays the nearest layer
 with the levels interpolated per partial.
@@ -33,6 +35,20 @@ Binary format (little endian), modal-profile.bin:
                   modes x (f64 freq Hz, f64 decay 1/s, f32 left re, f32 left im, f32 right re, f32 right im),
                   P x (f32 left re, f32 left im, f32 right re, f32 right im)   body amplitudes,
                   f32 residual scale, frames x channels x i16 (interleaved; sample = i16 x scale)
+  sections    (version 3) until the end of the file: char[4] tag, u32 payload bytes, payload; a reader skips the
+              tags it does not know.
+                SYMP  free strings of the sympathetic resonance (forge sympathetic): f32 drive onset s, f32 velocity
+                      exponent, f32 reference velocity (each voice drives the strings with
+                      (1 - exp(-t / onset)) (velocity / reference) ^ exponent), u32 strings, then per string
+                      u32 midi, u32 resonators, resonators x (f64 freq Hz, f64 decay 1/s, f32 coupling gain 1/s,
+                      f32 left re, f32 left im, f32 right re, f32 right im)
+                PEDL  damper lift per CC64 value (half pedal): 128 x f32, 1 lifted, 0 resting on the strings
+                DAMP  damper curves per group of partials (forge release-curves): u32 groups, groups x u32 first
+                      partial number, notes x holds x groups x points x f32 dB against the overall curve (the
+                      notes, holds and points of the dampers above)
+                RELN  knock of the key release on the soundboard (forge release-noise): u32 notes, u32 velocities,
+                      notes x i32 midi, velocities x i32 velocity, notes x velocities x f32 level dB, notes x
+                      velocities x P x (f32 left re, left im, right re, right im) amplitudes at the release
 Convention: x_c(t) = Re(a_c exp((-decay + 2 pi i freq) t)), t in seconds from the note-on.
 The profile is calibrated on a commercial library: it stays in the corpus folder and is never published.
 """
@@ -48,12 +64,15 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from forge import soundboard
+from forge import release_noise, soundboard, sympathetic
 from forge.modes import BandExtractor, synthesize
 from forge.note_modes import clean, partial_modes
 
-MAGIC, VERSION = b"PFMODAL1", 2
+MAGIC, VERSION = b"PFMODAL1", 3
 RESIDUAL_S, RESIDUAL_FADE_S = 0.10, 0.04
+RESIDUAL_MAX_S = 0.5        # the longest attack residual (the top octave)
+RESIDUAL_QUIET_DB = -10.0   # the residual ends once it stays this far under the take ...
+RESIDUAL_QUIET_S = 0.1      # ... for this long (20 ms windows)
 BODY_WINDOWS_S = (0.3, 1.0, soundboard.T1)  # ends of the windows where the body is checked (the first one starts
                                             # where the residual ends)
 BODY_MARGIN_DB = 3.0    # how much louder than the take (besides the strings) the body may be, per band and window
@@ -77,16 +96,35 @@ def residual_seconds(note: dict) -> float:
     return max(RESIDUAL_S, start + RESIDUAL_FADE_S)
 
 
+def quiet_from(r: np.ndarray, x: np.ndarray, fs: float, start: float) -> float:
+    """The first instant from `start` after which the residual r stays RESIDUAL_QUIET_DB under the take x for
+    RESIDUAL_QUIET_S (20 ms windows); the end of r if it never does."""
+    w = int(round(0.02 * fs))
+    count = r.shape[1] // w
+    pr = np.mean(r[:, :count * w].reshape(r.shape[0], count, w) ** 2, axis=(0, 2))
+    px = np.mean(x[:, :count * w].reshape(x.shape[0], count, w) ** 2, axis=(0, 2))
+    quiet = pr < px * 10 ** (RESIDUAL_QUIET_DB / 10)
+    span = int(round(RESIDUAL_QUIET_S / 0.02))
+    for k in range(int(np.ceil(start / 0.02)), count - span + 1):
+        if quiet[k:k + span].all():
+            return k * 0.02
+    return count * 0.02
+
+
 def residual(path: Path, note: dict, body_freqs, body_decays, body_amps) -> tuple[np.ndarray, int]:
     """Attack residual of one take (frames x channels), faded out, at the take's sample rate."""
     meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     audio, fs = sf.read(path, dtype="float64", always_2d=True)
-    n = int(round(residual_seconds(note) * fs))
+    longest = int(round(RESIDUAL_MAX_S * fs))
     on = meta["note_on_sample"]
-    x = audio[on:on + n].T
-    model = synthesize(partial_modes(note), x.shape[0], n, fs)
-    model += soundboard.synthesize_body(body_freqs, body_decays, body_amps, n, fs)
+    x = audio[on:on + longest].T
+    model = synthesize(partial_modes(note), x.shape[0], x.shape[1], fs)
+    model += soundboard.synthesize_body(body_freqs, body_decays, body_amps, x.shape[1], fs)
     r = x - model
+    base = residual_seconds(note)
+    seconds = min(RESIDUAL_MAX_S, max(base, quiet_from(r, x, fs, base - RESIDUAL_FADE_S) + RESIDUAL_FADE_S))
+    n = int(round(seconds * fs))
+    r = r[:, :n]
     fade = int(round(RESIDUAL_FADE_S * fs))
     r[:, n - fade:] *= 0.5 * (1 + np.cos(np.linspace(0, np.pi, fade)))
     return r.T, fs
@@ -259,6 +297,50 @@ def repair_bodies(modes: dict, boards: dict, layers: list[int]) -> list[tuple[in
     return repaired
 
 
+def section(tag: bytes, payload: bytes) -> bytes:
+    return tag + struct.pack("<I", len(payload)) + payload
+
+
+def sections(corpus: Path) -> list[bytes]:
+    """The tagged sections of version 3, from the measurements found in the corpus state folder."""
+    out = []
+    path = corpus / "sympathetic.json"
+    if path.exists():
+        strings, shape = sympathetic.load(path)
+        payload = [struct.pack("<3fI", shape["onset_s"], shape["velocity_exponent"], shape["reference_velocity"],
+                               len(strings))]
+        for midi, res in strings.items():
+            rec = np.zeros(len(res), dtype=[("f", "<f8"), ("d", "<f8"), ("a", "<f4", (5,))])
+            rec["f"], rec["d"], rec["a"] = res[:, 0], res[:, 1], res[:, 2:7]
+            payload += [struct.pack("<2I", midi, len(res)), rec.tobytes()]
+        out.append(section(b"SYMP", b"".join(payload)))
+        print(f"  sympathetic resonance: {sum(len(r) for r in strings.values())} resonators on {len(strings)} strings")
+    else:
+        print(f"  no {path.name}: no sympathetic resonance (run forge sympathetic)")
+    curves = json.loads((corpus / "release-curves.json").read_text(encoding="utf-8"))
+    if "group_db" in curves:
+        groups = np.asarray(curves["group_db"], dtype="<f4")  # notes x holds x groups x points
+        out.append(section(b"DAMP", struct.pack("<I", groups.shape[2])
+                           + np.asarray(curves["group_first"], dtype="<u4").tobytes() + groups.tobytes()))
+        print(f"  damper curves per group of partials: {groups.shape[2]} groups")
+    path = corpus / "release-noise.json"
+    if path.exists():
+        notes, velocities, amps = release_noise.load(path)
+        levels = np.asarray(json.loads(path.read_text(encoding="utf-8"))["level_db"], dtype="<f4")
+        payload = [struct.pack("<2I", len(notes), len(velocities)), np.asarray(notes, dtype="<i4").tobytes(),
+                   np.asarray(velocities, dtype="<i4").tobytes(), levels.tobytes(), amps.astype("<f4").tobytes()]
+        out.append(section(b"RELN", b"".join(payload)))
+        print(f"  release noise: {len(notes)} notes x {len(velocities)} velocities")
+    path = corpus / "pedal-curve.json"
+    if path.exists():
+        lift = np.asarray(json.loads(path.read_text(encoding="utf-8"))["lift"], dtype="<f4")
+        if lift.shape != (128,):
+            raise SystemExit(f"{path.name}: 128 values expected")
+        out.append(section(b"PEDL", lift.tobytes()))
+        print("  half pedal: measured damper lift curve")
+    return out
+
+
 def run(corpus: Path, jobs: int = 0) -> list[Path]:
     layers = velocities(corpus)
     if not layers:
@@ -324,6 +406,7 @@ def run(corpus: Path, jobs: int = 0) -> list[Path]:
             note, layer = modes[v][m], residuals[(m, v)]
             out.append(_layer_bytes(note, layer["body"], layer["residual"], layer["fades"]))
             total_modes += sum(len(p["modes"]) for p in note["partials"])
+    out += sections(corpus)
     path = corpus / "modal-profile.bin"
     path.write_bytes(b"".join(out))
     print(f"  {len(midis)} notes x {len(layers)} layers, {total_modes} modes, "

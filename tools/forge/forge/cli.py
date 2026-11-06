@@ -19,6 +19,14 @@ def cmd_release_curves(args) -> int:
     return 0
 
 
+def cmd_half_pedal(args) -> int:
+    from forge.half_pedal import write
+
+    out = write(Path(args.corpus), Path(args.interactions) if args.interactions else None)
+    print(f"Written: {out}")
+    return 0
+
+
 def cmd_analyze(args) -> int:
     from forge.analysis import run
 
@@ -44,6 +52,22 @@ def cmd_soundboard(args) -> int:
     return 0
 
 
+def cmd_release_noise(args) -> int:
+    from forge.release_noise import run
+
+    for path in run(Path(args.corpus), args.jobs):
+        print(f"Written: {path}")
+    return 0
+
+
+def cmd_sympathetic(args) -> int:
+    from forge.sympathetic import run
+
+    for path in run(Path(args.corpus), Path(args.interactions) if args.interactions else None, args.jobs):
+        print(f"Written: {path}")
+    return 0
+
+
 def cmd_export(args) -> int:
     from forge.export import run
 
@@ -61,6 +85,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"),
                    help="folder of one corpus state, with releases/ and single-notes/")
     p.set_defaults(func=cmd_release_curves)
+    p = sub.add_parser("half-pedal", help="measure the damper lift per CC64 value on the half-pedal ramps of the "
+                                          "interactions session (needs release-curves)")
+    p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"))
+    p.add_argument("--interactions", help="the same state in the interactions session (default: "
+                                          "corpus/interactions/<state>)")
+    p.set_defaults(func=cmd_half_pedal)
     p = sub.add_parser("analyze", help="analyze every note: f0, inharmonicity, tuning, partial decays; write the profile")
     p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"))
     p.add_argument("--velocity", type=int, default=64)
@@ -77,6 +107,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--velocity", type=int, default=64)
     p.add_argument("--jobs", type=int, default=0, help="worker processes (default: one per core)")
     p.set_defaults(func=cmd_soundboard)
+    p = sub.add_parser("release-noise", help="fit the knock of the key release on the soundboard resonances "
+                                             "(needs forge soundboard and the releases pass)")
+    p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"))
+    p.add_argument("--jobs", type=int, default=0, help="worker processes (default: one per core)")
+    p.set_defaults(func=cmd_release_noise)
+    p = sub.add_parser("sympathetic", help="calibrate the sympathetic resonance of the free strings on the pedal "
+                                           "pairs of the interactions session (needs forge modes at velocity 64)")
+    p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"))
+    p.add_argument("--interactions", help="the same state in the interactions session (default: "
+                                          "corpus/interactions/<state>)")
+    p.add_argument("--jobs", type=int, default=0, help="worker processes (default: one per core)")
+    p.set_defaults(func=cmd_sympathetic)
     p = sub.add_parser("export", help="write the modal profile played by the engine (modal-profile.bin), from the "
                                       "modes and soundboard of every measured velocity layer")
     p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"))

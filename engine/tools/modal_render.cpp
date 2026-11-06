@@ -3,6 +3,10 @@
 //   modal_render <profile> render <out.wav> <note> <velocity> <hold s> [tail s] [rate]
 //       one note: note-on at 0, note-off after <hold s>, <tail s> more (default 3), 32-bit float stereo WAV;
 //       --no-body / --no-residual (anywhere on the line) leave out the soundboard or the attack residual
+//   modal_render <profile> events <out.wav> <events.txt> <seconds> [rate]
+//       a sequence: one event per line, "<sample> <status> <data1> <data2>" (a take's MIDI, at the given rate);
+//       --no-sympathetic, --no-held-keys, --no-catch (anywhere on the line) switch those engine settings off;
+//       --restrike <s>: the re-strike fade (seconds to -40 dB)
 //   modal_render <profile> bench [voices] [rate] [block]
 //       strikes <voices> notes spread over the keyboard and times process() against the real-time budget
 #include <pianoforge/modal_engine.hpp>
@@ -12,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -74,13 +79,22 @@ void run(pf::ModalEngine& engine, std::vector<pf::Event> events, int frames, int
 
 int main(int argc, char** argv)
 {
-    bool body = true, residual = true; // options, taken out of the positional arguments
+    bool body = true, residual = true, sympathetic = true, heldKeys = true, pedalCatch = true; // options
+    double restrike = -1.0;
     int kept = 1;
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--no-body") == 0)
+        if (std::strcmp(argv[i], "--restrike") == 0 && i + 1 < argc)
+            restrike = std::atof(argv[++i]);
+        else if (std::strcmp(argv[i], "--no-body") == 0)
             body = false;
         else if (std::strcmp(argv[i], "--no-residual") == 0)
             residual = false;
+        else if (std::strcmp(argv[i], "--no-sympathetic") == 0)
+            sympathetic = false;
+        else if (std::strcmp(argv[i], "--no-held-keys") == 0)
+            heldKeys = false;
+        else if (std::strcmp(argv[i], "--no-catch") == 0)
+            pedalCatch = false;
         else
             argv[kept++] = argv[i];
     }
@@ -88,6 +102,8 @@ int main(int argc, char** argv)
     if (argc < 3) {
         std::fprintf(stderr, "usage: modal_render <profile> render <out.wav> <note> <velocity> <hold s> [tail s] [rate]\n"
                              "                    [--no-body] [--no-residual]\n"
+                             "       modal_render <profile> events <out.wav> <events.txt> <seconds> [rate]\n"
+                             "                    [--no-sympathetic] [--no-held-keys] [--no-catch] [--restrike <s>]\n"
                              "       modal_render <profile> bench [voices] [rate] [block]\n");
         return 2;
     }
@@ -101,7 +117,37 @@ int main(int argc, char** argv)
     engine.install(profile);
     engine.bodyEnabled = body;
     engine.residualEnabled = residual;
+    engine.sympatheticEnabled = sympathetic;
+    engine.heldKeysResonate = heldKeys;
+    engine.pedalCatch = pedalCatch;
+    if (restrike > 0.0)
+        engine.restrikeFadeSeconds = (float) restrike;
     const std::string mode = argv[2];
+
+    if (mode == "events" && argc >= 6) {
+        std::ifstream in(argv[4]);
+        if (!in) {
+            std::fprintf(stderr, "cannot read %s\n", argv[4]);
+            return 1;
+        }
+        std::vector<pf::Event> events;
+        std::string line;
+        while (std::getline(in, line)) {
+            std::istringstream fields(line);
+            long long sample = 0;
+            int status = 0, d1 = 0, d2 = 0;
+            if (fields >> sample >> status >> d1 >> d2)
+                events.push_back({ (std::uint32_t) sample, (std::uint8_t) status, (std::uint8_t) d1, (std::uint8_t) d2 });
+        }
+        const int rate = argc > 6 ? std::atoi(argv[6]) : 44100, block = 64;
+        engine.prepare(rate, block);
+        const int frames = (int) (std::atof(argv[5]) * rate);
+        std::vector<float> l, r;
+        run(engine, events, frames, block, l, r);
+        writeWav(argv[3], l, r, rate);
+        std::printf("%s: %zu events, %.1f s\n", argv[3], events.size(), (double) frames / rate);
+        return 0;
+    }
 
     if (mode == "render" && argc >= 7) {
         const int note = std::atoi(argv[4]), velocity = std::atoi(argv[5]);

@@ -58,6 +58,15 @@ public:
 
     bool ok() const noexcept { return !failed; }
     bool atEnd() const noexcept { return pos == data.size(); }
+    std::size_t position() const noexcept { return pos; }
+    std::size_t length() const noexcept { return data.size(); }
+    void seek(std::size_t to) noexcept
+    {
+        if (to > data.size())
+            failed = true;
+        else
+            pos = to;
+    }
 
 private:
     std::vector<char> data;
@@ -98,6 +107,29 @@ void DamperCurves::evaluate(int note, double holdSeconds, float* gains) const no
     }
 }
 
+void DamperCurves::evaluateGroups(int note, double holdSeconds, float* gains) const noexcept
+{
+    const int count = groups();
+    if (count == 0 || groupDb.size() != notes.size() * holds.size() * (std::size_t) count * (std::size_t) length)
+        return;
+    int n0, h0;
+    double wn, wh;
+    bracket(notes, (double) note, n0, wn);
+    bracket(logHolds, std::log(std::max(holdSeconds, 1.0e-3)), h0, wh);
+    const int numHolds = (int) holds.size();
+    const int n1 = std::min(n0 + 1, (int) notes.size() - 1), h1 = std::min(h0 + 1, numHolds - 1);
+    auto at = [&](int n, int h, int g, int k) {
+        return groupDb[(((std::size_t) n * (std::size_t) numHolds + (std::size_t) h) * (std::size_t) count + (std::size_t) g)
+                           * (std::size_t) length + (std::size_t) k];
+    };
+    for (int g = 0; g < count; ++g)
+        for (int k = 0; k < length; ++k) {
+            const double low = at(n0, h0, g, k) * (1 - wh) + at(n0, h1, g, k) * wh;
+            const double high = at(n1, h0, g, k) * (1 - wh) + at(n1, h1, g, k) * wh;
+            gains[(std::size_t) g * (std::size_t) length + (std::size_t) k] = (float) std::pow(10.0, (low * (1 - wn) + high * wn) / 20.0);
+        }
+}
+
 std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path& path, std::string& error)
 {
     std::ifstream in(path, std::ios::binary | std::ios::ate);
@@ -113,8 +145,9 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
     char magic[8] {};
     r.bytes(magic, 8);
     const auto version = std::memcmp(magic, "PFMODAL1", 8) == 0 ? r.get<std::uint32_t>() : 0u;
-    if (version != 1 && version != 2) { // version 2 adds the fade time of each partial
-        error = "not a modal profile (version 1 or 2): " + path.string();
+    // Version 2 adds the fade time of each partial; version 3, tagged sections after the notes.
+    if (version < 1 || version > 3) {
+        error = "not a modal profile (version 1 to 3): " + path.string();
         return nullptr;
     }
     auto p = std::make_shared<ModalProfile>();
@@ -235,6 +268,92 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
             p->noteIndex[(std::size_t) note.midi] = (int) p->notes.size();
             p->notes.push_back(std::move(note));
         }
+    }
+
+    // Tagged sections (version 3): char[4] tag, u32 payload bytes, payload. Unknown tags are skipped.
+    while (version >= 3 && r.ok() && !r.atEnd()) {
+        char tag[4] {};
+        r.bytes(tag, 4);
+        const auto length = r.get<std::uint32_t>();
+        const auto end = r.position() + length;
+        if (!r.ok() || end > r.length()) {
+            error = "corrupt section in " + path.string();
+            return nullptr;
+        }
+        if (std::memcmp(tag, "SYMP", 4) == 0) {
+            p->stringOnsetSeconds = std::max(0.0f, r.get<float>());
+            p->stringVelocityExponent = std::clamp(r.get<float>(), 0.0f, 4.0f);
+            p->stringReferenceVelocity = std::clamp(r.get<float>(), 1.0f, 127.0f);
+            const auto count = r.get<std::uint32_t>();
+            if (count > 128) {
+                error = "too many sympathetic strings";
+                return nullptr;
+            }
+            for (std::uint32_t s = 0; s < count && r.ok(); ++s) {
+                ModalProfile::String string;
+                string.midi = (int) r.get<std::uint32_t>();
+                const auto resonators = r.get<std::uint32_t>();
+                if (resonators > 65536) {
+                    error = "corrupt sympathetic string";
+                    return nullptr;
+                }
+                string.resonators.resize(resonators);
+                for (auto& res : string.resonators) {
+                    res.freq = r.get<double>();
+                    res.decay = r.get<double>();
+                    float a[5];
+                    r.bytes(a, sizeof(a));
+                    res.gain = a[0];
+                    res.left = { a[1], a[2] };
+                    res.right = { a[3], a[4] };
+                }
+                p->stringResonators += (int) resonators;
+                p->strings.push_back(std::move(string));
+            }
+        } else if (std::memcmp(tag, "PEDL", 4) == 0) {
+            r.bytes(p->pedalLift.data(), p->pedalLift.size() * sizeof(float));
+        } else if (std::memcmp(tag, "RELN", 4) == 0) {
+            auto& noise = p->releaseNoise;
+            const auto notes = r.get<std::uint32_t>(), velocities = r.get<std::uint32_t>();
+            if (notes > 128 || velocities > 128) {
+                error = "corrupt release noise";
+                return nullptr;
+            }
+            noise.notes.resize(notes);
+            noise.velocities.resize(velocities);
+            for (auto& n : noise.notes)
+                n = r.get<std::int32_t>();
+            for (auto& v : noise.velocities)
+                v = r.get<std::int32_t>();
+            noise.levelDb.resize((std::size_t) notes * velocities);
+            r.bytes(noise.levelDb.data(), noise.levelDb.size() * sizeof(float));
+            const std::size_t count = (std::size_t) notes * velocities * poles;
+            noise.left.resize(count);
+            noise.right.resize(count);
+            for (std::size_t k = 0; k < count && r.ok(); ++k) {
+                float a[4];
+                r.bytes(a, sizeof(a));
+                noise.left[k] = { a[0], a[1] };
+                noise.right[k] = { a[2], a[3] };
+            }
+        } else if (std::memcmp(tag, "DAMP", 4) == 0) {
+            auto& curves = p->dampers;
+            const auto groups = r.get<std::uint32_t>();
+            if (groups > (std::uint32_t) DamperCurves::kMaxGroups) {
+                error = "too many damper groups";
+                return nullptr;
+            }
+            curves.groupFirst.resize(groups);
+            for (auto& first : curves.groupFirst)
+                first = (int) r.get<std::uint32_t>();
+            curves.groupDb.resize(curves.notes.size() * curves.holds.size() * groups * (std::size_t) curves.length);
+            r.bytes(curves.groupDb.data(), curves.groupDb.size() * sizeof(float));
+        }
+        if (r.position() > end) {
+            error = "section longer than declared in " + path.string();
+            return nullptr;
+        }
+        r.seek(end);
     }
     if (!r.ok() || !r.atEnd()) {
         error = "truncated or corrupt profile: " + path.string();
