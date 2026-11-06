@@ -112,9 +112,14 @@ struct ModalProfile {
     std::vector<String> strings;                 // sympathetic resonance (empty: none)
     int stringResonators = 0;
     // Each voice drives the free strings with (1 - exp(-t / onset)) exp(-t / driveDecay) (velocity / reference) ^
-    // exponent (driveDecay 0: no decay).
+    // exponent (driveDecay 0: no decay), the onset and decay of its note's register when there are registers.
     float stringOnsetSeconds = 0.0f, stringVelocityExponent = 0.0f, stringReferenceVelocity = 64.0f;
     float stringDriveDecaySeconds = 0.0f;
+    struct DriveShape {
+        int firstNote = 0;
+        float onsetSeconds = 0.0f, decaySeconds = 0.0f;
+    };
+    std::vector<DriveShape> stringDriveShapes; // ascending firstNote (empty: the values above for every note)
     /// How far the sustain pedal lifts the dampers, per CC64 value: 1 lifted, 0 resting on the strings.
     /// Without a measured curve: a switch at 64.
     std::array<float, 128> pedalLift = switchPedal();

@@ -40,9 +40,10 @@ Binary format (little endian), modal-profile.bin:
                 SYMP  free strings of the sympathetic resonance (forge sympathetic): f32 drive onset s, f32 velocity
                       exponent, f32 reference velocity, u32 strings, then per string u32 midi, u32 resonators,
                       resonators x (f64 freq Hz, f64 decay 1/s, f32 coupling gain 1/s, f32 left re, f32 left im,
-                      f32 right re, f32 right im); then f32 drive decay s (0: none; absent from older profiles).
-                      Each voice drives the strings with (1 - exp(-t / onset)) exp(-t / decay) (velocity /
-                      reference) ^ exponent.
+                      f32 right re, f32 right im); then f32 drive decay s (0: none), u32 registers, registers x
+                      (i32 first note, f32 onset s, f32 drive decay s) (both absent from older profiles). Each voice
+                      drives the strings with (1 - exp(-t / onset)) exp(-t / decay) (velocity / reference) ^
+                      exponent, the onset and decay of its note's register.
                 PEDL  damper lift per CC64 value (half pedal): 128 x f32, 1 lifted, 0 resting on the strings
                 DAMP  damper curves per group of partials (forge release-curves): u32 groups, groups x u32 first
                       partial number, notes x holds x groups x points x f32 dB against the overall curve (the
@@ -320,7 +321,8 @@ def sections(corpus: Path) -> list[bytes]:
             rec = np.zeros(len(res), dtype=[("f", "<f8"), ("d", "<f8"), ("a", "<f4", (5,))])
             rec["f"], rec["d"], rec["a"] = res[:, 0], res[:, 1], res[:, 2:7]
             payload += [struct.pack("<2I", midi, len(res)), rec.tobytes()]
-        payload.append(struct.pack("<f", shape["drive_decay_s"]))
+        payload.append(struct.pack("<fI", shape["drive_decay_s"], len(shape["registers"])))
+        payload += [struct.pack("<iff", first, onset, decay) for first, onset, decay in shape["registers"]]
         out.append(section(b"SYMP", b"".join(payload)))
         print(f"  sympathetic resonance: {sum(len(r) for r in strings.values())} resonators on {len(strings)} strings")
     else:

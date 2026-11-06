@@ -20,26 +20,29 @@ Model, per resonator k (a mode of a free string: frequency f_k, decay sigma_k):
     a grid, with the gain refitted for it, as the one whose response follows the library's best over the time
     windows (median over the takes, in dB).
   - three traits of the library, not of a piano, fitted next: its resonance builds up later than the strings would
-    answer (the drive of each voice rises as 1 - exp(-t / onset) from the note-on, onset on a grid; it also keeps
-    the hammer's knock from setting every string ringing at once); it fades on its own, where strings driven by a
-    long bass note would go on being driven for as long as the note sounds (the drive also falls as
-    exp(-t / drive_decay), on a grid; without it, the bass resonance came out 6 to 9 dB too weak over the first
-    0.2 s and 5 to 14 dB too strong after 1.5 s); and it is
-    weaker at low velocity than the note itself is (the drive scales as (velocity / REFERENCE_VELOCITY) ^ exponent,
-    from the v40 / v100 pairs). (Driving the fit with the modes alone instead does worse: back-extrapolated to the
+    answer (the drive of each voice rises as 1 - exp(-t / onset) from the note-on; it also keeps the hammer's knock
+    from setting every string ringing at once); it may fade on its own (the drive also falls as exp(-t / decay));
+    and it is weaker at low velocity than the note itself is (the drive scales as (velocity /
+    REFERENCE_VELOCITY) ^ exponent, from the v40 / v100 pairs). The shape (onset, decay) is picked on a grid per
+    register of the exciting note (REGISTERS): one shape for all left the bass resonance 5 to 6 dB too weak over
+    the first 0.2 s and 4 to 13 dB too strong after 1.5 s (long bass notes drive the strings for as long as they
+    sound, the library's resonance fades); the bass keeps a fast rise and a 4 s decay, the rest a slower rise and
+    no decay. The combination kept is the one whose check (model against library, total power per take and
+    window) has the smallest 90th percentile of the absolute error. (Driving the fit with the modes alone instead does worse: back-extrapolated to the
     note-on, they overstate the first instants, which the bass strings integrate for seconds.)
 
 The strings are those of the layer nearest SYMPATHETIC_VELOCITY: a free string rings with its own modes, whatever
 the strike that measured them.
 
-sympathetic.json: bands_hz (edges), gains, extra_decays, onset_s, drive_decay_s (0: none), velocity_exponent,
-reference_velocity, f_max_hz,
+sympathetic.json: bands_hz (edges), gains, extra_decays, registers [{first, onset_s, drive_decay_s (0: none)}] (and
+onset_s, drive_decay_s: the first register's), velocity_exponent, reference_velocity, f_max_hz,
 windows_s, fit (per take and window: model and library power, dB), notes[]: midi, resonators [[freq Hz, decay 1/s (extra decay included), gain, wl re, wl im,
 wr re, wr im]].
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -58,8 +61,9 @@ WINDOWS_S = ((0.03, 0.2), (0.2, 0.5), (0.5, 1.5), (1.5, 4.0), (4.0, 9.0))  # aft
 DRIVE_S = 9.5             # the key is held (pedal-up take) or the pedal holds the note (pedal-down) until 10 s
 DECIMATIONS = (4, 8, 16, 32)  # each band is computed at the lowest rate that holds it (2.6 x its upper edge)
 EXTRA_DECAYS = (0.0, 0.25, 0.5, 1.0, 2.0, 4.0)  # 1/s, the grid of the extra decay
-ONSETS_S = (0.0, 0.1, 0.2, 0.3, 0.5)              # the grid of the drive's rise time
+ONSETS_S = (0.05, 0.1, 0.2, 0.3, 0.5)             # the grid of the drive's rise time
 DRIVE_DECAYS_S = (0.0, 4.0, 2.0, 1.0, 0.5)         # the grid of the drive's fading time constant (0: none)
+REGISTERS = (0, 45, 69)   # first note of each register of the exciting note, which has its own drive shape
 REFERENCE_VELOCITY = 64                            # where the velocity factor is 1
 MIN_SHARE = 1e-3          # a mode carrying less of its partial's energy than this is left out (CPU)
 FLOOR = 1e-15             # library band powers below this (it is denoised) carry no measurement
@@ -278,56 +282,98 @@ def run(corpus: Path, interactions: Path | None = None, jobs: int = 0, decays_fr
         measures = measure([(np.full(nb, e), 0.0, 0.0) for e in EXTRA_DECAYS])
         extra = fit_decays(measures)
         print("  extra decay per band (1/s): " + " ".join(f"{e:g}" for e in extra) + f" ({time.time() - start:.0f} s)")
-    # 2. The drive's shape (onset, decay), with those decays: the one whose gains leave the least scatter, the
-    #    velocity factor included.
+    # 2. The drive's shape per register of the exciting note, with those decays.
     shapes = [(o, fade) for o in ONSETS_S if o > 0 for fade in DRIVE_DECAYS_S]
     measures = measure([(extra, o, fade) for o, fade in shapes])
-    best = None
-    for i, (onset, fade) in enumerate(shapes):
-        exponent = fit_exponent(measures, i)
-        gains, spread = fit_gains(measures, i, velocity_scale(measures, exponent))
-        print(f"  onset {onset:.2f} s, drive decay {fade:.1f} s: velocity exponent {exponent:.2f}, scatter {spread:.2f} dB")
-        if best is None or spread < best[0]:
-            best = (spread, i, onset, fade, exponent, gains)
-    _, i, onset, fade, exponent, gains = best
-    scale = velocity_scale(measures, exponent)
-    print(f"  kept: onset {onset:.2f} s, drive decay {fade:.1f} s, velocity exponent {exponent:.2f} "
-          f"({time.time() - start:.0f} s)")
-    # The fit's own check: the model with the values kept against the library.
-    report, errors = [], []
-    for m in measures:
+    print(f"  responses for {len(shapes)} drive shapes ({time.time() - start:.0f} s)")
+    out = write(corpus, interactions, res_by_note, extra, shapes, measures)
+    print(f"  ({time.time() - start:.0f} s)")
+    return [out]
+
+
+def register_of(note: int) -> int:
+    return max(g for g, first in enumerate(REGISTERS) if note >= first)
+
+
+def assess(measures: list[dict], shapes_of: list[int]) -> dict:
+    """The model with one shape per register (indices into the measured configurations): velocity exponent and band
+    gains refitted, then the check against the library (total power per take and window)."""
+    chosen = [{**m, "model": m["model"][[shapes_of[register_of(m["note"])]]]} for m in measures]
+    exponent = fit_exponent(chosen, 0)
+    scale = velocity_scale(chosen, exponent)
+    gains, spread = fit_gains(chosen, 0, scale)
+    report, errors, by_register = [], [], [[] for _ in REGISTERS]
+    for m in chosen:
         rows = []
         for w in range(len(WINDOWS_S)):
-            model = float(np.sum(m["model"][i, w] * gains ** 2) * scale[m["take"]])
+            model = float(np.sum(m["model"][0, w] * gains ** 2) * scale[m["take"]])
             library = float(np.sum(m["library"][w]))
             rows.append([round(10 * np.log10(model + 1e-30), 2), round(10 * np.log10(library + 1e-30), 2)])
             if library > FLOOR:
                 errors.append(rows[-1][0] - rows[-1][1])
+                by_register[register_of(m["note"])].append((w, errors[-1]))
         report.append({"take": m["take"], "windows": rows})
-    errors = np.asarray(errors)
-    print(f"  model against the library, per take and window: median {np.median(errors):+.1f} dB, "
-          f"half within {np.percentile(np.abs(errors), 50):.1f} dB, 90 % within {np.percentile(np.abs(errors), 90):.1f} dB")
+    a = np.abs(np.asarray(errors))
+    return {"exponent": exponent, "gains": gains, "spread": spread, "report": report, "errors": np.asarray(errors),
+            "median": float(np.median(a)), "p90": float(np.percentile(a, 90)), "by_register": by_register}
+
+
+def choose(measures: list[dict], shapes: list[tuple[float, float]]) -> tuple[list[int], dict]:
+    """The shape of each register: every combination, the one whose check has the smallest 90th percentile of the
+    absolute error (then median). The gain scatter, used before, follows the check poorly."""
+    best = None
+    for combo in itertools.product(range(len(shapes)), repeat=len(REGISTERS)):
+        r = assess(measures, list(combo))
+        if best is None or (r["p90"], r["median"]) < (best[1]["p90"], best[1]["median"]):
+            best = (list(combo), r)
+    return best
+
+
+def write(corpus: Path, interactions: Path, res_by_note: dict, extra: np.ndarray, shapes: list, measures: list) -> Path:
+    """Chooses the shapes, reports the fit and writes sympathetic.json."""
+    uniform = assess(measures, [shapes.index((0.3, 0.0))] * len(REGISTERS)) if (0.3, 0.0) in shapes else None
+    combo, r = choose(measures, shapes)
+    gains, exponent = r["gains"], r["exponent"]
+    for g, first in enumerate(REGISTERS):
+        cells = []
+        for w in range(len(WINDOWS_S)):
+            e = [x for k, x in r["by_register"][g] if k == w]
+            cells.append(f"{np.median(e):+.1f}" if e else "-")
+        onset, fade = shapes[combo[g]]
+        print(f"  register from note {first}: onset {onset:.2f} s, drive decay {fade:.1f} s "
+              f"(signed median per window, dB: {' '.join(cells)})")
+    if uniform is not None:
+        print(f"  one shape for all (onset 0.3 s, no decay): median |error| {uniform['median']:.1f} dB, "
+              f"90 % within {uniform['p90']:.1f} dB")
+    e = r["errors"]
+    print(f"  model against the library, per take and window: median {np.median(e):+.1f} dB, "
+          f"half within {r['median']:.1f} dB, 90 % within {r['p90']:.1f} dB (velocity exponent {exponent:.2f})")
     out = corpus / "sympathetic.json"
     notes = []
-    for m, r in sorted(res_by_note.items()):
-        bands = band_of(r[:, 0])
-        rows = np.column_stack([r[:, 0], r[:, 1] + extra[bands], gains[bands], r[:, 2:6]])
+    for m, res in sorted(res_by_note.items()):
+        bands = band_of(res[:, 0])
+        rows = np.column_stack([res[:, 0], res[:, 1] + extra[bands], gains[bands], res[:, 2:6]])
         notes.append({"midi": m, "resonators": [[round(float(v[0]), 5), round(float(v[1]), 5),
                                                  *(float(f"{x:.6e}") for x in v[2:])] for v in rows]})
+    registers = [{"first": first, "onset_s": shapes[combo[g]][0], "drive_decay_s": shapes[combo[g]][1]}
+                 for g, first in enumerate(REGISTERS)]
     out.write_text(json.dumps({
         "source": str(interactions), "velocity": SYMPATHETIC_VELOCITY, "f_max_hz": F_MAX,
         "bands_hz": [round(float(b), 3) for b in BANDS], "gains": [float(f"{g:.6e}") for g in gains],
-        "extra_decays": [float(e) for e in extra], "onset_s": onset, "drive_decay_s": fade,
+        "extra_decays": [float(x) for x in extra], "onset_s": registers[0]["onset_s"],
+        "drive_decay_s": registers[0]["drive_decay_s"], "registers": registers,
         "velocity_exponent": round(exponent, 4),
-        "reference_velocity": REFERENCE_VELOCITY, "windows_s": WINDOWS_S, "fit": report, "notes": notes},
+        "reference_velocity": REFERENCE_VELOCITY, "windows_s": WINDOWS_S, "fit": r["report"], "notes": notes},
         separators=(",", ":")), encoding="utf-8")
-    return [out]
+    return out
 
 
 def load(path: Path) -> tuple[dict[int, np.ndarray], dict]:
     """(midi -> resonators (k x 7: freq, decay, gain, wl re, wl im, wr re, wr im), the drive's shape: onset_s,
-    drive_decay_s, velocity_exponent, reference_velocity)."""
+    drive_decay_s, velocity_exponent, reference_velocity, registers [(first note, onset s, decay s)])."""
     data = json.loads(path.read_text(encoding="utf-8"))
     shape = {k: float(data.get(k, d)) for k, d in (("onset_s", 0.0), ("drive_decay_s", 0.0), ("velocity_exponent", 0.0),
                                                    ("reference_velocity", REFERENCE_VELOCITY))}
+    shape["registers"] = [(int(r["first"]), float(r["onset_s"]), float(r["drive_decay_s"])) for r in data.get("registers", [])] \
+        or [(0, shape["onset_s"], shape["drive_decay_s"])]
     return {n["midi"]: np.asarray(n["resonators"], dtype=np.float64) for n in data["notes"]}, shape

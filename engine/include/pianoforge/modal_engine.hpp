@@ -41,7 +41,8 @@ namespace pf {
 ///   and the sustain pedal do. Dampers raised later are not caught.
 /// - Sympathetic resonance: every string whose damper is up (sustain pedal, sostenuto, or its key held when
 ///   heldKeysResonate) is a bank of resonators, its measured modes, driven by the voices of the other notes
-///   (forge sympathetic). A damper landing on a string adds the note's damping to its resonators.
+///   (forge sympathetic), each voice with the drive shape (rise, decay) of its note's register. A damper landing
+///   on a string adds the note's damping to its resonators.
 /// - Tuning: the profile plays as recorded at referenceA4 = 440 Hz; another reference and a temperament (cents
 ///   against equal temperament per pitch class) scale every frequency of a note at its note-on (modes, residual),
 ///   and retune the free strings.
@@ -173,8 +174,9 @@ private:
     double sampleRate = 48000.0;
     int maxBlockSize = 0;
     float fadeFactor = 1.0f; // pole magnitude factor of a partial fade, per sample
-    float onsetFactor = 0.0f; // per sample: what is left of the drive's rise (exp(-1 / (onset fs)))
-    float driveFadeFactor = 1.0f; // per sample: the drive's decay (exp(-1 / (driveDecay fs)))
+    // Per note (its register's shape), per sample: what is left of the drive's rise (exp(-1 / (onset fs))), and the
+    // drive's decay (exp(-1 / (decay fs))).
+    std::array<float, 128> onsetFactor {}, driveFadeFactor {};
     std::array<Voice, kMaxVoices> voices;
     ModeBank body;
     float bodyGain = 1.0f, bodyDecay = 1.0f;

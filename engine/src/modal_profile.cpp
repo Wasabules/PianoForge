@@ -334,6 +334,20 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
             }
             if (r.position() + sizeof(float) <= end) // added after the strings: older profiles end here
                 p->stringDriveDecaySeconds = std::max(0.0f, r.get<float>());
+            if (r.position() + sizeof(std::uint32_t) <= end) { // then the registers
+                const auto registers = r.get<std::uint32_t>();
+                if (registers > 128) {
+                    error = "corrupt sympathetic registers";
+                    return nullptr;
+                }
+                for (std::uint32_t k = 0; k < registers && r.ok(); ++k) {
+                    ModalProfile::DriveShape shape;
+                    shape.firstNote = r.get<std::int32_t>();
+                    shape.onsetSeconds = std::max(0.0f, r.get<float>());
+                    shape.decaySeconds = std::max(0.0f, r.get<float>());
+                    p->stringDriveShapes.push_back(shape);
+                }
+            }
         } else if (std::memcmp(tag, "PEDL", 4) == 0) {
             r.bytes(p->pedalLift.data(), p->pedalLift.size() * sizeof(float));
         } else if (std::memcmp(tag, "RELN", 4) == 0) {

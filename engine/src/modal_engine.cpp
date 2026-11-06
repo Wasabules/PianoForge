@@ -109,10 +109,18 @@ void ModalEngine::allocate()
     stringsCut = false;
     const int count = owned != nullptr ? (int) owned->strings.size() : 0;
     stringsTuning = tuningVersion.load(std::memory_order_relaxed);
-    onsetFactor = owned != nullptr && owned->stringOnsetSeconds > 0.0f
-                      ? (float) std::exp(-1.0 / ((double) owned->stringOnsetSeconds * sampleRate)) : 0.0f;
-    driveFadeFactor = owned != nullptr && owned->stringDriveDecaySeconds > 0.0f
-                          ? (float) std::exp(-1.0 / ((double) owned->stringDriveDecaySeconds * sampleRate)) : 1.0f;
+    for (int note = 0; note < 128; ++note) { // the drive's shape of each note's register
+        float onset = owned != nullptr ? owned->stringOnsetSeconds : 0.0f;
+        float decay = owned != nullptr ? owned->stringDriveDecaySeconds : 0.0f;
+        if (owned != nullptr)
+            for (const auto& shape : owned->stringDriveShapes)
+                if (note >= shape.firstNote) {
+                    onset = shape.onsetSeconds;
+                    decay = shape.decaySeconds;
+                }
+        onsetFactor[(std::size_t) note] = onset > 0.0f ? (float) std::exp(-1.0 / ((double) onset * sampleRate)) : 0.0f;
+        driveFadeFactor[(std::size_t) note] = decay > 0.0f ? (float) std::exp(-1.0 / ((double) decay * sampleRate)) : 1.0f;
+    }
     strings.reserve(owned != nullptr ? owned->stringResonators : 0, count);
     std::array<float, DamperCurves::kMaxPoints> curve {};
     for (int s = 0; s < count; ++s) {
@@ -829,9 +837,10 @@ bool ModalEngine::produce(const ModalProfile& p, Voice& v, int m) noexcept
     float* d = bufferD.data();
     if (strings.groups() > 0) {
         float rise = v.driveOnset, fade = v.driveFade;
+        const float onset = onsetFactor[(std::size_t) v.note], decay = driveFadeFactor[(std::size_t) v.note];
         for (int k = 0; k < m; ++k) {
-            rise = 1.0f - (1.0f - rise) * onsetFactor;
-            fade *= driveFadeFactor;
+            rise = 1.0f - (1.0f - rise) * onset;
+            fade *= decay;
             d[k] = 0.5f * (l[k] + r[k]) * v.driveGain * rise * fade;
         }
         v.driveOnset = rise;
