@@ -90,6 +90,25 @@ class Protocol(unittest.TestCase):
         self.assertTrue(all(0 <= time < t.duration for time, _ in t.events))
         self.assertEqual(sum(1 for _, b in t.events if b[0] & 0xF0 == 0xB0), 24)  # pedal events
 
+    def test_sequence_pass(self):
+        s = parse_session("""
+            [session]
+            sample_rate = 1000
+            [[pass]]
+            name = "probes"
+            type = "sequence"
+            takes = [{ name = "held", duration = 2.0, events = [[1.5, "off", "A2"], [0.0, "cc", 64, 127], [0.5, "on", "A2", 1]] }]
+        """)
+        t = s.takes[0]
+        self.assertEqual(t.id, "probes/held")
+        self.assertEqual(t.duration, 2000)
+        self.assertEqual(t.events, [(0, (0xB0, 64, 127)), (500, (0x90, 45, 1)), (1500, (0x80, 45, 64))])
+        for bad in ('[1.0, "on", "A2", 0]', '[1.0, "cc", 64, 128]', '[1.0, "bend", 0]', '[3.0, "off", "A2"]'):
+            with self.assertRaises(ValueError, msg=bad):
+                parse_session(f'[[pass]]\nname="p"\ntype="sequence"\ntakes=[{{name="x", duration=2.0, events=[{bad}]}}]')
+        probes = [x for x in load_session(SESSIONS / "interactions.toml").takes if x.pass_name == "probes"]
+        self.assertEqual(len(probes), 14)
+
     def test_errors(self):
         with self.assertRaises(ValueError):
             parse_session('[[pass]]\nname="p"\ntype="unknown"')

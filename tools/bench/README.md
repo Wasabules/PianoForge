@@ -35,7 +35,9 @@ All commands run from the project root.
 
 - `reference.toml`: timbre of single notes, 2,393 takes, about 10 h 47 min of audio. It covers layer
   discovery (all velocities on 6 notes), 88 notes x 16 velocities, releases, repetitions and silence.
-- `interactions.toml`: pedal down or up, half pedal, pedal noise.
+- `interactions.toml`: pedal down or up, half pedal, pedal noise, and probes written event by event (held keys,
+  pedal pressed after the note or lifted under a held key, re-pedalling).
 - `smoke.toml`: 20 takes to validate a Kontakt state before a long generation.
 
-Pass types: `note`, `repetition`, `pedal_ramp`, `pedal_only`, `silence` (see `bench/protocol.py`).
+Pass types: `note`, `repetition`, `pedal_ramp`, `pedal_only`, `sequence` (takes written out event by event),
+`midi_file`, `silence` (see `bench/protocol.py`).

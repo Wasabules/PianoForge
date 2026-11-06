@@ -49,3 +49,30 @@ hold = 2.0
 name = "silence"
 type = "silence"
 duration = 5.0
+
+# Probes of what the pedal-down / pedal-up pairs do not show (2026-11-06). The library is deterministic, so each
+# interaction is a difference of takes rendered here:
+#   - held keys, pedal up: (keys held + note) - (keys held) - (note alone): do held strings resonate?
+#   - pedal timing, key held: pedal pressed after the note, pedal lifted while the key stays down, against the
+#     note held without pedal;
+#   - re-pedalling: the pedal lifted on a released note, then pressed again 0.1 or 0.3 s later, against the
+#     pedal lifted for good: does the library catch what is left of the note?
+[[pass]]
+name = "probes"
+type = "sequence"
+takes = [
+  { name = "held-A2v001", duration = 11.0, events = [[0.5, "on", "A2", 1], [9.5, "off", "A2"]] },
+  { name = "held-A2v001_A3v100-staccato", duration = 11.0, events = [[0.5, "on", "A2", 1], [2.0, "on", "A3", 100], [2.3, "off", "A3"], [9.5, "off", "A2"]] },
+  { name = "A3v100-staccato", duration = 11.0, events = [[2.0, "on", "A3", 100], [2.3, "off", "A3"]] },
+  { name = "held-C3E3G3v001", duration = 11.0, events = [[0.5, "on", "C3", 1], [0.5, "on", "E3", 1], [0.5, "on", "G3", 1], [9.5, "off", "C3"], [9.5, "off", "E3"], [9.5, "off", "G3"]] },
+  { name = "held-C3E3G3v001_C4v100-staccato", duration = 11.0, events = [[0.5, "on", "C3", 1], [0.5, "on", "E3", 1], [0.5, "on", "G3", 1], [2.0, "on", "C4", 100], [2.3, "off", "C4"], [9.5, "off", "C3"], [9.5, "off", "E3"], [9.5, "off", "G3"]] },
+  { name = "C4v100-staccato", duration = 11.0, events = [[2.0, "on", "C4", 100], [2.3, "off", "C4"]] },
+  { name = "A3v100-held", duration = 12.0, events = [[1.0, "on", "A3", 100], [9.0, "off", "A3"]] },
+  { name = "A3v100-held_pedal-down-2000ms", duration = 12.0, events = [[1.0, "on", "A3", 100], [2.0, "cc", 64, 127], [9.0, "off", "A3"], [10.0, "cc", 64, 0]] },
+  { name = "A3v100-held_pedal-up-3000ms", duration = 12.0, events = [[0.0, "cc", 64, 127], [1.0, "on", "A3", 100], [3.0, "cc", 64, 0], [9.0, "off", "A3"]] },
+  { name = "A3v100-pedal-up-3000ms", duration = 9.0, events = [[0.0, "cc", 64, 127], [1.0, "on", "A3", 100], [1.5, "off", "A3"], [3.0, "cc", 64, 0]] },
+  { name = "A3v100-pedal-up-3000ms_repedal-3100ms", duration = 9.0, events = [[0.0, "cc", 64, 127], [1.0, "on", "A3", 100], [1.5, "off", "A3"], [3.0, "cc", 64, 0], [3.1, "cc", 64, 127], [8.0, "cc", 64, 0]] },
+  { name = "A3v100-pedal-up-3000ms_repedal-3300ms", duration = 9.0, events = [[0.0, "cc", 64, 127], [1.0, "on", "A3", 100], [1.5, "off", "A3"], [3.0, "cc", 64, 0], [3.3, "cc", 64, 127], [8.0, "cc", 64, 0]] },
+  { name = "A1v100-pedal-up-3000ms", duration = 9.0, events = [[0.0, "cc", 64, 127], [1.0, "on", "A1", 100], [1.5, "off", "A1"], [3.0, "cc", 64, 0]] },
+  { name = "A1v100-pedal-up-3000ms_repedal-3100ms", duration = 9.0, events = [[0.0, "cc", 64, 127], [1.0, "on", "A1", 100], [1.5, "off", "A1"], [3.0, "cc", 64, 0], [3.1, "cc", 64, 127], [8.0, "cc", 64, 0]] },
+]

@@ -207,6 +207,30 @@ def _pass_pedal_only(b: _Builder, cfg: dict) -> list[Take]:
     return [b.take(f"pedal_h{_ms(hold)}ms", 0.05 + hold + tail, evts, type="pedal_only")]
 
 
+def _pass_sequence(b: _Builder, cfg: dict) -> list[Take]:
+    """Takes written out event by event, for probes no regular pass covers (held keys, pedal timing). Each entry
+    of `takes` has a name, a duration in seconds and events: [time s, "on", note, velocity], [time s, "off", note]
+    or [time s, "cc", number, value]."""
+    takes = []
+    for spec in cfg["takes"]:
+        evts = []
+        for e in spec["events"]:
+            t, kind = float(e[0]), e[1]
+            if kind == "on":
+                evts.append((t, note_on(note_to_midi(e[2]), _velocity(e[3]))))
+            elif kind == "off":
+                evts.append((t, note_off(note_to_midi(e[2]))))
+            elif kind == "cc":
+                if not (0 <= int(e[2]) <= 127 and 0 <= int(e[3]) <= 127):
+                    raise ValueError(f"{spec['name']}: invalid controller event {e!r}")
+                evts.append((t, cc(int(e[2]), int(e[3]))))
+            else:
+                raise ValueError(f"{spec['name']}: unknown event {kind!r} (expected 'on', 'off' or 'cc')")
+        takes.append(b.take(spec["name"], float(spec["duration"]), evts, type="sequence",
+                            description=spec.get("description", "")))
+    return takes
+
+
 def _pass_silence(b: _Builder, cfg: dict) -> list[Take]:
     duration = float(cfg.get("duration", 5.0))
     return [b.take(f"silence_{_ms(duration)}ms", duration, [], type="silence")]
@@ -236,6 +260,7 @@ _PASSES = {
     "repetition": _pass_repetition,
     "pedal_ramp": _pass_pedal_ramp,
     "pedal_only": _pass_pedal_only,
+    "sequence": _pass_sequence,
     "silence": _pass_silence,
     "midi_file": _pass_midi_file,
 }
