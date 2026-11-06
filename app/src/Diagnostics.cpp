@@ -2,6 +2,10 @@
 
 #include "AudioHost.h"
 #include "MirrorOutput.h"
+#include "ui/AudioPanel.h"
+#include "ui/EnginePanel.h"
+#include "ui/PerformancePanel.h"
+#include "ui/Theme.h"
 #include "KeyboardInput.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
@@ -263,6 +267,56 @@ int runMirrorCheck(const juce::StringArray& arguments)
     reportFile.replaceWithText(report);
     const bool ok = onset >= 0 && std::abs(frequency - 1000.0) < 5.0 && std::abs(level + 43.0) < 3.0;
     return ok ? 0 : 1;
+}
+
+
+int runUiSnapshots(const juce::StringArray& arguments)
+{
+    const juce::File folder(arguments[arguments.indexOf("--ui-snapshots") + 1]);
+    folder.createDirectory();
+    theme::LookAndFeel lookAndFeel;
+    juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
+    auto save = [&](juce::Component& c, const juce::String& name) {
+        const auto image = c.createComponentSnapshot(c.getLocalBounds(), true, 1.0f);
+        const auto file = folder.getChildFile(name + ".png");
+        file.deleteFile();
+        juce::FileOutputStream out(file);
+        juce::PNGImageFormat().writeImageToStream(image, out);
+    };
+    {
+        pf::ModalEngine modal;
+        ReferencePlayer player;
+        juce::PropertiesFile::Options options;
+        juce::PropertiesFile settings(folder.getChildFile("snapshot.settings"), options);
+        EnginePanel engine(modal, player, settings);
+        save(engine, "engine-settings");
+        juce::AudioDeviceManager devices; // not initialised: no device opened
+        AudioHost host(modal);
+        AudioPanel audio(devices, host, settings);
+        save(audio, "audio-settings");
+        PerformancePanel performance;
+        LoadTracker::Snapshot snap;
+        snap.now = 0.18f;
+        snap.average = 0.14f;
+        snap.peakRecent = 0.31f;
+        snap.peakMinute = 0.57f;
+        snap.blockMs = 10.0;
+        snap.lateBlocks = 0;
+        snap.gaps = 2;
+        snap.driverDropouts = -1;
+        snap.dropouts = 2;
+        snap.since = juce::Time::getCurrentTime();
+        for (int i = 0; i < LoadGraph::kColumns; ++i)
+            performance.pushColumn(0.12f + 0.08f * (float) std::sin(i * 0.05) + (i % 97 == 0 ? 0.45f : 0.0f), i == 300);
+        performance.update(snap, { "Modal: PianoForge engine", "12 voices of 64, 3 240 resonators", "30 free strings ringing, pedal 100 %, 0 voices stolen" },
+                           { "Haut-parleurs (FiiO K series) (Windows Audio)", "192.0 kHz, blocks of 1920 (10.0 ms), output latency ~20.0 ms" },
+                           { "At 192 kHz the engine does 4.0 times the work of 48 kHz for nothing audible: the corpus is at 44.1 kHz. Use 44.1 or 48 kHz.",
+                             "Blocks of 10.0 ms add as much latency between key and sound: 128 samples (2.9 ms at 44.1 kHz) is comfortable for this engine." });
+        save(performance, "performance");
+        settings.getFile().deleteFile();
+    }
+    juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
+    return 0;
 }
 
 } // namespace pf::app

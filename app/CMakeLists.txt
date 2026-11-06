@@ -11,6 +11,10 @@ target_sources(PianoForgeApp PRIVATE
     src/TakeRecorder.cpp
     src/LiveRecorder.cpp
     src/MirrorOutput.cpp
+    src/ui/Meters.cpp
+    src/ui/EnginePanel.cpp
+    src/ui/AudioPanel.cpp
+    src/ui/PerformancePanel.cpp
     src/MainComponent.cpp
     src/VelocityCurveEditor.cpp
     src/SelfTest.cpp

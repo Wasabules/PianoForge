@@ -2,6 +2,7 @@
 #include "MainComponent.h"
 #include "OfflineRender.h"
 #include "SelfTest.h"
+#include "ui/Theme.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -36,15 +37,25 @@ public:
             quit();
             return;
         }
+        if (arguments.contains("--ui-snapshots")) {
+            setApplicationReturnValue(runUiSnapshots(arguments));
+            quit();
+            return;
+        }
         if (arguments.contains("--list-audio")) {
             setApplicationReturnValue(runListAudio(arguments));
             quit();
             return;
         }
+        juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
         window = std::make_unique<Window>(getApplicationName());
     }
 
-    void shutdown() override { window.reset(); }
+    void shutdown() override
+    {
+        window.reset();
+        juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
+    }
     void systemRequestedQuit() override { quit(); }
 
 private:
@@ -55,15 +66,19 @@ private:
                              DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar(true);
-            setContentOwned(new MainComponent(), true);
+            auto* content = new MainComponent();
+            setContentOwned(content, true);
+            setMenuBar(content);
             setResizable(true, true);
-            setResizeLimits(1000, 510, 4000, 1200);
+            setResizeLimits(1100, 500, 4000, 1600);
             centreWithSize(getWidth(), getHeight());
             setVisible(true);
         }
+        ~Window() override { setMenuBar(nullptr); }
         void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }
     };
 
+    theme::LookAndFeel lookAndFeel;
     std::unique_ptr<Window> window;
 };
 

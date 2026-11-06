@@ -21,4 +21,8 @@ int runListAudio(const juce::StringArray& arguments);
 ///   PianoForge --mirror-check "<playback device>" "<capture device>" <report file>
 int runMirrorCheck(const juce::StringArray& arguments);
 
+/// Pictures of the secondary windows' panels, for checking their layout without opening them (no audio device
+/// is opened):   PianoForge --ui-snapshots <folder>
+int runUiSnapshots(const juce::StringArray& arguments);
+
 } // namespace pf::app

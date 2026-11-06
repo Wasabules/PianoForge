@@ -8,6 +8,19 @@ namespace {
 
 constexpr int kLayoutAzerty = 1, kLayoutQwerty = 2;
 
+enum MenuId {
+    // File
+    kRecord = 1, kRecordMidi, kRecordWav, kSaveTake, kOpenRecordings, kOpenTakes, kChangeCorpus, kQuit,
+    // Engine
+    kEngineReference = 20, kEngineModal, kEngineOption = 30, kEngineSettings = 50,
+    // Audio
+    kAudioSettings = 60, kPerformance, kResetDropouts,
+    // Keyboard
+    kVelocityCurve = 70, kAzerty, kQwerty, kOctaveDown, kOctaveUp, kVelocityDown, kVelocityUp,
+    // Help
+    kShortcuts = 90, kAbout,
+};
+
 /// Finds the corpus: saved setting, then $PIANOFORGE_CORPUS, then walking up from the executable.
 juce::File findCorpus(const juce::String& saved)
 {
@@ -49,6 +62,19 @@ juce::String formatCurve(const pf::VelocityCurve::Settings& s)
     return juce::String(s.inputMin) + ";" + juce::String(s.inputMax) + ";" + points.joinIntoString(",");
 }
 
+juce::String noteName(int note)
+{
+    return juce::MidiMessage::getMidiNoteName(note, true, true, 4);
+}
+
+juce::String thousands(int n)
+{
+    auto s = juce::String(n);
+    for (int i = s.length() - 3; i > 0; i -= 3)
+        s = s.substring(0, i) + juce::String::charToString((juce::juce_wchar) 0x202f) + s.substring(i);
+    return s;
+}
+
 } // namespace
 
 MainComponent::MainComponent()
@@ -76,189 +102,62 @@ MainComponent::MainComponent()
     enableMidiInputs();
     midiDevicesConnection = juce::MidiDeviceListConnection::make([this] { enableMidiInputs(); }); // hot-plugged keyboard
 
-    title.setText("PianoForge - listening lab", juce::dontSendNotification);
-    title.setFont(juce::FontOptions(18.0f, juce::Font::bold));
-    for (auto* l : { &title, &corpusStatus, &modalStatus, &audioStatus, &noteStatus, &engineStatus, &help })
-        addAndMakeVisible(*l);
-    help.setColour(juce::Label::textColourId, juce::Colours::grey);
-
-    audioButton.setButtonText("Audio and MIDI settings...");
-    audioButton.onClick = [this] { openAudioSettings(); };
-    corpusButton.setButtonText("Change corpus...");
-    corpusButton.onClick = [this] { chooseCorpus(); };
-    curveButton.setButtonText("Velocity curve...");
-    curveButton.onClick = [this] { openVelocityCurve(); };
-    addAndMakeVisible(audioButton);
-    addAndMakeVisible(corpusButton);
-    addAndMakeVisible(curveButton);
-
-    // Engine: switchable while playing, for A/B listening from the keyboard.
-    engineChoice.addItem("Reference: Noire samples", kEngineReference);
-    engineChoice.addItem("Modal: PianoForge engine", kEngineModal);
-    engineChoice.setSelectedId(settings->getIntValue("engine", kEngineReference) == kEngineModal ? kEngineModal : kEngineReference,
-                               juce::dontSendNotification);
-    engineChoice.onChange = [this] {
-        engines.selected = modalSelected() ? 1 : 0;
-        saveSettings();
+    // Panels: their settings apply now, whether their windows open or not.
+    enginePanel = std::make_unique<EnginePanel>(modal, player, *settings);
+    audioPanel = std::make_unique<AudioPanel>(deviceManager, host, *settings);
+    performancePanel.onReset = [this] {
+        auto* d = deviceManager.getCurrentAudioDevice();
+        loadTracker.reset(host.load, d != nullptr ? d->getXRunCount() : -1);
     };
-    engines.selected = modalSelected() ? 1 : 0;
-    addAndMakeVisible(engineChoice);
-    bodyButton.setButtonText("Soundboard body");
-    bodyButton.setToggleState(settings->getBoolValue("modalBody", true), juce::dontSendNotification);
-    bodyButton.onClick = [this] { modal.bodyEnabled = bodyButton.getToggleState(); saveSettings(); };
-    residualButton.setButtonText("Attack residual");
-    residualButton.setToggleState(settings->getBoolValue("modalResidual", true), juce::dontSendNotification);
-    residualButton.onClick = [this] { modal.residualEnabled = residualButton.getToggleState(); saveSettings(); };
-    modal.bodyEnabled = bodyButton.getToggleState();
-    modal.residualEnabled = residualButton.getToggleState();
-    addAndMakeVisible(bodyButton);
-    addAndMakeVisible(residualButton);
 
-    // Modal engine: what a piano does and the reference library does not can be switched off for A/B listening.
-    struct Switch {
-        juce::ToggleButton& button;
-        const char* text;
-        const char* key;
-        std::atomic<bool>& target;
-        const char* tip;
-    };
-    for (const auto& s : { Switch { sympatheticButton, "Sympathetic resonance", "modalSympathetic", modal.sympatheticEnabled,
-                                    "Free strings (pedal down) ring with what is played" },
-                           Switch { heldKeysButton, "Held keys resonate", "modalHeldKeys", modal.heldKeysResonate,
-                                    "The strings of keys held down ring too, without the pedal (a piano does; the reference does not)" },
-                           Switch { pedalCatchButton, "Pedal catches releases", "modalPedalCatch", modal.pedalCatch,
-                                    "Pressing the pedal again keeps what is left of the released notes (a piano does; the reference does not)" },
-                           Switch { releaseNoiseButton, "Release noise", "modalReleaseNoise", modal.releaseNoiseEnabled,
-                                    "The knock of the dampers landing, on the soundboard" } }) {
-        s.button.setButtonText(s.text);
-        s.button.setTooltip(s.tip);
-        s.button.setToggleState(settings->getBoolValue(s.key, true), juce::dontSendNotification);
-        s.target = s.button.getToggleState();
-        s.button.onClick = [this, &button = s.button, &target = s.target] {
-            target = button.getToggleState();
-            saveSettings();
-        };
-        addAndMakeVisible(s.button);
+    // Toolbar: engine (switchable while playing, for A/B listening), recording, volume, velocity, pedal, load, level.
+    referenceButton.setTooltip("The reference: Noire's recordings, played back (Ctrl+1)");
+    modalButton.setTooltip("The PianoForge modal engine (Ctrl+2)");
+    for (auto* b : { &referenceButton, &modalButton }) {
+        b->setClickingTogglesState(false);
+        b->setRadioGroupId(1);
+        addAndMakeVisible(*b);
     }
+    referenceButton.setConnectedEdges(juce::Button::ConnectedOnRight);
+    modalButton.setConnectedEdges(juce::Button::ConnectedOnLeft);
+    referenceButton.onClick = [this] { selectEngine(false); };
+    modalButton.onClick = [this] { selectEngine(true); };
+    selectEngine(settings->getIntValue("engine", 1) == 2);
 
-    // Tuning of the modal engine: reference A4 and temperament.
-    tuningLabel.setText("Tuning (modal): A4", juce::dontSendNotification);
-    referenceA4.setRange(415.0, 466.0, 0.1);
-    referenceA4.setTextValueSuffix(" Hz");
-    referenceA4.setNumDecimalPlacesToDisplay(1);
-    referenceA4.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
-    referenceA4.setValue(settings->getDoubleValue("referenceA4", 440.0), juce::dontSendNotification);
-    referenceA4.onValueChange = [this] { applyTuning(); };
-    referenceA4.onDragEnd = [this] { saveSettings(); };
-    referenceA4.setDoubleClickReturnValue(true, 440.0);
-    for (int i = 0; i < (int) kTemperaments.size(); ++i)
-        temperamentChoice.addItem(kTemperaments[(size_t) i].name, i + 1);
-    temperamentChoice.setSelectedId(juce::jlimit(1, (int) kTemperaments.size(), settings->getIntValue("temperament", 1)),
-                                    juce::dontSendNotification);
-    const char* keys[] = { "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B" };
-    for (int i = 0; i < 12; ++i)
-        temperamentRoot.addItem(juce::String("on ") + keys[i], i + 1);
-    temperamentRoot.setSelectedId(juce::jlimit(1, 12, settings->getIntValue("temperamentRoot", 1)), juce::dontSendNotification);
-    temperamentChoice.onChange = temperamentRoot.onChange = [this] { applyTuning(); saveSettings(); };
-    for (auto* c : std::initializer_list<juce::Component*> { &tuningLabel, &referenceA4, &temperamentChoice, &temperamentRoot })
-        addAndMakeVisible(*c);
-    applyTuning();
-
-    // Stream output: a copy of the sound on another device (a virtual cable for OBS), the main device untouched.
-    mirrorLabel.setText("Mirror output", juce::dontSendNotification);
-    mirrorChoice.setTooltip("A copy of the sound on another device, through the Windows mixer: pick a virtual cable "
-                            "(VB-Audio Hi-Fi Cable Input) and add its output to OBS as an audio input. The main output "
-                            "(ASIO) is not affected.");
-    fillMirrorDevices();
-    if (const int i = mirrorDevices.indexOf(settings->getValue("mirrorDevice")); i >= 0)
-        mirrorChoice.setSelectedId(i + 2, juce::dontSendNotification);
-    else
-        mirrorChoice.setSelectedId(1, juce::dontSendNotification);
-    mirrorChoice.onChange = [this] { openMirror(); saveSettings(); };
-    for (auto* c : std::initializer_list<juce::Component*> { &mirrorLabel, &mirrorChoice, &mirrorStatus, &feedStatus })
-        addAndMakeVisible(*c);
-    feedStatus.setText(host.feedOn() ? "OBS plugin: the \"PianoForge\" audio source reads this application directly"
-                                     : "OBS plugin: no feed (another PianoForge is feeding it)",
-                       juce::dontSendNotification);
-    feedStatus.setColour(juce::Label::textColourId, juce::Colours::grey);
-
-    saveTakeButton.setButtonText("Save last take");
-    saveTakeButton.onClick = [this] { saveLastTake(); };
-    takesFolderButton.setButtonText("Takes folder");
-    takesFolderButton.onClick = [] {
-        takesFolder().createDirectory();
-        takesFolder().startAsProcess();
-    };
-    takeStatus.setText("Every note is captured. 'Save last take' keeps what was played since the last 10 s of silence, "
-                       "as a MIDI file and a WAV render, in " + takesFolder().getFullPathName(),
-                       juce::dontSendNotification);
-    addAndMakeVisible(saveTakeButton);
-    addAndMakeVisible(takesFolderButton);
-    addAndMakeVisible(takeStatus);
-
-    // Live recording: what the device plays, as it plays it (WAV), and the MIDI over the same span.
-    recordButton.setButtonText("Record");
-    recordButton.setTooltip("Start or stop a live recording (Ctrl+R)");
+    recordButton.setTooltip("Record what you play: WAV and MIDI aligned to the sample (Ctrl+R)");
     recordButton.onClick = [this] { toggleRecording(); };
-    recordMidiButton.setButtonText("MIDI");
-    recordMidiButton.setToggleState(settings->getBoolValue("recordMidi", true), juce::dontSendNotification);
-    recordMidiButton.onClick = [this] { saveSettings(); };
-    recordWavButton.setButtonText("WAV");
-    recordWavButton.setToggleState(settings->getBoolValue("recordWav", true), juce::dontSendNotification);
-    recordWavButton.onClick = [this] { saveSettings(); };
-    recordingsFolderButton.setButtonText("Recordings folder");
-    recordingsFolderButton.onClick = [] {
-        recordingsFolder().createDirectory();
-        recordingsFolder().startAsProcess();
-    };
-    recordStatus.setText("Record (Ctrl+R): the sound as it leaves the engine, in a 32-bit float WAV, and the MIDI aligned "
-                         "with it to the sample, in " + recordingsFolder().getFullPathName(),
-                         juce::dontSendNotification);
-    for (auto* c : std::initializer_list<juce::Component*> { &recordButton, &recordMidiButton, &recordWavButton,
-                                                             &recordingsFolderButton, &recordStatus })
-        addAndMakeVisible(*c);
-
-    sustainButton.setButtonText("Sustain pedal (Space)");
-    sustainButton.onClick = [this] { sendSustain(sustainButton.getToggleState()); };
-    wholeTakeButton.setButtonText("Play the whole take (ignore key release)");
-    wholeTakeButton.setToggleState(settings->getBoolValue("playWholeTake", false), juce::dontSendNotification);
-    wholeTakeButton.onClick = [this] { player.playWholeTake = wholeTakeButton.getToggleState(); saveSettings(); };
-    player.playWholeTake = wholeTakeButton.getToggleState();
-    addAndMakeVisible(sustainButton);
-    addAndMakeVisible(wholeTakeButton);
-
+    recordMidi = settings->getBoolValue("recordMidi", true);
+    recordWav = settings->getBoolValue("recordWav", true);
+    pedalButton.setTooltip("The sustain pedal (Space)");
+    pedalButton.setClickingTogglesState(false);
+    pedalButton.onClick = [this] { sendSustain(!pedalButton.getToggleState()); };
     volumeLabel.setText("Volume", juce::dontSendNotification);
     volume.setRange(-24.0, 24.0, 0.5);
     volume.setTextValueSuffix(" dB");
-    volume.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
-    volume.onValueChange = [this] {
-        player.outputGain = modal.outputGain = juce::Decibels::decibelsToGain((float) volume.getValue());
-    };
+    volume.setTextBoxStyle(juce::Slider::TextBoxRight, false, 62, 20);
+    volume.setDoubleClickReturnValue(true, 6.0);
+    volume.onValueChange = [this] { player.outputGain = modal.outputGain = juce::Decibels::decibelsToGain((float) volume.getValue()); };
+    volume.onDragEnd = [this] { saveSettings(); };
     volume.setValue(settings->getDoubleValue("volume", 6.0));
     velocityLabel.setText("Velocity", juce::dontSendNotification);
     velocity.setRange(1.0, 127.0, 1.0);
-    velocity.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    velocity.setTextBoxStyle(juce::Slider::TextBoxRight, false, 44, 20);
+    velocity.setTooltip("The velocity of the mouse and the computer keyboard (C / V: -10 / +10)");
     velocity.onValueChange = [this] { keyboard.setVelocity((float) velocity.getValue() / 127.0f, true); };
+    velocity.onDragEnd = [this] { saveSettings(); };
     velocity.setValue(settings->getIntValue("velocity", 100));
-    restrikeLabel.setText("Re-strike: previous note fades to -40 dB in", juce::dontSendNotification);
-    restrikeFade.setRange(0.015, 5.0, 0.005);
-    restrikeFade.setSkewFactorFromMidPoint(0.8);
-    restrikeFade.setTextValueSuffix(" s");
-    restrikeFade.setNumDecimalPlacesToDisplay(2);
-    restrikeFade.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
-    restrikeFade.onValueChange = [this] { player.restrikeFadeSeconds = modal.restrikeFadeSeconds = (float) restrikeFade.getValue(); };
-    restrikeFade.setValue(settings->getDoubleValue("restrikeFade", 0.8));
-    restrikeFade.onDragEnd = [this] { saveSettings(); };
-    for (auto* c : std::initializer_list<juce::Component*> { &volumeLabel, &volume, &velocityLabel, &velocity,
-                                                             &restrikeLabel, &restrikeFade })
+    loadMeter.setTooltip("How much of each audio block's time the engine uses. Click for the details.");
+    loadMeter.onClick = [this] { showWindow(performanceWindow, "Performance", performancePanel); };
+    levelMeter.setTooltip("Output level, left and right (click to clear the clip light)");
+    for (auto* c : std::initializer_list<juce::Component*> { &recordButton, &pedalButton, &volumeLabel, &volume, &velocityLabel,
+                                                             &velocity, &loadMeter, &levelMeter })
         addAndMakeVisible(*c);
 
-    keyLayout.addItem("AZERTY", kLayoutAzerty);
-    keyLayout.addItem("QWERTY", kLayoutQwerty);
-    keyLayout.setSelectedId(settings->getIntValue("keyLayout", kLayoutAzerty), juce::dontSendNotification);
-    keyLayout.onChange = [this] { applyKeyLayout(); saveSettings(); };
-    addAndMakeVisible(keyLayout);
-
+    // Dashboard and keyboard.
+    for (auto* c : std::initializer_list<juce::Component*> { &engineCard, &noteCard, &audioCard, &sessionCard, &hint })
+        addAndMakeVisible(*c);
+    hint.setColour(juce::Label::textColourId, theme::dim);
+    hint.setFont(theme::font(12.0f));
     keyboard.setAvailableRange(21, 108); // A0 to C8
     keyboard.setLowestVisibleKey(21);
     keyboard.setScrollButtonsVisible(false);
@@ -266,18 +165,25 @@ MainComponent::MainComponent()
     keyboard.setWantsKeyboardFocus(true);
     keyboard.addKeyListener(this);
     addAndMakeVisible(keyboard);
-    applyKeyLayout();
+    setKeyLayout(settings->getIntValue("keyLayout", kLayoutAzerty));
 
+    // Status bar.
+    for (auto* l : { &statusLeft, &statusRight }) {
+        l->setFont(theme::font(12.0f));
+        l->setColour(juce::Label::textColourId, theme::dim);
+        addAndMakeVisible(*l);
+    }
+    statusRight.setJustificationType(juce::Justification::centredRight);
     addChildComponent(progressBar);
 
     corpusFolder = findCorpus(settings->getValue("corpus"));
     if (corpusFolder.isDirectory())
         loadCorpus(corpusFolder);
     else
-        corpusStatus.setText("No corpus found: use 'Change corpus...' and pick corpus/reference/noire-dry/single-notes",
-                             juce::dontSendNotification);
+        showMessage("No corpus found: File > Change corpus..., and pick corpus/reference/noire-dry/single-notes", theme::busy);
 
-    setSize(1400, 652);
+    setSize(1440, 520);
+    constructed = true;
     startTimerHz(20);
 }
 
@@ -292,48 +198,213 @@ MainComponent::~MainComponent()
         takeRender.join();
     if (modalLoader.joinable())
         modalLoader.join();
+    engineWindow.reset();
+    audioWindow.reset();
+    performanceWindow.reset();
     curveWindow.reset(); // it refers to curveSettings and keyboardInput
     keyboard.removeKeyListener(this);
     deviceManager.removeChangeListener(this);
     deviceManager.removeMidiInputDeviceCallback({}, &keyboardInput);
     deviceManager.removeAudioCallback(&host);
+    audioPanel.reset(); // before the device it refers to closes
     deviceManager.closeAudioDevice();
 }
 
-void MainComponent::enableMidiInputs()
+// ---- Menus ----
+
+juce::StringArray MainComponent::getMenuBarNames()
 {
-    for (const auto& input : juce::MidiInput::getAvailableDevices())
-        if (!deviceManager.isMidiInputDeviceEnabled(input.identifier))
-            deviceManager.setMidiInputDeviceEnabled(input.identifier, true);
+    return { "File", "Engine", "Audio", "Keyboard", "Help" };
 }
 
-void MainComponent::applyKeyLayout()
+juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
 {
+    juce::PopupMenu menu;
+    auto item = [](int id, const juce::String& text, const juce::String& shortcut = {}, bool ticked = false, bool enabled = true) {
+        juce::PopupMenu::Item i(text);
+        i.itemID = id;
+        i.isTicked = ticked;
+        i.isEnabled = enabled;
+        i.shortcutKeyDescription = shortcut;
+        return i;
+    };
+    switch (index) {
+    case 0: {
+        menu.addItem(item(kRecord, host.live.recording() ? "Stop recording" : "Record", "Ctrl+R"));
+        juce::PopupMenu formats;
+        formats.addItem(item(kRecordWav, "WAV (the sound, 32-bit float)", {}, recordWav, !host.live.recording()));
+        formats.addItem(item(kRecordMidi, "MIDI (aligned with the WAV)", {}, recordMidi, !host.live.recording()));
+        menu.addSubMenu("Record formats", formats);
+        menu.addItem(item(kSaveTake, "Save last take (MIDI and WAV render)", "Ctrl+S"));
+        menu.addSeparator();
+        menu.addItem(item(kOpenRecordings, "Open the recordings folder"));
+        menu.addItem(item(kOpenTakes, "Open the takes folder"));
+        menu.addSeparator();
+        menu.addItem(item(kChangeCorpus, "Change corpus..."));
+        menu.addSeparator();
+        menu.addItem(item(kQuit, "Quit", "Ctrl+Q"));
+        break;
+    }
+    case 1: {
+        menu.addItem(item(kEngineReference, "Reference: Noire samples", "Ctrl+1", !modalSelected()));
+        menu.addItem(item(kEngineModal, "Modal: PianoForge engine", "Ctrl+2", modalSelected()));
+        menu.addSeparator();
+        for (int o = 0; o < (int) EnginePanel::Option::count; ++o) {
+            if (o == (int) EnginePanel::Option::wholeTake)
+                menu.addSeparator();
+            menu.addItem(item(kEngineOption + o, EnginePanel::name((EnginePanel::Option) o), {}, enginePanel->isOn((EnginePanel::Option) o)));
+        }
+        menu.addSeparator();
+        menu.addItem(item(kEngineSettings, "Engine settings (tuning, re-strike, levels)...", "Ctrl+E"));
+        break;
+    }
+    case 2:
+        menu.addItem(item(kAudioSettings, "Audio, MIDI and streaming...", "Ctrl+,"));
+        menu.addItem(item(kPerformance, "Performance...", "Ctrl+P"));
+        menu.addSeparator();
+        menu.addItem(item(kResetDropouts, "Reset the dropout counters"));
+        break;
+    case 3:
+        menu.addItem(item(kVelocityCurve, "Velocity curve..."));
+        menu.addSeparator();
+        menu.addItem(item(kAzerty, "Computer keyboard: AZERTY", {}, keyLayout == kLayoutAzerty));
+        menu.addItem(item(kQwerty, "Computer keyboard: QWERTY", {}, keyLayout == kLayoutQwerty));
+        menu.addSeparator();
+        menu.addItem(item(kOctaveDown, "Octave down", keyLayout == kLayoutAzerty ? "W" : "Z"));
+        menu.addItem(item(kOctaveUp, "Octave up", "X"));
+        menu.addItem(item(kVelocityDown, "Velocity -10", "C"));
+        menu.addItem(item(kVelocityUp, "Velocity +10", "V"));
+        break;
+    case 4:
+        menu.addItem(item(kShortcuts, "Keyboard shortcuts", "F1"));
+        menu.addItem(item(kAbout, "About PianoForge"));
+        break;
+    default:
+        break;
+    }
+    return menu;
+}
+
+void MainComponent::menuItemSelected(int id, int)
+{
+    if (id >= kEngineOption && id < kEngineOption + (int) EnginePanel::Option::count) {
+        const auto o = (EnginePanel::Option) (id - kEngineOption);
+        enginePanel->setOn(o, !enginePanel->isOn(o));
+        return;
+    }
+    switch (id) {
+    case kRecord: toggleRecording(); break;
+    case kRecordMidi: recordMidi = !recordMidi; saveSettings(); break;
+    case kRecordWav: recordWav = !recordWav; saveSettings(); break;
+    case kSaveTake: saveLastTake(); break;
+    case kOpenRecordings: recordingsFolder().createDirectory(); recordingsFolder().startAsProcess(); break;
+    case kOpenTakes: takesFolder().createDirectory(); takesFolder().startAsProcess(); break;
+    case kChangeCorpus: chooseCorpus(); break;
+    case kQuit: juce::JUCEApplication::getInstance()->systemRequestedQuit(); break;
+    case kEngineReference: selectEngine(false); break;
+    case kEngineModal: selectEngine(true); break;
+    case kEngineSettings: showWindow(engineWindow, "Engine settings", *enginePanel); break;
+    case kAudioSettings: showWindow(audioWindow, "Audio, MIDI and streaming", *audioPanel); break;
+    case kPerformance: showWindow(performanceWindow, "Performance", performancePanel); break;
+    case kResetDropouts: performancePanel.onReset(); break;
+    case kVelocityCurve: openVelocityCurve(); break;
+    case kAzerty: setKeyLayout(kLayoutAzerty); break;
+    case kQwerty: setKeyLayout(kLayoutQwerty); break;
+    case kOctaveDown: shiftOctave(-1); break;
+    case kOctaveUp: shiftOctave(1); break;
+    case kVelocityDown: velocity.setValue(velocity.getValue() - 10.0); break;
+    case kVelocityUp: velocity.setValue(velocity.getValue() + 10.0); break;
+    case kShortcuts: showShortcuts(); break;
+    case kAbout: showAbout(); break;
+    default: break;
+    }
+}
+
+void MainComponent::showWindow(std::unique_ptr<ToolWindow>& window, const juce::String& title, juce::Component& content)
+{
+    if (window == nullptr)
+        window = std::make_unique<ToolWindow>(title, content, *this);
+    window->show();
+}
+
+void MainComponent::showShortcuts()
+{
+    const bool azerty = keyLayout == kLayoutAzerty;
+    juce::AlertWindow::showMessageBoxAsync(
+        juce::MessageBoxIconType::NoIcon, "Keyboard shortcuts",
+        juce::String("Playing\n")
+            + (azerty ? "  Q Z S E D F T G Y H U J K O L P M: the keys from C to E\n  W / X: octave down / up\n"
+                      : "  A W S E D F T G Y H U J K O L P ;: the keys from C to E\n  Z / X: octave down / up\n")
+            + "  C / V: velocity -10 / +10\n  Space: sustain pedal\n\n"
+              "Application\n  Ctrl+R: record / stop\n  Ctrl+S: save the last take\n  Ctrl+1 / Ctrl+2: reference / modal engine\n"
+              "  Ctrl+E: engine settings\n  Ctrl+,: audio, MIDI and streaming\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
+              "The mouse plays too: lower on a key is louder.");
+}
+
+void MainComponent::showAbout()
+{
+    juce::AlertWindow::showMessageBoxAsync(
+        juce::MessageBoxIconType::NoIcon, "About PianoForge",
+        "PianoForge " + juce::String(PIANOFORGE_VERSION) + "\n\nA concert grand played from a MIDI keyboard: a modal engine "
+        "calibrated on a reference library, with the reference itself for A/B listening.\n\nAudio thread: lock-free, "
+        "no allocation. Recording, the mirror output and the OBS plugin's feed only copy each block.");
+}
+
+// ---- Actions ----
+
+void MainComponent::selectEngine(bool useModal)
+{
+    engines.selected = useModal ? 1 : 0;
+    referenceButton.setToggleState(!useModal, juce::dontSendNotification);
+    modalButton.setToggleState(useModal, juce::dontSendNotification);
+    saveSettings();
+}
+
+void MainComponent::setKeyLayout(int layout)
+{
+    keyLayout = layout == kLayoutQwerty ? kLayoutQwerty : kLayoutAzerty;
     // AZERTY: home row q s d f g h j k l m = white keys, top row = black keys.
-    const bool azerty = keyLayout.getSelectedId() != kLayoutQwerty;
-    const char* keys = azerty ? "qzsedftgyhujkolpm" : "awsedftgyhujkolp;";
+    const char* keys = keyLayout == kLayoutAzerty ? "qzsedftgyhujkolpm" : "awsedftgyhujkolp;";
     keyboard.clearKeyMappings();
     for (int i = 0; keys[i] != 0; ++i)
         keyboard.setKeyPressForNote(juce::KeyPress(keys[i]), i);
     keyboard.setKeyPressBaseOctave(octave + 1); // JUCE: octave n -> C = 12 * n; C4 (60) = octave 5
-    help.setText(juce::String("Mouse: click a key (lower on the key = louder).   Computer keyboard: ")
-                     + (azerty ? "Q Z S E D F T G Y H U J K... = C to E;  W / X: octave;  C / V: velocity;  Space: sustain."
-                               : "A W S E D F T G Y H U J K... = C to E;  Z / X: octave;  C / V: velocity;  Space: sustain.")
-                     + "   Current octave: C" + juce::String(octave),
+    hint.setText(juce::String("Computer keyboard from C") + juce::String(octave) + ": "
+                     + (keyLayout == kLayoutAzerty ? "Q Z S E D F T G Y H U J K...   W / X octave" : "A W S E D F T G Y H U J K...   Z / X octave")
+                     + "   C / V velocity   Space pedal   Ctrl+R record   F1 all the shortcuts",
                  juce::dontSendNotification);
+    saveSettings();
+}
+
+void MainComponent::shiftOctave(int delta)
+{
+    octave = juce::jlimit(0, 7, octave + delta);
+    setKeyLayout(keyLayout);
 }
 
 bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
 {
-    if (key.getModifiers().isCommandDown() && key.getKeyCode() == 'R') {
-        toggleRecording();
+    const auto mods = key.getModifiers();
+    if (mods.isCommandDown()) {
+        switch (key.getKeyCode()) {
+        case 'R': toggleRecording(); return true;
+        case 'S': saveLastTake(); return true;
+        case 'E': showWindow(engineWindow, "Engine settings", *enginePanel); return true;
+        case 'P': showWindow(performanceWindow, "Performance", performancePanel); return true;
+        case ',': showWindow(audioWindow, "Audio, MIDI and streaming", *audioPanel); return true;
+        case '1': selectEngine(false); return true;
+        case '2': selectEngine(true); return true;
+        case 'Q': juce::JUCEApplication::getInstance()->systemRequestedQuit(); return true;
+        default: break;
+        }
+    }
+    if (key == juce::KeyPress::F1Key) {
+        showShortcuts();
         return true;
     }
     const auto c = (int) juce::CharacterFunctions::toLowerCase(key.getTextCharacter());
-    const bool azerty = keyLayout.getSelectedId() != kLayoutQwerty;
-    if (c == (azerty ? 'w' : 'z') || c == 'x') {
-        octave = juce::jlimit(0, 7, octave + (c == 'x' ? 1 : -1));
-        applyKeyLayout();
+    if (c == (keyLayout == kLayoutAzerty ? 'w' : 'z') || c == 'x') {
+        shiftOctave(c == 'x' ? 1 : -1);
         return true;
     }
     if (c == 'c' || c == 'v') {
@@ -358,18 +429,11 @@ void MainComponent::sendSustain(bool down)
     host.send(juce::MidiMessage::controllerEvent(1, 64, down ? 127 : 0));
 }
 
-void MainComponent::openAudioSettings()
+void MainComponent::enableMidiInputs()
 {
-    auto* selector = new juce::AudioDeviceSelectorComponent(deviceManager, 0, 0, 1, 2, true, false, true, false);
-    selector->setSize(600, 520);
-    juce::DialogWindow::LaunchOptions o;
-    o.content.setOwned(selector);
-    o.dialogTitle = "Audio and MIDI settings";
-    o.dialogBackgroundColour = getLookAndFeel().findColour(juce::ResizableWindow::backgroundColourId);
-    o.escapeKeyTriggersCloseButton = true;
-    o.useNativeTitleBar = true;
-    o.resizable = true;
-    o.launchAsync();
+    for (const auto& input : juce::MidiInput::getAvailableDevices())
+        if (!deviceManager.isMidiInputDeviceEnabled(input.identifier))
+            deviceManager.setMidiInputDeviceEnabled(input.identifier, true);
 }
 
 void MainComponent::openVelocityCurve()
@@ -408,38 +472,42 @@ juce::File MainComponent::recordingsFolder()
     return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("PianoForge").getChildFile("Recordings");
 }
 
+void MainComponent::showMessage(const juce::String& text, juce::Colour colour)
+{
+    statusRight.setText(text, juce::dontSendNotification);
+    statusRight.setColour(juce::Label::textColourId, colour);
+    messageUntil = juce::Time::getMillisecondCounterHiRes() + 12000.0;
+}
+
 void MainComponent::toggleRecording()
 {
     if (host.live.recording()) {
         finishRecording();
         return;
     }
-    const bool midi = recordMidiButton.getToggleState(), wav = recordWavButton.getToggleState();
-    if (!midi && !wav) {
-        recordStatus.setText("Nothing to record: tick MIDI, WAV or both.", juce::dontSendNotification);
+    if (!recordMidi && !recordWav) {
+        showMessage("Nothing to record: tick a format in File > Record formats.", theme::busy);
         return;
     }
     if (deviceManager.getCurrentAudioDevice() == nullptr || host.currentRate() <= 0.0) {
-        recordStatus.setText("No audio device is running: see Audio and MIDI settings.", juce::dontSendNotification);
+        showMessage("No audio device is running: Audio > Audio, MIDI and streaming.", theme::bad);
         return;
     }
     recordingStem = "PianoForge " + juce::Time::getCurrentTime().formatted("%Y-%m-%d %H-%M-%S");
-    const auto wavFile = wav ? recordingsFolder().getChildFile(recordingStem + ".wav") : juce::File();
+    const auto wavFile = recordWav ? recordingsFolder().getChildFile(recordingStem + ".wav") : juce::File();
     const auto engineName = modalSelected() ? juce::String("modal engine") : juce::String("reference player");
     if (const auto started = host.live.start(wavFile, host.currentRate(), host.currentSegment(),
                                              "PianoForge live recording (" + engineName + ")");
         started.failed()) {
-        recordStatus.setText("Cannot record: " + started.getErrorMessage(), juce::dontSendNotification);
+        showMessage("Cannot record: " + started.getErrorMessage(), theme::bad);
         return;
     }
-    recordButton.setButtonText("Stop");
-    recordButton.setColour(juce::TextButton::buttonColourId, juce::Colours::darkred);
+    recordButton.setColour(juce::TextButton::buttonColourId, theme::record);
 }
 
 void MainComponent::finishRecording()
 {
     const auto span = host.live.stop();
-    recordButton.setButtonText("Record");
     recordButton.removeColour(juce::TextButton::buttonColourId);
     drained.clear(); // every event up to the stop, into the session record
     host.drainRecorded(drained);
@@ -447,15 +515,14 @@ void MainComponent::finishRecording()
     if (!span.valid) {
         if (span.wav != juce::File())
             span.wav.deleteFile();
-        recordStatus.setText("Recording failed: " + (span.error.isNotEmpty() ? span.error : juce::String("nothing recorded")),
-                             juce::dontSendNotification);
+        showMessage("Recording failed: " + (span.error.isNotEmpty() ? span.error : juce::String("nothing recorded")), theme::bad);
         return;
     }
     juce::StringArray saved;
     int notes = 0;
-    if (recordMidiButton.getToggleState()) {
+    if (recordMidi) {
         if (auto take = takes.span(span.segment, span.start, span.end)) {
-            take->text = "PianoForge live recording " + recordingStem + ", " + juce::String(span.sampleRate, 0)
+            take->text = "PianoForge live recording " + recordingStem + ", " + juce::String(juce::roundToInt(span.sampleRate))
                        + " Hz: one tick per sample, tick 0 is the first sample of the WAV of the same name";
             const auto midiFile = recordingsFolder().getChildFile(recordingStem + ".mid");
             recordingsFolder().createDirectory();
@@ -469,21 +536,21 @@ void MainComponent::finishRecording()
     }
     if (span.wav.existsAsFile())
         saved.add(".wav");
-    auto text = "Saved " + recordingStem + " " + saved.joinIntoString(" and ") + " ("
-              + juce::String((double) (span.end - span.start) / span.sampleRate, 1) + " s, " + juce::String(notes)
-              + " notes) in " + recordingsFolder().getFullPathName();
+    lastSaved = recordingStem + " " + saved.joinIntoString(" + ") + " (" + juce::String((double) (span.end - span.start) / span.sampleRate, 1)
+              + " s, " + juce::String(notes) + " notes)";
+    auto text = "Recorded " + lastSaved + " in " + recordingsFolder().getFullPathName();
     if (span.dropped > 0)
         text << "  WARNING: " << juce::String(span.dropped) << " samples lost (the disk did not keep up)";
     if (span.error.isNotEmpty())
         text << "  " << span.error;
-    recordStatus.setText(text, juce::dontSendNotification);
+    showMessage(text, span.dropped > 0 || span.error.isNotEmpty() ? theme::busy : theme::good);
 }
 
 void MainComponent::saveLastTake()
 {
     const auto take = takes.lastTake();
     if (!take.has_value() || take->notes == 0) {
-        takeStatus.setText("Nothing played yet: play something, then save it.", juce::dontSendNotification);
+        showMessage("Nothing played yet: play something, then save it.", theme::busy);
         return;
     }
     const auto folder = takesFolder();
@@ -493,38 +560,41 @@ void MainComponent::saveLastTake()
     {
         juce::FileOutputStream out(midiFile);
         if (!out.openedOk() || !TakeRecorder::toMidiFile(*take).writeTo(out)) {
-            takeStatus.setText("Cannot write " + midiFile.getFullPathName(), juce::dontSendNotification);
+            showMessage("Cannot write " + midiFile.getFullPathName(), theme::bad);
             return;
         }
     }
     const auto summary = juce::String(take->notes) + " notes, " + juce::String((double) take->lengthSamples / take->sampleRate, 1) + " s";
+    lastSaved = stem + " (" + summary + ")";
     auto bank = player.sharedBank();
     auto profile = modal.sharedProfile();
     const bool withModal = modalSelected() && profile != nullptr;
     if ((withModal ? profile == nullptr : bank == nullptr) || renderingTake.load()) {
-        takeStatus.setText("Saved " + midiFile.getFileName() + " (" + summary + ").", juce::dontSendNotification);
+        showMessage("Saved " + midiFile.getFileName() + " (" + summary + ")", theme::good);
         return;
     }
-    takeStatus.setText("Saved " + midiFile.getFileName() + " (" + summary + "); rendering the WAV...", juce::dontSendNotification);
+    showMessage("Saved " + midiFile.getFileName() + " (" + summary + "); rendering the WAV...");
     if (takeRender.joinable())
         takeRender.join();
     renderingTake = true;
     // Same engine and settings as heard live, at the rate it was played: the WAV is the take as heard.
     takeRender = std::thread([sequence = TakeRecorder::toSequence(*take), bank = std::move(bank), profile = std::move(profile),
-                              withModal, body = bodyButton.getToggleState(), residual = residualButton.getToggleState(),
-                              rate = take->sampleRate, restrike = (float) restrikeFade.getValue(),
-                              whole = wholeTakeButton.getToggleState(), wavFile, summary,
-                              safe = juce::Component::SafePointer<MainComponent>(this)] {
+                              withModal, body = enginePanel->isOn(EnginePanel::Option::body),
+                              residual = enginePanel->isOn(EnginePanel::Option::residual), rate = take->sampleRate,
+                              restrike = enginePanel->restrikeSeconds(), whole = enginePanel->isOn(EnginePanel::Option::wholeTake),
+                              wavFile, summary, safe = juce::Component::SafePointer<MainComponent>(this)] {
         const auto audio = withModal ? renderSequenceModal(sequence, profile, rate, restrike, body, residual)
                                      : renderSequence(sequence, bank, rate, restrike, whole);
         const auto written = writeWav(audio, rate, wavFile);
         juce::MessageManager::callAsync([safe, written, wavFile, summary] {
             if (auto* self = safe.getComponent()) {
                 self->renderingTake = false;
-                self->takeStatus.setText(written.wasOk() ? "Saved " + wavFile.getFileNameWithoutExtension() + " .mid and .wav ("
-                                                               + summary + ") in " + wavFile.getParentDirectory().getFullPathName()
-                                                         : "WAV render failed: " + written.getErrorMessage(),
-                                         juce::dontSendNotification);
+                if (written.wasOk())
+                    self->showMessage("Saved " + wavFile.getFileNameWithoutExtension() + " .mid and .wav (" + summary + ") in "
+                                          + wavFile.getParentDirectory().getFullPathName(),
+                                      theme::good);
+                else
+                    self->showMessage("WAV render failed: " + written.getErrorMessage(), theme::bad);
             }
         });
     });
@@ -561,78 +631,32 @@ void MainComponent::loadModalProfile()
     // The profile written by `forge export` sits in the corpus state folder, next to the passes.
     const auto path = corpusFolder.getParentDirectory().getChildFile("modal-profile.bin");
     if (!path.existsAsFile()) {
-        modalProfileText = "Modal profile: none in " + path.getParentDirectory().getFullPathName()
-                         + " (forge modes, forge soundboard, then forge export)";
+        profileSummary = "Modal profile: none (forge export)";
         return;
     }
     if (modalLoader.joinable())
         modalLoader.join();
-    modalProfileText = "Modal profile: loading " + path.getFullPathName() + "...";
+    profileSummary = "Modal profile: loading...";
     modalLoader = std::thread([path, safe = juce::Component::SafePointer<MainComponent>(this)] {
         std::string error;
-        const auto start = juce::Time::getMillisecondCounterHiRes();
         auto profile = pf::loadModalProfile(path.getFullPathName().toStdString(), error);
-        const double ms = juce::Time::getMillisecondCounterHiRes() - start;
-        juce::MessageManager::callAsync([safe, profile = std::move(profile), error, ms]() mutable {
+        juce::MessageManager::callAsync([safe, profile = std::move(profile), error]() mutable {
             auto* self = safe.getComponent();
             if (self == nullptr)
                 return;
             if (profile == nullptr) {
-                self->modalProfileText = "Modal profile: " + juce::String(error);
+                self->profileSummary = "Modal profile: " + juce::String(error);
+                self->showMessage("The modal profile did not load: " + juce::String(error), theme::bad);
                 return;
             }
-            std::size_t layers = 0, modes = 0;
-            for (const auto& n : profile->notes) {
+            std::size_t layers = 0;
+            for (const auto& n : profile->notes)
                 layers = std::max(layers, n.layers.size());
-                for (const auto& l : n.layers)
-                    modes += l.modes.size();
-            }
-            self->modalProfileText = "Modal profile: " + juce::String((int) profile->notes.size()) + " notes x "
-                                   + juce::String((int) layers) + " velocity layers, " + juce::String((int) modes) + " modes, "
-                                   + juce::String((int) profile->bodyFreq.size()) + " soundboard resonances, "
-                                   + juce::String((double) profile->bytes / 1.0e6, 1) + " MB (loaded in "
-                                   + juce::String(ms / 1000.0, 2) + " s)";
+            self->profileSummary = "Modal profile: " + juce::String((int) profile->notes.size()) + " notes x "
+                                 + juce::String((int) layers) + " layers, " + juce::String(juce::roundToInt((double) profile->bytes / 1.0e6)) + " MB";
             self->modal.install(std::move(profile));
         });
     });
-}
-
-void MainComponent::applyTuning()
-{
-    const auto& t = kTemperaments[(size_t) juce::jlimit(0, (int) kTemperaments.size() - 1, temperamentChoice.getSelectedId() - 1)];
-    const auto offsets = pitchClassOffsets(t, juce::jlimit(0, 11, temperamentRoot.getSelectedId() - 1));
-    modal.referenceA4 = (float) referenceA4.getValue();
-    for (int pc = 0; pc < 12; ++pc)
-        modal.pitchClassCents[(size_t) pc] = (float) offsets[(size_t) pc];
-    modal.tuningVersion.fetch_add(1); // the free strings follow
-}
-
-void MainComponent::fillMirrorDevices()
-{
-    mirrorDevices = MirrorOutput::deviceNames();
-    mirrorChoice.clear(juce::dontSendNotification);
-    mirrorChoice.addItem("Off", 1);
-    for (int i = 0; i < mirrorDevices.size(); ++i)
-        mirrorChoice.addItem(mirrorDevices[i], i + 2);
-}
-
-void MainComponent::openMirror()
-{
-    const int id = mirrorChoice.getSelectedId();
-    if (id < 2) {
-        host.mirror.close();
-        mirrorStatus.setText("Off", juce::dontSendNotification);
-        return;
-    }
-    const auto name = mirrorDevices[id - 2];
-    if (auto* main = deviceManager.getCurrentAudioDevice(); main != nullptr && main->getName() == name) {
-        mirrorStatus.setText("This is the main output already: pick another device", juce::dontSendNotification);
-        host.mirror.close();
-        return;
-    }
-    const auto opened = host.mirror.open(name, host.mirror.mainSampleRate(), host.mirror.mainBlockSize());
-    mirrorStatus.setText(opened.wasOk() ? host.mirror.status() : "Cannot open " + name + ": " + opened.getErrorMessage(),
-                         juce::dontSendNotification);
 }
 
 void MainComponent::changeListenerCallback(juce::ChangeBroadcaster*)
@@ -642,49 +666,130 @@ void MainComponent::changeListenerCallback(juce::ChangeBroadcaster*)
 
 void MainComponent::saveSettings()
 {
+    if (!constructed)
+        return;
     auto* s = properties.getUserSettings();
     if (const auto xml = deviceManager.createStateXml())
         s->setValue("audio", xml.get());
     s->setValue("corpus", corpusFolder.getFullPathName());
     s->setValue("volume", volume.getValue());
     s->setValue("velocity", (int) velocity.getValue());
-    s->setValue("keyLayout", keyLayout.getSelectedId());
-    s->setValue("playWholeTake", wholeTakeButton.getToggleState());
+    s->setValue("keyLayout", keyLayout);
     s->setValue("velocityCurve", formatCurve(curveSettings));
-    s->setValue("restrikeFade", restrikeFade.getValue());
-    s->setValue("engine", engineChoice.getSelectedId());
-    s->setValue("modalBody", bodyButton.getToggleState());
-    s->setValue("modalResidual", residualButton.getToggleState());
-    s->setValue("recordMidi", recordMidiButton.getToggleState());
-    s->setValue("modalSympathetic", sympatheticButton.getToggleState());
-    s->setValue("modalHeldKeys", heldKeysButton.getToggleState());
-    s->setValue("modalPedalCatch", pedalCatchButton.getToggleState());
-    s->setValue("modalReleaseNoise", releaseNoiseButton.getToggleState());
-    s->setValue("referenceA4", referenceA4.getValue());
-    s->setValue("temperament", temperamentChoice.getSelectedId());
-    s->setValue("temperamentRoot", temperamentRoot.getSelectedId());
-    s->setValue("mirrorDevice", mirrorChoice.getSelectedId() >= 2 ? mirrorDevices[mirrorChoice.getSelectedId() - 2] : juce::String());
-    s->setValue("recordWav", recordWavButton.getToggleState());
+    s->setValue("engine", modalSelected() ? 2 : 1);
+    s->setValue("recordMidi", recordMidi);
+    s->setValue("recordWav", recordWav);
     s->saveIfNeeded();
 }
 
-juce::String MainComponent::audioDescription() const
+// ---- Dashboard ----
+
+juce::String MainComponent::midiInputs() const
+{
+    juce::StringArray names;
+    for (const auto& e : juce::MidiInput::getAvailableDevices())
+        if (deviceManager.isMidiInputDeviceEnabled(e.identifier))
+            names.add(e.name);
+    return names.isEmpty() ? juce::String("no MIDI keyboard") : "MIDI: " + names.joinIntoString(", ");
+}
+
+juce::StringArray MainComponent::engineLines() const
+{
+    if (modalSelected())
+        return { juce::String(modal.activeVoices.load()) + " voices of " + juce::String(pf::ModalEngine::kMaxVoices) + ", "
+                     + thousands(modal.activeModes.load()) + " resonators",
+                 juce::String(modal.ringingStrings.load()) + " free strings ringing, pedal "
+                     + juce::String(juce::roundToInt(modal.pedalPosition.load() * 100.0f)) + " %, "
+                     + juce::String((int) modal.stolenVoices.load()) + " voices stolen" };
+    return { juce::String(player.activeVoices.load()) + " voices of " + juce::String(ReferencePlayer::kMaxVoices),
+             juce::String((int) player.stolenVoices.load()) + " voices stolen" };
+}
+
+juce::StringArray MainComponent::deviceLines() const
 {
     auto* d = deviceManager.getCurrentAudioDevice();
     if (d == nullptr)
-        return "No audio output open: see 'Audio and MIDI settings...'";
+        return { "No audio output open" };
     const double fs = d->getCurrentSampleRate();
     const int block = d->getCurrentBufferSizeSamples();
-    const double latencyMs = 1000.0 * (d->getOutputLatencyInSamples() + block) / fs;
-    auto text = "Output: " + d->getTypeName() + " | " + d->getName() + " | " + juce::String(fs / 1000.0, 1) + " kHz | buffer "
-              + juce::String(block) + " samples | output latency ~" + juce::String(latencyMs, 1) + " ms";
-    if (const auto* b = player.bank(); b != nullptr && b->sampleRate > 0 && std::abs(b->sampleRate - fs) > 0.5)
-        text << "  (corpus at " << juce::String(b->sampleRate / 1000.0, 1) << " kHz: resampled)";
-    int inputs = 0;
-    for (const auto& e : juce::MidiInput::getAvailableDevices())
-        inputs += deviceManager.isMidiInputDeviceEnabled(e.identifier) ? 1 : 0;
-    text << "   |   Active MIDI inputs: " << inputs;
-    return text;
+    return { d->getName() + " (" + d->getTypeName() + ")",
+             juce::String(fs / 1000.0, 1) + " kHz, blocks of " + juce::String(block) + " (" + juce::String(1000.0 * block / fs, 1)
+                 + " ms), output latency ~" + juce::String(1000.0 * (d->getOutputLatencyInSamples() + block) / fs, 1) + " ms" };
+}
+
+juce::StringArray MainComponent::adviceLines() const
+{
+    juce::StringArray tips;
+    auto* d = deviceManager.getCurrentAudioDevice();
+    if (d == nullptr)
+        return tips;
+    const double fs = d->getCurrentSampleRate();
+    const int block = d->getCurrentBufferSizeSamples();
+    if (fs > 50000.0)
+        tips.add("At " + juce::String(juce::roundToInt(fs / 1000.0)) + " kHz the engine does " + juce::String(fs / 48000.0, 1)
+                 + " times the work of 48 kHz for nothing audible: the corpus is at 44.1 kHz. Use 44.1 or 48 kHz.");
+    if (1000.0 * block / fs > 6.0)
+        tips.add("Blocks of " + juce::String(1000.0 * block / fs, 1) + " ms add as much latency between key and sound: "
+                 "128 samples (2.9 ms at 44.1 kHz) is comfortable for this engine.");
+#if JUCE_WINDOWS
+    if (d->getTypeName() != "ASIO")
+        tips.add("The lowest latency on Windows comes with ASIO (Audio > Audio, MIDI and streaming > Audio device type).");
+#endif
+    const auto& s = loadTracker.snapshot();
+    if (s.dropouts > 0 && s.peakMinute < theme::kBusyLoad)
+        tips.add("Dropouts with a low load come from the driver or the system, not the engine: a larger buffer, or ASIO.");
+    else if (s.peakMinute >= theme::kOverloaded)
+        tips.add("The load reaches the overloaded zone: a lower sample rate, a larger buffer, or fewer resonances (Engine settings).");
+    return tips;
+}
+
+void MainComponent::refreshDashboard()
+{
+    // Engine.
+    auto engineInfo = engineLines();
+    engineCard.setLines({ modalSelected() ? "Modal: PianoForge" : "Reference: Noire samples", engineInfo[0], engineInfo[1],
+                          modalSelected() ? profileSummary : corpusSummary },
+                        theme::accent);
+
+    // Last note.
+    const int note = modalSelected() ? modal.lastNote.load() : player.lastNote.load();
+    if (note >= 0) {
+        const int played = modalSelected() ? modal.lastVelocity.load() : player.lastVelocity.load();
+        const int layer = modalSelected() ? modal.lastLayerVelocity.load() : player.lastRenderedVelocity.load();
+        const int in = keyboardInput.lastInput.load(), out = keyboardInput.lastOutput.load();
+        noteCard.setLines({ noteName(note) + "   velocity " + juce::String(played),
+                            layer > 0 ? (modalSelected() ? "modal layer " + juce::String(layer) + ", levels interpolated per partial"
+                                                         : "take recorded at velocity " + juce::String(layer))
+                                      : juce::String("no data for this note"),
+                            in > 0 ? "MIDI keyboard: velocity " + juce::String(in) + " -> " + juce::String(out) + " (velocity curve)"
+                                   : juce::String("mouse or computer keyboard"),
+                            "computer keyboard from C" + juce::String(octave) });
+    } else {
+        noteCard.setLines({ "Nothing played yet", midiInputs(), "computer keyboard from C" + juce::String(octave) });
+    }
+
+    // Audio.
+    auto dev = deviceLines();
+    const auto& load = loadTracker.snapshot();
+    juce::String loadLine = "load " + juce::String(juce::roundToInt(load.average * 100.0f)) + " % (peak "
+                          + juce::String(juce::roundToInt(load.peakMinute * 100.0f)) + " % over a minute), "
+                          + (load.dropouts == 0 ? juce::String("no dropout") : juce::String(load.dropouts) + " dropouts");
+    audioCard.setLines({ dev[0], dev.size() > 1 ? dev[1] : juce::String(), loadLine,
+                         adviceLines().isEmpty() ? midiInputs() : "advice in Audio > Performance" },
+                       deviceManager.getCurrentAudioDevice() == nullptr ? theme::bad : theme::text);
+
+    // Session.
+    if (host.live.recording()) {
+        const double t = host.live.seconds();
+        sessionCard.setLines({ juce::String::formatted("Recording  %d:%04.1f", (int) t / 60, std::fmod(t, 60.0)),
+                               recordingStem + (recordWav ? " .wav" : "") + (recordMidi ? " .mid" : ""),
+                               host.feedOn() ? "OBS plugin fed" : "OBS plugin not fed (another PianoForge)", audioPanel->mirrorSummary() },
+                             theme::record);
+    } else {
+        sessionCard.setLines({ "Not recording",
+                               lastSaved.isEmpty() ? juce::String("Ctrl+R records, Ctrl+S saves the last take") : "Last: " + lastSaved,
+                               host.feedOn() ? "OBS plugin fed" : "OBS plugin not fed (another PianoForge)", audioPanel->mirrorSummary() });
+    }
 }
 
 void MainComponent::timerCallback()
@@ -697,29 +802,16 @@ void MainComponent::timerCallback()
     drained.clear(); // take capture: move what reached the engine into the session record
     host.drainRecorded(drained);
     takes.add(drained, host.currentSegment(), host.currentRate());
-    // Stream output: opened once the main device runs, again when its rate or block size changes.
-    if (mirrorChoice.getSelectedId() >= 2 && host.mirror.mainSampleRate() > 0.0
-        && (!host.mirror.isOpen() || host.mirror.needsReopen()) && !mirrorStatus.getText().startsWith("Cannot")
-        && !mirrorStatus.getText().startsWith("This is"))
-        openMirror();
-    if (host.mirror.isOpen())
-        mirrorStatus.setText(host.mirror.status(), juce::dontSendNotification);
-    if (host.live.endedByDevice()) { // the device stopped or changed: the recording ends there
+    if (host.live.endedByDevice()) // the device stopped or changed: the recording ends there
         finishRecording();
-    } else if (host.live.recording()) {
-        const double t = host.live.seconds();
-        auto text = juce::String::formatted("Recording %d:%04.1f", (int) t / 60, std::fmod(t, 60.0)) + "  -  " + recordingStem
-                  + (recordWavButton.getToggleState() ? " .wav" : "") + (recordMidiButton.getToggleState() ? " .mid" : "");
-        if (const auto lost = host.live.droppedSamples(); lost > 0)
-            text << "  (" << juce::String(lost) << " samples lost)";
-        recordStatus.setText(text, juce::dontSendNotification);
-    }
+    recordButton.setButtonText(host.live.recording()
+                                   ? juce::String::formatted("Stop  %d:%04.1f", (int) host.live.seconds() / 60, std::fmod(host.live.seconds(), 60.0))
+                                   : juce::String("Record"));
 
+    // Corpus loading.
     if (loader.isLoading()) {
         loadProgress = loader.progress();
-        corpusStatus.setText("Loading corpus " + corpusFolder.getFullPathName() + "... "
-                                 + juce::String(juce::roundToInt(loadProgress * 100.0)) + " %",
-                             juce::dontSendNotification);
+        corpusSummary = "Corpus: loading " + juce::String(juce::roundToInt(loadProgress * 100.0)) + " %";
     } else if (!bankInstalled) {
         if (auto bank = loader.takeResult()) {
             // Run the device at the corpus rate when it can: no resampling at all, hence no interpolation loss.
@@ -736,163 +828,103 @@ void MainComponent::timerCallback()
             }
             progressBar.setVisible(false);
             resized();
-            corpusStatus.setText("Corpus: " + corpusFolder.getFullPathName() + "  -  " + loader.status(),
-                                 juce::dontSendNotification);
+            corpusSummary = "Corpus: " + loader.status();
         }
     }
 
-    audioStatus.setText(audioDescription(), juce::dontSendNotification);
-    modalStatus.setText(modalProfileText, juce::dontSendNotification);
-
-    if (const int modalNote = modal.lastNote.load(); modalSelected() && modalNote >= 0) {
-        const int layer = modal.lastLayerVelocity.load();
-        noteStatus.setText("Last note: " + juce::MidiMessage::getMidiNoteName(modalNote, true, true, 4) + " | played velocity "
-                               + juce::String(modal.lastVelocity.load())
-                               + (layer > 0 ? " -> modal layer " + juce::String(layer) + ", levels interpolated per partial"
-                                            : juce::String(" -> no modal data for this note"))
-                               + (keyboardInput.lastInput.load() > 0
-                                      ? "   |   last MIDI keyboard key: " + juce::String(keyboardInput.lastInput.load())
-                                            + " -> " + juce::String(keyboardInput.lastOutput.load()) + " (velocity curve)"
-                                      : juce::String()),
-                           juce::dontSendNotification);
-    } else if (const int note = player.lastNote.load(); !modalSelected() && note >= 0) {
-        const int rendered = player.lastRenderedVelocity.load();
-        noteStatus.setText("Last note: " + juce::MidiMessage::getMidiNoteName(note, true, true, 4) + " | played velocity "
-                               + juce::String(player.lastVelocity.load())
-                               + (rendered > 0 ? " -> take rendered at velocity " + juce::String(rendered)
-                                               : juce::String(" -> no take for this note in the corpus"))
-                               + (keyboardInput.lastInput.load() > 0
-                                      ? "   |   last MIDI keyboard key: " + juce::String(keyboardInput.lastInput.load())
-                                            + " -> " + juce::String(keyboardInput.lastOutput.load()) + " (velocity curve)"
-                                      : juce::String()),
-                           juce::dontSendNotification);
+    // Load, level, pedal.
+    auto* device = deviceManager.getCurrentAudioDevice();
+    loadTracker.update(host.load, device != nullptr ? device->getXRunCount() : -1);
+    const auto& load = loadTracker.snapshot();
+    loadMeter.set(load.average, load.peakRecent, load.dropouts);
+    levelMeter.push(host.load.peakLeft.exchange(0.0f), host.load.peakRight.exchange(0.0f));
+    player.outputPeak.exchange(0.0f);
+    modal.outputPeak.exchange(0.0f);
+    float peak = 0.0f;
+    bool dropout = false;
+    if (loadTracker.takeColumn(peak, dropout))
+        performancePanel.pushColumn(peak, dropout);
+    if (performanceWindow != nullptr && performanceWindow->isVisible()) {
+        auto engine = engineLines();
+        engine.insert(0, modalSelected() ? "Modal: PianoForge engine" : "Reference: Noire samples");
+        performancePanel.update(load, engine, deviceLines(), adviceLines());
     }
+    const bool sustain = modalSelected() ? modal.sustainDown.load() : player.sustainDown.load();
+    pedalButton.setToggleState(sustain, juce::dontSendNotification);
 
-    if (modalSelected())
-        engineStatus.setText("Modal engine | voices: " + juce::String(modal.activeVoices.load()) + " / "
-                                 + juce::String(pf::ModalEngine::kMaxVoices) + "   |   resonators: "
-                                 + juce::String(modal.activeModes.load()) + "   |   free strings ringing: "
-                                 + juce::String(modal.ringingStrings.load()) + "   |   pedal "
-                                 + juce::String(juce::roundToInt(modal.pedalPosition.load() * 100.0f)) + " %   |   Audio thread load: "
-                                 + juce::String(deviceManager.getCpuUsage() * 100.0, 1) + " %   |   Stolen voices: "
-                                 + juce::String((int) modal.stolenVoices.load()),
-                             juce::dontSendNotification);
-    else
-        engineStatus.setText("Reference player | voices: " + juce::String(player.activeVoices.load()) + " / "
-                                 + juce::String(ReferencePlayer::kMaxVoices) + "   |   Audio thread load: "
-                                 + juce::String(deviceManager.getCpuUsage() * 100.0, 1) + " %   |   Stolen voices: "
-                                 + juce::String((int) player.stolenVoices.load()),
-                             juce::dontSendNotification);
-
-    sustainButton.setToggleState(modalSelected() ? modal.sustainDown.load() : player.sustainDown.load(),
-                                 juce::dontSendNotification);
-
-    const float peak = juce::jmax(player.outputPeak.exchange(0.0f), modal.outputPeak.exchange(0.0f));
-    displayedPeak = juce::jmax(peak, displayedPeak * 0.85f);
-    repaint(peakArea);
+    // Dashboard and status bar.
+    refreshDashboard();
+    statusLeft.setText(corpusSummary + "   |   " + profileSummary + "   |   " + midiInputs(), juce::dontSendNotification);
+    if (messageUntil > 0.0 && juce::Time::getMillisecondCounterHiRes() > messageUntil) {
+        statusRight.setText({}, juce::dontSendNotification);
+        messageUntil = 0.0;
+    }
 }
+
+// ---- Layout ----
 
 void MainComponent::paint(juce::Graphics& g)
 {
-    g.fillAll(getLookAndFeel().findColour(juce::ResizableWindow::backgroundColourId));
-
-    // Output peak, from -60 to 0 dBFS.
-    const float db = juce::Decibels::gainToDecibels(displayedPeak, -60.0f);
-    auto area = peakArea.toFloat();
-    g.setColour(juce::Colours::black.withAlpha(0.4f));
-    g.fillRoundedRectangle(area, 3.0f);
-    const float fill = juce::jlimit(0.0f, 1.0f, (db + 60.0f) / 60.0f);
-    g.setColour(displayedPeak >= 1.0f ? juce::Colours::red : (db > -6.0f ? juce::Colours::orange : juce::Colours::limegreen));
-    g.fillRoundedRectangle(area.withWidth(area.getWidth() * fill), 3.0f);
-    g.setColour(juce::Colours::white);
-    g.setFont(juce::FontOptions(12.0f));
-    g.drawText(displayedPeak >= 1.0f ? juce::String("CLIPPING") : "Peak " + juce::String(db, 1) + " dBFS", peakArea,
-               juce::Justification::centred);
+    g.fillAll(theme::background);
+    g.setColour(theme::panel);
+    g.fillRect(toolbarArea);
+    g.fillRect(statusArea);
+    g.setColour(theme::panelEdge);
+    g.drawHorizontalLine(toolbarArea.getBottom() - 1, 0.0f, (float) getWidth());
+    g.drawHorizontalLine(statusArea.getY(), 0.0f, (float) getWidth());
 }
 
 void MainComponent::resized()
 {
-    auto area = getLocalBounds().reduced(12);
-    auto bottom = area.removeFromBottom(170);
-    keyboard.setBounds(bottom);
-    keyboard.setKeyWidth((float) bottom.getWidth() / 52.0f); // 52 white keys from A0 to C8
-    area.removeFromBottom(6);
-    help.setBounds(area.removeFromBottom(22));
+    auto area = getLocalBounds();
 
-    auto header = area.removeFromTop(30);
-    audioButton.setBounds(header.removeFromRight(200).reduced(2));
-    corpusButton.setBounds(header.removeFromRight(160).reduced(2));
-    curveButton.setBounds(header.removeFromRight(150).reduced(2));
-    header.removeFromRight(12);
-    residualButton.setBounds(header.removeFromRight(130));
-    bodyButton.setBounds(header.removeFromRight(140));
-    engineChoice.setBounds(header.removeFromRight(240).reduced(2));
-    title.setBounds(header);
+    // Toolbar.
+    toolbarArea = area.removeFromTop(64);
+    auto bar = toolbarArea.reduced(12, 10);
+    auto engineBox = bar.removeFromLeft(220).withSizeKeepingCentre(220, 30);
+    referenceButton.setBounds(engineBox.removeFromLeft(110));
+    modalButton.setBounds(engineBox);
+    bar.removeFromLeft(12);
+    recordButton.setBounds(bar.removeFromLeft(130).withSizeKeepingCentre(130, 30));
+    bar.removeFromLeft(16);
+    auto level = bar.removeFromRight(170);
+    levelMeter.setBounds(level.withSizeKeepingCentre(170, 26));
+    bar.removeFromRight(14);
+    loadMeter.setBounds(bar.removeFromRight(250));
+    bar.removeFromRight(16);
+    pedalButton.setBounds(bar.removeFromRight(70).withSizeKeepingCentre(70, 30));
+    bar.removeFromRight(12);
+    const int sliderWidth = juce::jmax(140, (bar.getWidth() - 120) / 2);
+    volumeLabel.setBounds(bar.removeFromLeft(54));
+    volume.setBounds(bar.removeFromLeft(sliderWidth).withSizeKeepingCentre(sliderWidth, 28));
+    bar.removeFromLeft(10);
+    velocityLabel.setBounds(bar.removeFromLeft(58));
+    velocity.setBounds(bar.removeFromLeft(sliderWidth).withSizeKeepingCentre(sliderWidth, 28));
 
-    corpusStatus.setBounds(area.removeFromTop(22));
-    modalStatus.setBounds(area.removeFromTop(22));
-    progressBar.setBounds(area.removeFromTop(progressBar.isVisible() ? 16 : 0));
-    audioStatus.setBounds(area.removeFromTop(22));
-    noteStatus.setBounds(area.removeFromTop(22));
-    engineStatus.setBounds(area.removeFromTop(22));
-    area.removeFromTop(8);
+    // Status bar.
+    statusArea = area.removeFromBottom(26);
+    auto status = statusArea.reduced(12, 3);
+    if (progressBar.isVisible())
+        progressBar.setBounds(status.removeFromRight(220).reduced(0, 2));
+    statusRight.setBounds(status.removeFromRight(status.getWidth() / 2));
+    statusLeft.setBounds(status);
 
-    auto row = area.removeFromTop(28);
-    volumeLabel.setBounds(row.removeFromLeft(60));
-    volume.setBounds(row.removeFromLeft(240));
-    row.removeFromLeft(16);
-    velocityLabel.setBounds(row.removeFromLeft(60));
-    velocity.setBounds(row.removeFromLeft(240));
-    row.removeFromLeft(16);
-    keyLayout.setBounds(row.removeFromLeft(100).reduced(0, 2));
-    row.removeFromLeft(16);
-    sustainButton.setBounds(row.removeFromLeft(180));
-    wholeTakeButton.setBounds(row.removeFromLeft(300));
-    row.removeFromLeft(16);
-    peakArea = row.removeFromLeft(220).reduced(0, 4);
+    // Keyboard and its hint.
+    area.reduce(12, 0);
+    auto keys = area.removeFromBottom(juce::jlimit(120, 280, area.getHeight() - 118 - 12 - 26 - 16));
+    keyboard.setBounds(keys);
+    keyboard.setKeyWidth((float) keys.getWidth() / 52.0f); // 52 white keys from A0 to C8
+    area.removeFromBottom(4);
+    hint.setBounds(area.removeFromBottom(22));
 
-    area.removeFromTop(4);
-    row = area.removeFromTop(28);
-    restrikeLabel.setBounds(row.removeFromLeft(270));
-    restrikeFade.setBounds(row.removeFromLeft(300));
-    row.removeFromLeft(16);
-    sympatheticButton.setBounds(row.removeFromLeft(180));
-    heldKeysButton.setBounds(row.removeFromLeft(160));
-    pedalCatchButton.setBounds(row.removeFromLeft(190));
-    releaseNoiseButton.setBounds(row.removeFromLeft(140));
-
-    area.removeFromTop(4);
-    row = area.removeFromTop(28);
-    tuningLabel.setBounds(row.removeFromLeft(130));
-    referenceA4.setBounds(row.removeFromLeft(300));
-    row.removeFromLeft(12);
-    temperamentChoice.setBounds(row.removeFromLeft(220).reduced(0, 2));
-    row.removeFromLeft(8);
-    temperamentRoot.setBounds(row.removeFromLeft(90).reduced(0, 2));
-    row.removeFromLeft(24);
-    mirrorLabel.setBounds(row.removeFromLeft(100));
-    mirrorChoice.setBounds(row.removeFromLeft(300).reduced(0, 2));
-    row.removeFromLeft(8);
-    mirrorStatus.setBounds(row);
-
-    area.removeFromTop(2);
-    feedStatus.setBounds(area.removeFromTop(20));
-
-    area.removeFromTop(6);
-    row = area.removeFromTop(28);
-    saveTakeButton.setBounds(row.removeFromLeft(140).reduced(2));
-    takesFolderButton.setBounds(row.removeFromLeft(120).reduced(2));
-    row.removeFromLeft(8);
-    takeStatus.setBounds(row);
-
-    area.removeFromTop(6);
-    row = area.removeFromTop(28);
-    recordButton.setBounds(row.removeFromLeft(140).reduced(2));
-    recordMidiButton.setBounds(row.removeFromLeft(70));
-    recordWavButton.setBounds(row.removeFromLeft(70));
-    recordingsFolderButton.setBounds(row.removeFromLeft(140).reduced(2));
-    row.removeFromLeft(8);
-    recordStatus.setBounds(row);
+    // Dashboard.
+    area.removeFromTop(12);
+    auto cards = area.removeFromTop(juce::jmin(118, area.getHeight() - 8));
+    const int gap = 10, width = (cards.getWidth() - 3 * gap) / 4;
+    for (auto* card : { &engineCard, &noteCard, &audioCard, &sessionCard }) {
+        card->setBounds(cards.removeFromLeft(width));
+        cards.removeFromLeft(gap);
+    }
 }
 
 } // namespace pf::app

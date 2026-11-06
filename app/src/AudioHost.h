@@ -16,6 +16,20 @@
 
 namespace pf::app {
 
+/// How hard the audio thread works, measured on every callback (written by the audio thread, read by the
+/// interface): the time the callback takes against the time the block lasts. Above 100 % a block is late and the
+/// device plays a gap; long before that, the variations of the system can make one late.
+struct AudioLoad {
+    std::atomic<float> last { 0.0f };           // the last callback
+    std::atomic<float> peak { 0.0f };           // the highest since the interface last took it (exchange)
+    std::atomic<std::uint32_t> lateBlocks { 0 }; // callbacks longer than their block: the device missed audio
+    std::atomic<std::uint32_t> gaps { 0 };      // callbacks arriving more than 1.5 blocks after the previous one
+    std::atomic<std::uint64_t> callbacks { 0 };
+    std::atomic<double> loadSum { 0.0 };        // the loads added up (the interface averages its differences)
+    std::atomic<double> blockSeconds { 0.0 };   // the time one block lasts
+    std::atomic<float> peakLeft { 0.0f }, peakRight { 0.0f }; // output peaks since the interface last took them
+};
+
 /// Connects the audio device to the engine: gathers MIDI (connected keyboards, on-screen keyboard, UI
 /// commands), times it to the sample, hands it to the engine on every block, and records every event that
 /// reached the engine (lock-free) so that takes can be saved afterwards.
@@ -45,6 +59,8 @@ public:
         mirror.mainFormat(sampleRate, blockSize);
         feed.setFormat((std::uint32_t) std::lround(sampleRate), (std::uint32_t) std::max(blockSize, 1));
         samplesElapsed = 0;
+        lastCallbackTicks = 0;
+        load.blockSeconds = blockSize / std::max(sampleRate, 1.0);
         recordingRate = sampleRate;
         segment.fetch_add(1);
         ready = true;
@@ -60,6 +76,13 @@ public:
     std::uint32_t currentSegment() const noexcept { return segment.load(); }
     double currentRate() const noexcept { return recordingRate.load(); }
     std::uint32_t recordOverflows() const noexcept { return overflows.load(); }
+    AudioLoad load;
+    /// Message thread: the dropout counters back to zero.
+    void resetDropouts() noexcept
+    {
+        load.lateBlocks = 0;
+        load.gaps = 0;
+    }
 
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override
     {
@@ -75,6 +98,7 @@ public:
     void audioDeviceIOCallbackWithContext(const float* const*, int, float* const* outputs, int numOutputs, int n,
                                           const juce::AudioIODeviceCallbackContext&) override
     {
+        const auto startTicks = juce::Time::getHighResolutionTicks(); // QueryPerformanceCounter: no system call
         midi.clear();
         collector.removeNextBlockOfMessages(midi, n);
         keyboardState.processNextMidiBuffer(midi, 0, n, true);
@@ -103,10 +127,45 @@ public:
         live.push(outputs, numOutputs, n, samplesElapsed); // a copy into a lock-free FIFO: nothing waits on it
         mirror.push(outputs, numOutputs, n);               // likewise
         feed.write(outputs, numOutputs, n);                // the OBS plugin's feed: a copy into shared memory
+        notePeak(load.peakLeft, numOutputs > 0 ? outputs[0] : nullptr, n);
+        notePeak(load.peakRight, numOutputs > 1 ? outputs[1] : nullptr, n);
         samplesElapsed += n;
+        measure(startTicks, n);
     }
 
 private:
+    void measure(std::int64_t startTicks, int n) noexcept
+    {
+        const auto endTicks = juce::Time::getHighResolutionTicks();
+        const double tick = 1.0 / (double) juce::Time::getHighResolutionTicksPerSecond();
+        const double rate = recordingRate.load(std::memory_order_relaxed);
+        const double block = n / std::max(rate, 1.0);
+        const auto used = (float) ((double) (endTicks - startTicks) * tick / block);
+        load.last.store(used, std::memory_order_relaxed);
+        if (used > load.peak.load(std::memory_order_relaxed))
+            load.peak.store(used, std::memory_order_relaxed);
+        // A late block delays the next callback too: that gap is the same dropout, counted once.
+        if (lastCallbackTicks != 0 && !lastWasLate && (double) (startTicks - lastCallbackTicks) * tick > 1.5 * block + 0.002)
+            load.gaps.fetch_add(1, std::memory_order_relaxed);
+        lastWasLate = used > 1.0f;
+        if (lastWasLate)
+            load.lateBlocks.fetch_add(1, std::memory_order_relaxed);
+        lastCallbackTicks = startTicks;
+        load.loadSum.store(load.loadSum.load(std::memory_order_relaxed) + used, std::memory_order_relaxed); // one writer
+        load.callbacks.fetch_add(1, std::memory_order_release);
+    }
+
+    static void notePeak(std::atomic<float>& peak, const float* x, int n) noexcept
+    {
+        if (x == nullptr)
+            return;
+        float p = 0.0f;
+        for (int k = 0; k < n; ++k)
+            p = juce::jmax(p, std::abs(x[k]));
+        if (p > peak.load(std::memory_order_relaxed))
+            peak.store(p, std::memory_order_relaxed);
+    }
+
     static constexpr int kMaxEvents = 1024;
     static constexpr int kRecordCapacity = 1 << 16;
     pf::Engine& engine;
@@ -117,6 +176,8 @@ private:
     std::atomic<bool> ready { false };
 
     std::int64_t samplesElapsed = 0; // audio thread
+    std::int64_t lastCallbackTicks = 0; // audio thread
+    bool lastWasLate = false;           // audio thread
     std::atomic<double> recordingRate { 0.0 };
     std::atomic<std::uint32_t> segment { 0 };
     std::atomic<std::uint32_t> overflows { 0 };
