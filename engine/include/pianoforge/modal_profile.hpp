@@ -86,6 +86,16 @@ struct ModalProfile {
         std::vector<float> residual;             // interleaved stereo, at residualRate
         int residualFrames = 0;
         std::vector<Unison> unison;              // one per partial (empty: no model)
+        // The layer's measures (forge export, or measureLayers): the attack's mean square (its modes, soundboard
+        // and residual, mono, over its first attackSeconds, as recorded), and each partial's level as it sounds
+        // over the sustain (sustainFrom to sustainTo): the RMS of the sum of its modes, both channels averaged.
+        // That level is not the profile's (the sum of the modes' energies) where two strong modes of a partial
+        // cancel each other. 0 and empty: not measured.
+        float attackEnergy = 0.0f;
+        std::vector<float> sustainLevels;        // one per partial
+        // Each partial's level over the same window from its modes' energies alone, cross terms left out (the
+        // loader computes it, from the modes): where it is not sustainLevels', the partial's modes interfere.
+        std::vector<float> separateLevels;       // one per partial
     };
     struct Note {
         int midi = 0;
@@ -138,6 +148,9 @@ struct ModalProfile {
     int maxModesPerLayer = 0;
     int maxPartialsPerLayer = 0;
     std::uint64_t bytes = 0;
+    /// The windows of the layers' measures, in seconds from the note-on (0: the layers are not measured).
+    double attackSeconds = 0.0, sustainFrom = 0.0, sustainTo = 0.0;
+    bool measured() const noexcept { return attackSeconds > 0.0 && sustainTo > sustainFrom; }
 
     static constexpr std::array<float, 128> switchPedal() noexcept
     {
@@ -159,5 +172,10 @@ std::shared_ptr<const ModalProfile> loadModalProfile(const std::filesystem::path
 /// The same from the file's bytes, already in memory (`source` names them in the errors): for a build without a
 /// file system (WebAssembly), where the profile arrives as a download.
 std::shared_ptr<const ModalProfile> parseModalProfile(std::vector<char> bytes, const std::string& source, std::string& error);
+
+/// The layers' measures the forge exports (section LEVL), computed from the profile itself, over the given
+/// windows: for a profile built in code, and to check the forge's. Slow (seconds for a whole piano): not for the
+/// audio thread, nor for loading.
+void measureLayers(ModalProfile& profile, double attackSeconds = 0.06, double sustainFrom = 0.3, double sustainTo = 2.0);
 
 } // namespace pf

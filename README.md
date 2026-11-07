@@ -179,10 +179,10 @@ See `tools/bench/README.md`.
 | `forge analyze` | f0, inharmonicity, stretched tuning, decays per note; first profile (`physics.toml`). |
 | `forge modes` | Every partial resolved into its modes, the unison strings and their polarisations: beating and double decay (`modes-v064.json`). |
 | `forge soundboard` | The soundboard body: resonances shared by every note, amplitudes per note (`soundboard-v064.json`). Needs `forge modes`. The resonances are measured at velocity 64 and reused for the other velocities. |
-| `forge export` | The modal profile played by the engine (`modal-profile.bin`), from the modes and the soundboard of every measured velocity layer, the damper curves and the attack residuals. |
+| `forge export` | The modal profile played by the engine (`modal-profile.bin`), from the modes and the soundboard of every measured velocity layer, the damper curves and the attack residuals; and each layer's measures for the engine between two layers (section LEVL): the attack's energy as recorded, and each partial's level as it sounds over the sustain. A profile exported before them still plays, with the attack at the overall gain between two layers. |
 
-The modal profile of the reference corpus takes about 1.5 hours to measure (every velocity layer), then a minute
-to export:
+The modal profile of the reference corpus takes about 1.5 hours to measure (every velocity layer), then about a
+quarter of an hour to export (6 cores):
 
 ```
 for v in 8 16 24 32 40 48 56 64 72 80 88 96 104 112 120 127; do .venv/Scripts/forge modes --velocity $v; done

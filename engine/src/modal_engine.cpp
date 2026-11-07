@@ -14,6 +14,10 @@ namespace pf {
 
 namespace {
 
+constexpr double kTwoPi = 6.283185307179586;
+// A partial whose level as it sounds over the sustain (measured) differs from its modes' energies by more than this
+// (1 dB, in log): its modes interfere (between two layers, its poles are not moved).
+constexpr double kInterferingLog = 0.11512925464970229;
 constexpr double kFastFadeS = 0.015;     // cut, voice stealing: long enough to avoid a click
 constexpr float kSilentEnergy = 1.0e-10f; // -100 dB (amplitude 1e-5) for the sum of the modes: the voice is freed
 constexpr double kBodyFadeS = 0.02;       // the soundboard fading out under kBodySilentEnergy
@@ -177,6 +181,19 @@ struct NoDenormals {
 #endif
 };
 
+/// The energy over [from, to] of e^(-decay t) until `at`, e^(-moved (t - at)) times its value there after (a mode
+/// whose pole is moved at `at`, its sine left out).
+double movedEnergy(double decay, double moved, double at, double from, double to) noexcept
+{
+    auto span = [](double rate, double a, double b) { // integral of e^(-2 rate t) over [a, b]
+        if (b <= a)
+            return 0.0;
+        const double x = 2.0 * std::max(rate, 1e-9);
+        return (std::exp(-x * a) - std::exp(-x * b)) / x;
+    };
+    return span(decay, from, std::min(at, to)) + std::exp(-2.0 * decay * at) * span(moved, std::max(at, from) - at, to - at);
+}
+
 float interpolateLevel(float a, float b, double alpha) noexcept
 {
     if (a <= 0.0f || b <= 0.0f)
@@ -221,21 +238,34 @@ void ModalEngine::release() noexcept
 
 void ModalEngine::allocate()
 {
-    // Twice the largest layer: the unison model may add a mode for each one it moves (moveUnison).
-    const int capacity = owned != nullptr ? 2 * owned->maxModesPerLayer : 0;
+    // Three times the largest layer: the unison model may add a mode for each one it moves (moveUnison), and between
+    // two layers the partials only the other one has come in (with a re-strike's earlier vibration besides).
+    const int capacity = owned != nullptr ? 3 * owned->maxModesPerLayer : 0;
+    blendFreq.assign((std::size_t) (owned != nullptr ? owned->maxModesPerLayer : 0), 0.0);
+    blendScale.assign(blendFreq.size(), 1.0);
+    int partialModes = 0;
+    if (owned != nullptr)
+        for (const auto& note : owned->notes)
+            for (const auto& layer : note.layers)
+                for (const auto& part : layer.partials)
+                    partialModes = std::max(partialModes, part.modeCount);
+    logDecays.assign((std::size_t) partialModes, 0.0);
     // (A partial has at least one mode: a profile that does not say how many partials it has at most is covered.)
     const int partials = owned != nullptr ? std::max(owned->maxPartialsPerLayer, owned->maxModesPerLayer) : 0;
     for (auto& v : voices) {
         v.active = false;
         v.tails.fill({}); // (they point into the profile)
         v.mergeAt = -1;
+        v.repoleAt = -1;
         v.modeNumber.clear();
         v.modeNumber.reserve((std::size_t) capacity);
+        v.targetPole.clear();
+        v.targetPole.reserve((std::size_t) capacity);
         if (v.bank.capacity() < capacity)
             v.bank.reserve(capacity);
         v.bank.clear();
         v.ramps.clear();
-        v.ramps.reserve((std::size_t) partials);
+        v.ramps.reserve((std::size_t) (2 * partials)); // (the other layer's partials, between two layers)
         v.ramp = Ramp::none;
         v.fades.clear();
         v.fades.reserve((std::size_t) partials);
@@ -315,6 +345,7 @@ double ModalEngine::tuningRatio(int note) const noexcept
 ModalEngine::Settings ModalEngine::settings() const noexcept
 {
     Settings s;
+    s.blendLayers = blendLayers.load();
     s.restrikeAbsorption = restrikeAbsorption.load();
     s.body = bodyEnabled.load();
     s.residual = residualEnabled.load();
@@ -332,6 +363,7 @@ ModalEngine::Settings ModalEngine::settings() const noexcept
 
 void ModalEngine::applySettings(const Settings& s) noexcept
 {
+    blendLayers = s.blendLayers;
     restrikeAbsorption = std::clamp(s.restrikeAbsorption, 0.0f, 0.99f);
     bodyEnabled = s.body;
     residualEnabled = s.residual;
@@ -556,6 +588,12 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
         overall = (float) std::max(0.05, std::pow(10.0, -dbPerStep * (layers.front().velocity - velocity) / 20.0));
     }
     overall = std::clamp(overall, 0.0f, kMaxGain);
+    // Between two layers (blendLayers): how far toward the other layer (0 to 0.5), and the weights, in amplitude, of
+    // a partial only the lower layer has (1 - alpha) or only the upper one (alpha).
+    const bool blend = &near != &other && alpha > 0.0 && alpha < 1.0 && blendLayers.load(std::memory_order_relaxed)
+                    && blendFreq.size() >= near.modes.size();
+    const double toward = nearA ? alpha : 1.0 - alpha;
+    const float nearOnly = (float) (nearA ? 1.0 - alpha : alpha), otherOnly = (float) (nearA ? alpha : 1.0 - alpha);
 
     // The note's string. Struck again while it rings: what it plays now (its output envelope folded in) is kept,
     // to be carried into the new strike once its modes are in place; the previous strike's residual plays on.
@@ -594,7 +632,9 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
 
     v.bank.clear();
     v.modeNumber.clear();
+    v.targetPole.clear();
     v.mergeAt = -1;
+    v.repoleAt = -1;
     v.ramps.clear();
     v.fades.clear();
     v.slots.clear();
@@ -614,43 +654,101 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     const double soft = std::clamp((double) softPedal, 0.0, 1.0);
     const bool moved = soft > 0.0 || std::abs(spread - 1.0) > 1e-6;
     const int noteStrings = stringsOf(note);
-    std::size_t j = 0; // walks the other layer's partials (both ascending)
-    std::size_t partIndex = 0;
-    for (const auto& part : near.partials) {
-        const std::size_t pi = partIndex++;
-        while (j < other.partials.size() && other.partials[j].number < part.number)
-            ++j;
-        float g = overall;
-        if (&near != &other && j < other.partials.size() && other.partials[j].number == part.number
-            && part.level > 0.0f && other.partials[j].level > 0.0f) {
-            const float wanted = nearA ? interpolateLevel(part.level, other.partials[j].level, alpha)
-                                       : interpolateLevel(other.partials[j].level, part.level, alpha);
-            g = std::clamp(wanted / part.level, kMinGain * overall, kMaxGain * overall);
+
+    // Between two layers: each mode's pole moved toward the other layer's mode of the partial nearest to it (taken
+    // once the attack's ramp is over), and the attack's gain: over the residual the strike can only change as a whole
+    // (the residual cancels the modes extrapolated back to the note-on), so one gain, bringing its energy to the one
+    // interpolated (in dB) between the layers' attacks as recorded. (A filter would shape the attack's timbre too,
+    // but filtering the modes by their response at their poles misses the filter's own transient, as large as the
+    // modes extrapolated to the note-on: the cancellation would go.)
+    // The layers' measures (profile section LEVL): without them, the overall gain over the attack and the
+    // profile's levels after it.
+    const bool measured = p.measured();
+    auto sustainOf = [&](const ModalProfile::Layer& layer, std::size_t partial) {
+        return measured && partial < layer.sustainLevels.size() ? layer.sustainLevels[partial] : 0.0f;
+    };
+    // A partial whose modes interfere: moving their frequencies would change their beating (modes that nearly cancel
+    // each other might not, moved), and its level with them.
+    auto interferes = [&](const ModalProfile::Layer& layer, std::size_t partial) {
+        if (!measured || partial >= layer.sustainLevels.size() || partial >= layer.separateLevels.size())
+            return false;
+        const float together = layer.sustainLevels[partial], apart = layer.separateLevels[partial];
+        return together > 0.0f && apart > 0.0f && std::abs(std::log((double) together / apart)) > kInterferingLog;
+    };
+    float attackGain = overall;
+    if (blend) {
+        std::size_t o = 0, index = 0;
+        for (const auto& part : near.partials) {
+            const std::size_t pi = index++;
+            while (o < other.partials.size() && other.partials[o].number < part.number)
+                ++o;
+            const bool shared = o < other.partials.size() && other.partials[o].number == part.number
+                             && other.partials[o].modeCount <= (int) logDecays.size() && !interferes(near, pi);
+            // The poles: each mode toward the other layer's mode of this partial nearest to it (in frequency, then
+            // decay: the other partial's log decays once); a partial whose modes interfere keeps its own.
+            const auto* op = shared ? &other.partials[o] : nullptr;
+            if (op != nullptr)
+                for (int q = 0; q < op->modeCount; ++q)
+                    logDecays[(std::size_t) q] = std::log(std::max(other.modes[(std::size_t) (op->firstMode + q)].decay, 1e-3));
+            for (int k = 0; k < part.modeCount; ++k) {
+                const auto mi = (std::size_t) (part.firstMode + k);
+                const auto& m = near.modes[mi];
+                blendFreq[mi] = 0.0;
+                blendScale[mi] = 1.0;
+                if (op == nullptr)
+                    continue;
+                const double logDecay = std::log(std::max(m.decay, 1e-3)), perHz = 1000.0 / std::max(m.freq, 1.0);
+                int best = -1;
+                double bestDistance = 1e300;
+                for (int q = 0; q < op->modeCount; ++q) {
+                    const double d = std::abs(other.modes[(std::size_t) (op->firstMode + q)].freq - m.freq) * perHz
+                                   + std::abs(logDecays[(std::size_t) q] - logDecay);
+                    if (d < bestDistance) {
+                        bestDistance = d;
+                        best = q;
+                    }
+                }
+                if (best >= 0) {
+                    blendFreq[mi] = toward * (other.modes[(std::size_t) (op->firstMode + best)].freq - m.freq);
+                    blendScale[mi] = std::exp(toward * (logDecays[(std::size_t) best] - logDecay));
+                }
+            }
         }
-        const int first = v.bank.size();
-        bool complete = true;
-        for (int k = 0; k < part.modeCount; ++k)
-            complete = complete && near.modes[(std::size_t) (part.firstMode + k)].freq * tuning < nyquist;
-        // A partial with a mode past Nyquist (inaudible) is not ramped: its bank modes would not map back.
-        const bool ramp = ramped && complete && std::abs(g - overall) > 1e-4f * overall
-                          && v.ramps.size() < v.ramps.capacity();
-        const float start = ramp ? overall : g;
-        // The soft pedal and the unison tuning: the modes of the partial's unison model moved (see moveUnison), the
-        // softer felt, or without a model the strings struck in proportion. Otherwise the measured modes.
+        if (measured && near.attackEnergy > 0.0f) {
+            const double wanted = interpolateLevel(la.attackEnergy, lb.attackEnergy, alpha);
+            attackGain = (float) std::clamp(std::sqrt(wanted / near.attackEnergy), 0.1, 10.0);
+        }
+    }
+    auto addModes = [&](const ModalProfile::Layer& layer, std::size_t pi, const auto& part, float start, bool movePoles) {
         UnisonMove move;
         float common = 1.0f;
         if (moved) {
             if (soft > 0.0)
                 common = (float) std::pow(10.0, -soft * kSoftFeltDbPerOctave * std::log2((double) std::max(1, part.number)) / 20.0);
-            const auto* u = pi < near.unison.size() ? &near.unison[pi] : nullptr;
+            const auto* u = pi < layer.unison.size() ? &layer.unison[pi] : nullptr;
             if (u != nullptr && u->strings >= 2)
-                moveUnison(*u, near.modes.data() + part.firstMode, spread, soft, move);
+                moveUnison(*u, layer.modes.data() + part.firstMode, spread, soft, move);
             else if (noteStrings >= 2 && soft > 0.0)
                 common *= (float) ((noteStrings - soft) / noteStrings);
         }
         const float scaled = start * common;
+        auto push = [&](double freq, double decay, std::complex<float> l, std::complex<float> r, double df, double ds) {
+            const auto pole = modePole(freq * tuning, decay, sampleRate);
+            if (!v.bank.add(pole, l * scaled, r * scaled))
+                return;
+            v.modeNumber.push_back(part.number);
+            // The moved pole: the measured one times e^z, z = (-(its decay's change) + 2 pi i (its frequency's)) / fs,
+            // tiny (its series, rather than an exponential per mode; the bank keeps its poles in single precision).
+            const std::complex<double> z(-(std::max(0.01, decay * ds) - decay), kTwoPi * df * tuning);
+            const auto step = z / sampleRate;
+            const auto factor = std::abs(step) < 1e-2 ? 1.0 + step * (1.0 + step / 2.0 * (1.0 + step / 3.0 * (1.0 + step / 4.0)))
+                                                      : std::exp(step);
+            v.targetPole.push_back(std::complex<float>(df == 0.0 && ds == 1.0 ? pole : pole * factor));
+        };
         for (int k = 0; k < part.modeCount; ++k) {
-            const auto& m = near.modes[(std::size_t) (part.firstMode + k)];
+            const auto mi = (std::size_t) (part.firstMode + k);
+            const auto& m = layer.modes[mi];
+            const double df = movePoles ? blendFreq[mi] : 0.0, ds = movePoles ? blendScale[mi] : 1.0;
             if (m.freq * tuning >= nyquist)
                 continue;
             std::complex<float> l = m.left, r = m.right;
@@ -661,18 +759,69 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
                     l = apart ? move.keepL[q] : move.keepL[q] + move.movedL[q];
                     r = apart ? move.keepR[q] : move.keepR[q] + move.movedR[q];
                     if (apart && v.bank.size() < v.bank.capacity() - 1) { // the model's part, on its moved pole
-                        v.bank.add(modePole((m.freq + move.dFreq[q]) * tuning, std::max(0.01, m.decay + move.dDecay[q]), sampleRate),
-                                   move.movedL[q] * scaled, move.movedR[q] * scaled);
+                        push(m.freq + move.dFreq[q], std::max(0.01, m.decay + move.dDecay[q]), move.movedL[q], move.movedR[q], df, ds);
                         shift = move.dFreq[q];
                     }
                 }
-            v.bank.add(modePole((m.freq + shift) * tuning, m.decay, sampleRate), l * scaled, r * scaled);
+            push(m.freq + shift, m.decay, l, r, df, ds);
         }
-        while ((int) v.modeNumber.size() < v.bank.size()) // the partial of each mode just added
-            v.modeNumber.push_back(part.number);
+    };
+    std::size_t j = 0; // walks the other layer's partials (both ascending)
+    std::size_t partIndex = 0;
+    for (const auto& part : near.partials) {
+        const std::size_t pi = partIndex++;
+        while (j < other.partials.size() && other.partials[j].number < part.number)
+            ++j;
+        float g = overall;
+        const bool shared = j < other.partials.size() && other.partials[j].number == part.number;
+        // Between two layers: what moving its poles (once the ramp is over) does to the partial's level over the
+        // sustain (without the measures, over the first second, as the profile's levels), from its modes' energies
+        // (its modes do not interfere: those of a partial whose modes do are not moved).
+        double poleShift = 1.0;
+        const float nearSustain = sustainOf(near, pi);
+        if (blend && shared && !interferes(near, pi)) {
+            const double tr = (double) (residualEnd + rampLength) / sampleRate;
+            const double from = measured ? p.sustainFrom : 0.0, to = measured ? p.sustainTo : 1.0;
+            double e0 = 0.0, e1 = 0.0; // the modes' energies, measured and moved poles
+            for (int k = 0; k < part.modeCount; ++k) {
+                const auto mi = (std::size_t) (part.firstMode + k);
+                const auto& m = near.modes[mi];
+                const double a2 = (double) std::norm(m.left) + (double) std::norm(m.right);
+                if (!measured)
+                    e0 += a2 * movedEnergy(m.decay, m.decay, tr, from, to);
+                e1 += a2 * movedEnergy(m.decay, m.decay * blendScale[mi], tr, from, to);
+            }
+            if (measured && pi < near.separateLevels.size()) // the same energies, measured poles (as the loader's)
+                e0 = 4.0 * (to - from) * (double) near.separateLevels[pi] * near.separateLevels[pi];
+            if (e0 > 0.0 && e1 > 0.0)
+                poleShift = std::sqrt(e1 / e0);
+        }
+        if (&near != &other && shared && part.level > 0.0f && other.partials[j].level > 0.0f) {
+            // In dB between the two layers' levels as the partial sounds over the sustain (the profile's levels
+            // without them); the nearer layer's partial brought to it, its poles moved.
+            float nearLevel = part.level, otherLevel = other.partials[j].level;
+            if (const float t = sustainOf(other, j); nearSustain > 0.0f && t > 0.0f) {
+                nearLevel = nearSustain;
+                otherLevel = t;
+            }
+            const float wanted = nearA ? interpolateLevel(nearLevel, otherLevel, alpha) : interpolateLevel(otherLevel, nearLevel, alpha);
+            g = std::clamp((float) (wanted / nearLevel / poleShift), kMinGain * overall, kMaxGain * overall);
+        } else if (blend && !shared) {
+            g = overall * nearOnly; // a partial the other layer lacks fades out toward it
+        }
+        const int first = v.bank.size();
+        bool complete = true;
+        for (int k = 0; k < part.modeCount; ++k)
+            complete = complete && near.modes[(std::size_t) (part.firstMode + k)].freq * tuning < nyquist;
+        // A partial with a mode past Nyquist (inaudible) is not ramped: its bank modes would not map back. Between two
+        // layers, the attack is the nearer layer's strike at the attack's gain.
+        const double from = blend ? (double) attackGain : (double) overall;
+        const bool ramp = ramped && complete && std::abs(g - from) > 1e-4 * from && v.ramps.size() < v.ramps.capacity();
+        const float start = blend ? (ramped ? attackGain : g) : ramp ? overall : g;
+        addModes(near, pi, part, start, blend && shared);
         if (ramp)
             v.ramps.push_back({ first, v.bank.size() - first, part.firstMode,
-                                (float) std::pow((double) g / overall, 1.0 / (double) rampLength) });
+                                (float) std::pow((double) g / from, 1.0 / (double) rampLength) });
         if (v.bank.size() == first || v.slots.size() == v.slots.capacity())
             continue;
         v.slots.push_back({ first, v.bank.size() - first, part.number, p.dampers.groupOf(part.number), false });
@@ -689,6 +838,25 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     // The earlier vibration under the hammer: its modes after the new strike's, those of partials the new strike
     // lacks first (they stay), then the others (they join it at the contact's end); all of them losing the
     // absorbed energy over the contact, smoothly (no step in the waveform).
+    // Between two layers: the partials only the other layer has come in over the ramp, from -60 dB (their attack is
+    // its residual's business: extrapolated back to the note-on, they would sound a burst), as that layer has them.
+    if (blend) {
+        const float otherGain = std::clamp(interpolateLevel(la.level, lb.level, alpha) / std::max(other.level, 1e-20f), 0.0f, kMaxGain)
+                              * otherOnly;
+        constexpr float kQuiet = 1e-3f;
+        std::size_t index = 0, w = 0;
+        for (const auto& part : other.partials) {
+            const std::size_t pi = index++;
+            while (w < near.partials.size() && near.partials[w].number < part.number)
+                ++w;
+            if ((w < near.partials.size() && near.partials[w].number == part.number) || v.ramps.size() == v.ramps.capacity())
+                continue;
+            const int first = v.bank.size();
+            addModes(other, pi, part, ramped ? otherGain * kQuiet : otherGain, false);
+            if (ramped && v.bank.size() > first)
+                v.ramps.push_back({ first, v.bank.size() - first, part.firstMode, (float) std::pow(1.0 / kQuiet, 1.0 / (double) rampLength) });
+        }
+    }
     if (!carriedModes.empty()) {
         auto hasSlot = [&](int number) {
             for (const auto& slot : v.slots)
@@ -704,6 +872,7 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
                 if (hasSlot(mode.number) == (pass == 1) && v.bank.size() < v.bank.capacity()) {
                     v.bank.add(std::complex<double>(mode.pole.real(), mode.pole.imag()), mode.left, mode.right);
                     v.modeNumber.push_back(mode.number);
+                    v.targetPole.push_back(mode.pole);
                 }
         }
         const auto contact = std::max<std::int64_t>(1, (std::int64_t) std::llround(kContactSeconds * sampleRate));
@@ -717,11 +886,12 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     v.ramp = v.ramps.empty() ? Ramp::none : Ramp::waiting;
     v.rampStart = residualEnd;
     v.rampEnd = residualEnd + rampLength;
+    v.repoleAt = blend ? v.rampEnd : -1; // between two layers: the moved poles once the ramp is over
 
     if (bodyEnabled.load(std::memory_order_relaxed) && body.size() == (int) near.bodyLeft.size()) {
         // The overall gain, like the residual: the fast resonances extrapolated back to the note-on are cancelled
         // by the residual only at the same gain. (Against the strings, the body hardly changes between layers.)
-        const float gb = overall;
+        const float gb = blend ? attackGain : overall;
         if (bodyDecay < 1.0f) { // the body was fading out (all sound off): start again from silence
             body.silence();
             bodyDecay = bodyGain = 1.0f;
@@ -741,7 +911,7 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     v.layer = &near;
     v.residualPos = 0.0;
     v.residualStep = p.residualRate / sampleRate * tuning;
-    v.residualGain = residualEnabled.load(std::memory_order_relaxed) ? overall : 0.0f;
+    v.residualGain = residualEnabled.load(std::memory_order_relaxed) ? (blend ? attackGain : overall) : 0.0f;
     v.gain = v.decay = 1.0f;
     v.curveGain = 1.0f;
     v.curvePos = 0.0;
@@ -1006,6 +1176,13 @@ void ModalEngine::renderBank(Voice& v, float* left, float* right, int n) noexcep
                 v.bank.setPoleFactor(ramp.first, ramp.count, 1.0f); // the exact poles back
             v.ramp = Ramp::none;
         }
+        if (v.repoleAt >= 0 && at >= v.repoleAt && v.ramp != Ramp::running) { // between two layers: the moved poles
+            for (int k = 0; k < v.bank.size() && k < (int) v.targetPole.size(); ++k) {
+                const auto t = v.targetPole[(std::size_t) k];
+                v.bank.setPole(k, std::complex<double>(t.real(), t.imag()));
+            }
+            v.repoleAt = -1;
+        }
         // Fades are never earlier than the ramp's end (noteOn), so the exact poles are back before they apply.
         while (v.ramp == Ramp::none && v.nextFade < v.fades.size() && v.fades[v.nextFade].at <= at) {
             auto& slot = v.slots[(std::size_t) v.fades[v.nextFade++].slot];
@@ -1015,6 +1192,8 @@ void ModalEngine::renderBank(Voice& v, float* left, float* right, int n) noexcep
         std::int64_t chunk = n - done;
         if (v.mergeAt >= 0)
             chunk = std::min(chunk, v.mergeAt - at);
+        if (v.repoleAt >= 0 && v.repoleAt > at)
+            chunk = std::min(chunk, v.repoleAt - at);
         if (v.ramp == Ramp::waiting)
             chunk = std::min(chunk, v.rampStart - at);
         else if (v.ramp == Ramp::running)
@@ -1055,6 +1234,7 @@ void ModalEngine::mergeEarlier(Voice& v) noexcept
     }
     v.bank.truncate(v.mergeFirst);
     v.modeNumber.resize((std::size_t) std::min<int>(v.mergeFirst, (int) v.modeNumber.size()));
+    v.targetPole.resize((std::size_t) std::min<int>(v.mergeFirst, (int) v.targetPole.size()));
     v.mergeAt = -1;
 }
 

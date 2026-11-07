@@ -65,6 +65,12 @@ Binary format (little endian), modal-profile.bin:
                       velocities x P x (f32 left re, left im, right re, right im) amplitudes at the release; then
                       u32 holds, holds x f32 hold s, holds x f32 dB (the level after that hold against the one kept;
                       absent from older profiles)
+                LEVL  the layers' measures, for the engine between two layers: f32 attack window s, f32 sustain
+                      window from s, f32 to s, u32 notes, then per note u32 midi, u32 layers, then per layer u32
+                      velocity, f32 attack mean square (its modes, soundboard and residual, mono, over the attack
+                      window, as the engine plays them), u32 partials (those of the layer, in order), partials x f32
+                      RMS of the partial over the sustain window (the sum of its modes, cross terms included: two
+                      strong modes of a partial may cancel each other), both channels averaged
 Convention: x_c(t) = Re(a_c exp((-decay + 2 pi i freq) t)), t in seconds from the note-on.
 The profile is calibrated on a commercial library: it stays in the corpus folder and is never published.
 """
@@ -94,6 +100,8 @@ BODY_WINDOWS_S = (0.3, 1.0, soundboard.T1)  # ends of the windows where the body
 BODY_MARGIN_DB = 3.0    # how much louder than the take (besides the strings) the body may be, per band and window
 FADE_EXCESS_DB, FADE_EXCESS_S = 6.0, 1.0  # past its window, a partial louder than the take by this, this long, fades
 FADE_HOLD_MARGIN_S = 0.5                    # a window ending this close to the end of the hold ran to it
+ATTACK_S = 0.06             # the layers' measures (section LEVL): the attack's window ...
+SUSTAIN_S = (0.3, 2.0)      # ... and the sustain's, seconds from the note-on
 
 
 def velocities(corpus: Path) -> list[int]:
@@ -144,6 +152,48 @@ def residual(path: Path, note: dict, body_freqs, body_decays, body_amps) -> tupl
     fade = int(round(RESIDUAL_FADE_S * fs))
     r[:, n - fade:] *= 0.5 * (1 + np.cos(np.linspace(0, np.pi, fade)))
     return r.T, fs
+
+
+def layer_measures(note: dict, r: np.ndarray, fs: float, body_freqs, body_decays, body_amps) -> tuple[float, list[float]]:
+    """The layer's measures (section LEVL), as the engine's pf::measureLayers computes them from the profile: the
+    attack's mean square (its modes, soundboard and residual, mono, over the first ATTACK_S, past Nyquist left
+    out) and each partial's RMS over SUSTAIN_S (the sum of its modes, in closed form, both channels averaged)."""
+    partials = [p for p in note["partials"] if p["modes"]]
+    n = max(1, int(round(ATTACK_S * fs)))
+    t = np.arange(n) / fs
+    x = np.zeros(n)
+    k = min(n, r.shape[0])
+    x[:k] = r[:k].mean(axis=1)
+    modes = np.array([m for p in partials for m in p["modes"]], dtype=float).reshape(-1, 6)
+    freqs = np.concatenate([modes[:, 0], np.asarray(body_freqs, dtype=float)])
+    decays = np.concatenate([modes[:, 1], np.asarray(body_decays, dtype=float)])
+    amps = np.concatenate([0.5 * (modes[:, 2] + modes[:, 4] + 1j * (modes[:, 3] + modes[:, 5])),
+                           0.5 * (np.asarray(body_amps)[0] + np.asarray(body_amps)[1])])
+    keep = freqs < 0.5 * fs
+    freqs, decays, amps = freqs[keep], decays[keep], amps[keep]
+    for i in range(0, len(freqs), 64):  # in chunks: 64 modes x the window at a time
+        s = -decays[i:i + 64, None] + 2j * np.pi * freqs[i:i + 64, None]
+        x += np.real(amps[i:i + 64, None] * np.exp(s * t[None, :])).sum(axis=0)
+    attack = float(np.mean(x * x))
+
+    t0, t1 = SUSTAIN_S
+
+    def integral(z: np.ndarray) -> np.ndarray:  # of e^(z t) over [t0, t1]
+        small = np.abs(z) < 1e-9
+        safe = np.where(small, 1.0, z)
+        return np.where(small, t1 - t0, (np.exp(safe * t1) - np.exp(safe * t0)) / safe)
+
+    levels = []
+    for p in partials:
+        m = np.asarray(p["modes"], dtype=float).reshape(-1, 6)
+        z = -m[:, 1] + 2j * np.pi * m[:, 0]
+        left, right = m[:, 2] + 1j * m[:, 3], m[:, 4] + 1j * m[:, 5]
+        same = integral(z[:, None] + z[None, :])
+        cross = integral(z[:, None] + np.conj(z)[None, :])
+        e = 0.25 * np.real((np.outer(left, left) + np.outer(right, right)) * same
+                           + (np.outer(left, left.conj()) + np.outer(right, right.conj())) * cross).sum()
+        levels.append(float(np.sqrt(max(e, 0.0) / (t1 - t0))))
+    return attack, levels
 
 
 def limit_body(path: Path, note: dict, freqs: np.ndarray, decays: np.ndarray, amps: np.ndarray,
@@ -249,7 +299,8 @@ def _layer_task(args) -> dict:
     amps, lowered = limit_body(path, note, freqs, decays, np.asarray(body[2]), residual_seconds(note))
     r, fs = residual(path, note, freqs, decays, amps)  # with the body as it will be played
     return {"midi": note["midi"], "velocity": note["velocity"], "residual": r, "fs": fs, "body": amps,
-            "lowered": lowered, "fades": fade_times(path, note)}
+            "lowered": lowered, "fades": fade_times(path, note),
+            "measures": layer_measures(note, r, fs, freqs, decays, amps)}
 
 
 def _unison_task(args) -> tuple[int, int, list]:
@@ -453,6 +504,14 @@ def run(corpus: Path, jobs: int = 0) -> list[Path]:
         payload.append(struct.pack("<2I", m, len(present)))
         payload += [unison.layer_bytes(v, tables[(m, v)]) for v in present]
     out.append(section(b"UNIS", b"".join(payload)))
+    # The layers' measures, from the residuals and the modes just written.
+    payload = [struct.pack("<3fI", ATTACK_S, SUSTAIN_S[0], SUSTAIN_S[1], len(midis))]
+    for m, present in notes.items():
+        payload.append(struct.pack("<2I", m, len(present)))
+        for v in present:
+            attack, levels = residuals[(m, v)]["measures"]
+            payload.append(struct.pack("<IfI", v, attack, len(levels)) + np.asarray(levels, dtype="<f4").tobytes())
+    out.append(section(b"LEVL", b"".join(payload)))
     fitted = [t for table in tables.values() for t in table if t is not None]
     total = sum(1 for (m, _), table in tables.items() if unison.strings_of(m) > 1 for _ in table)
     print(f"  coupled strings: {len(fitted)} of {total} partials of the notes with 2 or 3 strings ({time.time() - start:.0f} s)")

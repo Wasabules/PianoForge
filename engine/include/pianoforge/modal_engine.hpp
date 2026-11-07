@@ -15,12 +15,24 @@ namespace pf {
 /// The modal engine: every note is a bank of resonators measured on the reference (forge export), played from
 /// the note-on with no sample playback except a short attack residual.
 ///
-/// - Velocity: the nearest velocity layer is played, as it was measured (a real strike, with its own beating);
-///   each partial's level is interpolated between the two layers around the velocity, so that loudness and
-///   timbre follow the velocity continuously (studies/velocity_linearity.py).
-///   The attack stays the nearest layer's strike: over the attack residual, everything (modes, body, residual)
-///   has the one overall gain, since the residual cancels the modes extrapolated back to the note-on and only
-///   does so at the same gain. Each partial then reaches its own level over kLevelRampSeconds.
+/// - Velocity: the nearest velocity layer is played, its strike as measured; two layers are two strikes whose
+///   partials' phases are unrelated (adding them would cancel some partials and reinforce others, by velocity).
+///   Over the attack residual, the strike can only change as a whole: the residual cancels the modes extrapolated
+///   back to the note-on (16 to 32 dB over the recording in the first 5 ms), and only at the same gain and phase.
+///   Between two layers (blendLayers), the whole strike (modes, residual, soundboard's excitation) therefore takes
+///   one gain, which brings the attack's energy (as recorded, the profile's measure: its first attackSeconds) to
+///   the one interpolated (in dB) between the two layers' attacks: the attack's loudness follows the velocity, its
+///   timbre stays the nearer layer's (it steps where the nearer layer changes, as the reference's does at its own
+///   layers). After the residual, each partial reaches its level interpolated between the layers' over
+///   kLevelRampSeconds (the levels as the partial sounds over the sustain, the profile's measures: where two strong
+///   modes of a partial cancel each other, far under the sum of their energies), then each mode takes the frequency
+///   and decay moved toward the other layer's mode of the same partial nearest to it (decay in log; the partial's
+///   level corrected for it, from its modes' energies), but for a partial whose modes interfere (moved, their
+///   beating would change, and the level with it), which keeps its poles; partials only the other layer has come in
+///   over that ramp (from -60 dB), those only the nearer has fade out toward the other. At a layer's velocity, that
+///   layer exactly. Without blendLayers: the nearest layer at the overall gain over the attack, then each partial
+///   at its interpolated level (studies/velocity_linearity.py). A profile without the layers' measures (older than
+///   section LEVL): the overall gain over the attack, the profile's levels after it.
 /// - Soundboard: one bank of resonances shared by every note; a note-on adds its excitation to it, at the
 ///   overall gain (the body is in the residual too).
 /// - Past its analysis window, where the forge found the recording far under the modes, a partial is faded out
@@ -84,6 +96,9 @@ public:
 
     // Settings, read on every block or note-on.
     std::atomic<float> outputGain { 1.0f };
+    /// Velocity: between two layers, the attack's loudness, the partials' levels, frequencies and decays follow it
+    /// (see above); off, the nearest layer at the overall gain, its partials' levels interpolated after the attack.
+    std::atomic<bool> blendLayers { true };
     /// A re-strike: the share of the string's vibration energy the hammer absorbs (0: the strikes add exactly).
     std::atomic<float> restrikeAbsorption { kDefaultRestrikeAbsorption };
     std::atomic<bool> bodyEnabled { true }, residualEnabled { true };
@@ -105,6 +120,7 @@ public:
     /// Every setting above but the output gain, as one value: for another engine (the offline render of a take) to
     /// sound exactly as this one does.
     struct Settings {
+        bool blendLayers = true;
         float restrikeAbsorption = kDefaultRestrikeAbsorption;
         bool body = true, residual = true, sympathetic = true, heldKeys = true;
         float sympatheticGain = 1.0f;
@@ -179,6 +195,10 @@ private:
         double residualStep = 1.0;     // residual frames per output sample (rates and tuning)
         float residualGain = 1.0f;
         std::array<Tail, kTails> tails {}; // earlier strikes' residuals
+        // Between two layers: each mode's pole once the ramp is over (exact, as the bank's), set at repoleAt
+        // (samples since the note-on).
+        std::vector<std::complex<float>> targetPole;
+        std::int64_t repoleAt = -1;
         std::vector<int> modeNumber;       // the partial of every mode in the bank (reserved with it)
         // A re-strike under way: until mergeAt (samples since the note-on), the earlier vibration's modes, those of
         // partials the new strike lacks [keepFirst, mergeFirst) then the others [mergeFirst, end), lose energy to
@@ -219,6 +239,8 @@ private:
     std::array<float, 128> driveGain {}, driveExponent {}; // per note: the drive's gain and velocity exponent
     std::vector<Voice> voices = std::vector<Voice>(kMaxVoices); // on the heap: 128 voices are too big for a stack
     std::vector<Carried> carriedModes; // a re-strike's (allocated with the voices)
+    std::vector<double> blendFreq, blendScale; // a strike's moved poles, per mode of the nearer layer (scratch)
+    std::vector<double> logDecays; // a partial's log decays (scratch, as many as the profile's largest partial has modes)
     ModeBank body;
     float bodyGain = 1.0f, bodyDecay = 1.0f;
     bool bodyActive = false;

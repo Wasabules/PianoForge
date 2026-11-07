@@ -88,9 +88,12 @@ int main(int argc, char** argv)
 {
     bool body = true, residual = true, sympathetic = true, heldKeys = true, pedalCatch = true, releaseNoise = true; // options
     double soft = 0.0, unison = 1.0, absorb = -1.0;
+    bool nearest = false;
     int kept = 1;
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--absorb") == 0 && i + 1 < argc)
+        if (std::strcmp(argv[i], "--nearest") == 0)
+            nearest = true;
+        else if (std::strcmp(argv[i], "--absorb") == 0 && i + 1 < argc)
             absorb = std::atof(argv[++i]);
         else if (std::strcmp(argv[i], "--soft") == 0 && i + 1 < argc)
             soft = std::atof(argv[++i]);
@@ -117,6 +120,7 @@ int main(int argc, char** argv)
                              "                    [--no-body] [--no-residual] [--soft <0..1>] [--unison <spread>]\n"
                              "       modal_render <profile> events <out.wav> <events.txt> <seconds> [rate]\n"
                              "                    [--no-sympathetic] [--no-held-keys] [--no-catch] [--no-release-noise]\n"
+                             "                    [--absorb <0..1>] [--nearest: the nearest layer, not blended]\n"
                              "       modal_render <profile> bench [voices] [rate] [block]\n");
         return 2;
     }
@@ -137,6 +141,7 @@ int main(int argc, char** argv)
     engine.unisonSpread = (float) unison;
     if (absorb >= 0.0)
         engine.restrikeAbsorption = (float) absorb;
+    engine.blendLayers = !nearest;
     const std::string mode = argv[2];
 
     if (mode == "events" && argc >= 6) {

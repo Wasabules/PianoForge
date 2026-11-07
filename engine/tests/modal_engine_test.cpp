@@ -175,12 +175,13 @@ int main()
         check(e.lastLayerVelocity.load() == 100 && e.activeVoices.load() == 1, "the nearest layer is reported");
     }
 
-    // 2. Between two layers: the level is interpolated (log), the nearest layer is played.
+    // 2. Between two layers, blendLayers off: the level is interpolated (log), the nearest layer is played.
     {
         auto level = [&](int velocity) {
             pf::ModalEngine e;
             e.install(profile);
             e.bodyEnabled = false;
+            e.blendLayers = false;
             e.prepare(kRate, 64);
             render(e, { { 0, 0x90, 69, (std::uint8_t) velocity } }, 4800, l, r);
             return std::make_pair(rms(l, 0, 4800), e.lastLayerVelocity.load());
@@ -217,6 +218,7 @@ int main()
         pf::ModalEngine e;
         e.install(ramp);
         e.bodyEnabled = false;
+        e.blendLayers = false;
         e.prepare(kRate, 64);
         const int frames = 24000;
         render(e, { { 0, 0x90, 72, 85 } }, frames, l, r);
@@ -252,6 +254,7 @@ int main()
         pf::ModalEngine f;
         f.install(faded);
         f.bodyEnabled = false;
+        f.blendLayers = false;
         f.prepare(kRate, 64);
         std::vector<float> lf, rf;
         render(f, { { 0, 0x90, 72, 85 } }, frames, lf, rf);
@@ -272,6 +275,194 @@ int main()
         }
         std::printf("      fade: largest error %.1f dB under the peak\n", 20 * std::log10(errFade / peak + 1e-12));
         check(errFade < 1e-3 * peak, "a partial's fade time: it dies out from there, the others ring on");
+
+        // 2d. Blended (the default): over the residual, the nearer layer's whole strike at one gain, which brings the
+        // attack's energy (the profile's measure: its first attackSeconds) to the one interpolated in dB between
+        // the two layers' attacks; then the same log-linear ramp to each partial's level (here, one mode per partial
+        // and the same poles in both layers: the levels of 2b). The softer layer's residual is 4 times louder (as in
+        // the bass of the reference, where it is most of a soft attack): its attack does not grow as its partials.
+        constexpr double kSofterResidual = 4.0;
+        auto uneven = std::make_shared<pf::ModalProfile>(*ramp);
+        for (auto& x : uneven->notes[0].layers[0].residual)
+            x = (float) (x * kSofterResidual);
+        pf::measureLayers(*uneven); // the layers' measures, as the forge exports them
+        const int attackFrames = (int) std::lround(uneven->attackSeconds * kRate);
+        auto attackEnergy = [&](const pf::ModalProfile::Layer& layer, double residualScale) {
+            double e = 0.0;
+            for (int s = 0; s < attackFrames; ++s) {
+                double x = residualScale * residualSample(s);
+                for (const auto& m : layer.modes)
+                    x += m.left.real() * std::exp(-m.decay * s / kRate) * std::cos(kTwoPi * m.freq * s / kRate);
+                e += x * x;
+            }
+            return e;
+        };
+        const double attackGain = std::sqrt(interp(attackEnergy(other, kSofterResidual), attackEnergy(near, 1.0)) / attackEnergy(near, 1.0));
+        pf::ModalEngine b;
+        b.install(uneven);
+        b.bodyEnabled = false;
+        b.prepare(kRate, 64);
+        std::vector<float> lb, rb;
+        render(b, { { 0, 0x90, 72, 85 } }, frames, lb, rb);
+        double errBlendAttack = 0.0, errBlendRamp = 0.0, errBlendAfter = 0.0;
+        for (int s = 0; s < frames; ++s) {
+            const double t = s / kRate;
+            double want = s < kResidualFrames ? attackGain * residualSample(s) : 0.0;
+            for (int p = 0; p < 2; ++p) {
+                const double x = std::clamp((double) (s - kResidualFrames) / rampLength, 0.0, 1.0);
+                const double gain = attackGain * std::pow(g[p] / attackGain, x);
+                want += gain * near.modes[(std::size_t) p].left.real() * std::exp(-kRampDecay[p] * t)
+                        * std::cos(kTwoPi * kRampF[p] * t);
+            }
+            double& slot = s < kResidualFrames ? errBlendAttack : s < kResidualFrames + rampLength ? errBlendRamp : errBlendAfter;
+            slot = std::max(slot, (double) std::abs(lb[(std::size_t) s] - want));
+        }
+        std::printf("      blended at velocity 85: attack gain %.3f (overall %.3f); errors under the peak: attack %.1f dB, "
+                    "ramp %.1f dB, after %.1f dB\n",
+                    attackGain, overall, 20 * std::log10(errBlendAttack / peak + 1e-12),
+                    20 * std::log10(errBlendRamp / peak + 1e-12), 20 * std::log10(errBlendAfter / peak + 1e-12));
+        check(std::abs(attackGain / overall - 1.0) > 0.05, "(the attack's energy and the partials' levels do grow differently)");
+        check(errBlendAttack < 1e-3 * peak, "blended: the attack is the nearer layer's whole strike at the attack's gain");
+        check(errBlendRamp < 1e-3 * peak && errBlendAfter < 1e-3 * peak, "then the ramp to each partial's interpolated level");
+
+        // Continuity: from one velocity to the next, the attack's energy (blended) follows the velocity without a
+        // step; at the overall gain alone (blendLayers off), it steps where the nearest layer changes (70 -> 71):
+        // there, the residual and the partials do not grow alike.
+        auto attackLevel = [&](int velocity, bool blended) {
+            pf::ModalEngine a;
+            a.install(uneven);
+            a.bodyEnabled = false;
+            a.blendLayers = blended;
+            a.prepare(kRate, 64);
+            std::vector<float> x, y;
+            render(a, { { 0, 0x90, 72, (std::uint8_t) velocity } }, attackFrames, x, y);
+            return 20.0 * std::log10(rms(x, 0, attackFrames));
+        };
+        double worstBlend = 0.0, worstNearest = 0.0;
+        for (int v = 41; v < 100; ++v) {
+            worstBlend = std::max(worstBlend, std::abs(attackLevel(v + 1, true) - attackLevel(v, true)));
+            worstNearest = std::max(worstNearest, std::abs(attackLevel(v + 1, false) - attackLevel(v, false)));
+        }
+        const double perStep = std::abs(10.0 * std::log10(attackEnergy(near, 1.0) / attackEnergy(other, kSofterResidual))) / 60.0;
+        std::printf("      attack level from one velocity to the next: largest step %.2f dB blended (%.2f dB per velocity "
+                    "step between the layers), %.2f dB at the overall gain alone\n", worstBlend, perStep, worstNearest);
+        check(worstBlend < perStep + 0.01 && worstNearest > 3.0 * perStep, "blended: the attack's level follows the velocity without a step");
+
+        // 2e. Blended, with layers whose partials differ: once the ramp is over, a shared partial's mode takes the
+        // frequency and decay moved toward the other layer's (frequency linear, decay in log; toward the upper layer
+        // at velocity 85, a quarter of the way to the lower one), and a partial only the other layer has comes in
+        // over the ramp, from -60 dB, at its interpolated level and its weight (1 - alpha, the farther layer's).
+        auto apart = std::make_shared<pf::ModalProfile>(*ramp);
+        {
+            auto& low = apart->notes[0].layers[0];
+            low.modes[1].freq = 1510.0;
+            low.modes[1].decay = 9.0;
+            low.modes.push_back({ 2200.0, 3.0, { 0.004f, 0.0f }, { 0.004f, 0.0f } });
+            double total = 0.0;
+            for (std::size_t p = 0; p < low.modes.size(); ++p) {
+                const auto& m = low.modes[p];
+                const double x = 2.0 * m.decay;
+                const auto level = (float) std::sqrt(0.5 * std::norm(m.left) * (1.0 - std::exp(-x)) / x);
+                if (p < low.partials.size())
+                    low.partials[p].level = level;
+                else
+                    low.partials.push_back({ (int) p + 1, (int) p, 1, level });
+                total += (double) level * level;
+            }
+            low.level = (float) std::sqrt(total);
+            apart->maxModesPerLayer = 3;
+            apart->maxPartialsPerLayer = 3;
+            pf::measureLayers(*apart);
+        }
+        pf::ModalEngine m;
+        m.install(apart);
+        m.bodyEnabled = false;
+        m.prepare(kRate, 64);
+        std::vector<float> lm, rm;
+        render(m, { { 0, 0x90, 72, 85 } }, frames, lm, rm);
+        // A partial's complex amplitude around `at` (s): demodulated at `freq` through a Hann window of 50 ms.
+        auto partialAt = [&](double freq, double at) {
+            const int half = 1200, centre = (int) std::lround(at * kRate);
+            std::complex<double> c;
+            double w = 0.0;
+            for (int s = centre - half; s < centre + half; ++s) {
+                const double hann = 0.5 - 0.5 * std::cos(kTwoPi * (s - centre + half) / (2 * half));
+                c += hann * (double) lm[(std::size_t) s] * std::polar(1.0, -kTwoPi * freq * s / kRate);
+                w += hann;
+            }
+            return 2.0 * c / w;
+        };
+        const auto& low = apart->notes[0].layers[0];
+        const double toward = 1.0 - alpha;
+        const double wantFreq = 1500.0 + toward * (1510.0 - 1500.0), wantDecay = 6.0 * std::pow(9.0 / 6.0, toward);
+        const auto c1 = partialAt(wantFreq, 0.3), c2 = partialAt(wantFreq, 0.45);
+        const double gotDecay = std::log(std::abs(c1) / std::abs(c2)) / 0.15;
+        const double gotFreq = wantFreq + std::arg(c2 / c1) / (kTwoPi * 0.15);
+        const double otherGain = interp(low.level, near.level) / low.level * (1.0 - alpha);
+        const double wantThird = 0.004 * otherGain * std::exp(-3.0 * 0.3);
+        const double third = std::abs(partialAt(2200.0, 0.3)), thirdEarly = std::abs(partialAt(2200.0, 0.03));
+        std::printf("      moved poles: %.3f Hz %.3f /s (want %.3f Hz %.3f /s); the other layer's partial %.2f dB against "
+                    "its level, %.1f dB at the note-on\n", gotFreq, gotDecay, wantFreq, wantDecay,
+                    20.0 * std::log10(third / wantThird), 20.0 * std::log10(thirdEarly / (0.004 * otherGain)));
+        check(std::abs(gotFreq - wantFreq) < 0.05 && std::abs(gotDecay - wantDecay) < 0.03,
+              "blended: after the ramp, a mode's frequency and decay move toward the other layer's");
+        check(std::abs(20.0 * std::log10(third / wantThird)) < 0.2 && thirdEarly < 0.01 * 0.004 * otherGain,
+              "blended: a partial only the other layer has comes in over the ramp, from silence, at its level");
+    }
+
+    // 2f. A partial whose two strong modes nearly cancel each other in one layer (as the forge fits some unisons):
+    // its level as it sounds, far under the sum of its modes' energies, is what is interpolated; on both sides of the
+    // boundary between the layers, the same sustain (blendLayers off: the nearest layer's poles, unmoved).
+    {
+        auto p = std::make_shared<pf::ModalProfile>();
+        p->residualRate = kRate;
+        p->noteIndex.fill(-1);
+        pf::ModalProfile::Note n;
+        n.midi = 60;
+        auto layer = [](int velocity, std::vector<pf::ModalProfile::Mode> modes) {
+            pf::ModalProfile::Layer l;
+            l.velocity = velocity;
+            double e = 0.0; // the loader's level: the modes' energies over the first second
+            for (const auto& m : modes)
+                e += 0.5 * std::norm(m.left) * (1.0 - std::exp(-2.0 * m.decay)) / (2.0 * m.decay);
+            l.partials.push_back({ 1, 0, (int) modes.size(), (float) std::sqrt(e) });
+            l.level = l.partials[0].level;
+            l.modes = std::move(modes);
+            return l;
+        };
+        n.layers.push_back(layer(40, { { 440.0, 1.0, { 0.05f, 0.0f }, { 0.05f, 0.0f } } }));
+        n.layers.push_back(layer(100, { { 440.0, 1.0, { 0.2f, 0.0f }, { 0.2f, 0.0f } },
+                                        { 440.05, 1.0, { -0.19f, 0.0f }, { -0.19f, 0.0f } } }));
+        p->notes.push_back(std::move(n));
+        p->noteIndex[60] = 0;
+        p->maxModesPerLayer = 2;
+        p->maxPartialsPerLayer = 1;
+        pf::measureLayers(*p);
+        const int from = (int) std::lround(p->sustainFrom * kRate);
+        const int to = (int) std::lround(p->sustainTo * kRate);
+        auto sustain = [&](int velocity, bool blended) {
+            pf::ModalEngine e;
+            e.install(p);
+            e.bodyEnabled = false;
+            e.blendLayers = blended;
+            e.prepare(kRate, 64);
+            render(e, { { 0, 0x90, 60, (std::uint8_t) velocity } }, to, l, r);
+            return 20.0 * std::log10(rms(l, from, to));
+        };
+        const double s40 = sustain(40, false), s70 = sustain(70, false), s71 = sustain(71, false), s100 = sustain(100, false);
+        const auto& layers = p->notes[0].layers;
+        std::printf("      cancelling modes: sustain v40 %.1f dB, v70 %.1f dB, v71 %.1f dB, v100 %.1f dB (the profile's levels "
+                    "%.1f dB apart)\n", s40, s70, s71, s100, 20.0 * std::log10(layers[1].level / layers[0].level));
+        check(std::abs(s70 - 0.5 * (s40 + s100)) < 0.05 && std::abs(s71 - s70) < std::abs(s100 - s40) / 60.0 + 0.05,
+              "a partial's level as it sounds is interpolated: the same sustain on both sides of the boundary");
+        // Blended: at velocity 71, the upper layer's two modes interfere, and keep their poles (moved toward the
+        // lower layer's one, 440.05 Hz about halfway to 440 Hz, they would beat half as fast and cancel each other
+        // less): the partial at its interpolated level, as it sounds.
+        const double b70 = sustain(70, true), b71 = sustain(71, true);
+        const double want71 = s40 + (71.0 - 40.0) / 60.0 * (s100 - s40);
+        std::printf("      blended: v70 %.2f dB, v71 %.2f dB (interpolated %.2f dB)\n", b70, b71, want71);
+        check(std::abs(b70 - 0.5 * (s40 + s100)) < 0.05 && std::abs(b71 - want71) < 0.05,
+              "blended: a partial whose modes interfere keeps its poles, at its interpolated level");
     }
 
     // 3. Key release: the damper curve; sustain pedal: the dampers stay up until the pedal is released.

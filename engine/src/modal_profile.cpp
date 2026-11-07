@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstring>
 
 namespace pf {
@@ -84,6 +85,29 @@ float partialLevel(const ModalProfile::Mode* modes, int count, double seconds) n
         e += 0.5 * a2 * (x > 1e-9 ? (1.0 - std::exp(-x)) / x : 1.0);
     }
     return (float) std::sqrt(e);
+}
+
+/// Each partial's level over the sustain window from its modes' energies alone (Layer::separateLevels): the
+/// diagonal of the measure's closed form (pf::measureLayers), both channels averaged. Two real exponentials per
+/// mode: a few milliseconds for a whole piano.
+void measureSeparateLevels(ModalProfile& p)
+{
+    const double from = p.sustainFrom, to = p.sustainTo;
+    for (auto& note : p.notes)
+        for (auto& layer : note.layers) {
+            layer.separateLevels.assign(layer.partials.size(), 0.0f);
+            for (std::size_t pi = 0; pi < layer.partials.size(); ++pi) {
+                const auto& part = layer.partials[pi];
+                double e = 0.0;
+                for (int q = 0; q < part.modeCount; ++q) {
+                    const auto& m = layer.modes[(std::size_t) (part.firstMode + q)];
+                    const double x = 2.0 * m.decay;
+                    const double span = std::abs(x) < 1e-9 ? to - from : (std::exp(-x * from) - std::exp(-x * to)) / x;
+                    e += 0.25 * ((double) std::norm(m.left) + (double) std::norm(m.right)) * span;
+                }
+                layer.separateLevels[pi] = (float) std::sqrt(std::max(e, 0.0) / (to - from));
+            }
+        }
 }
 
 } // namespace
@@ -391,6 +415,55 @@ std::shared_ptr<const ModalProfile> parseModalProfile(std::vector<char> data, co
                         layer->unison = std::move(table);
                 }
             }
+        } else if (std::memcmp(tag, "LEVL", 4) == 0) {
+            // The layers' measures; a layer that does not match the profile's keeps none, and without all of them
+            // the profile counts as not measured.
+            const float attack = r.get<float>(), from = r.get<float>(), to = r.get<float>();
+            const auto count = r.get<std::uint32_t>();
+            std::size_t matched = 0;
+            for (std::uint32_t n = 0; n < count && r.ok() && r.position() < end; ++n) {
+                const auto midi = (int) r.get<std::uint32_t>();
+                const auto layers = r.get<std::uint32_t>();
+                ModalProfile::Note* note = nullptr;
+                for (auto& candidate : p->notes)
+                    if (candidate.midi == midi)
+                        note = &candidate;
+                for (std::uint32_t l = 0; l < layers && r.ok(); ++l) {
+                    const auto velocity = (int) r.get<std::uint32_t>();
+                    const float energy = r.get<float>();
+                    const auto partials = r.get<std::uint32_t>();
+                    if (partials > 65536) {
+                        error = "corrupt layer measures";
+                        return nullptr;
+                    }
+                    std::vector<float> levels(partials);
+                    r.bytes(levels.data(), levels.size() * sizeof(float));
+                    ModalProfile::Layer* layer = nullptr;
+                    if (note != nullptr)
+                        for (auto& candidate : note->layers)
+                            if (candidate.velocity == velocity && candidate.partials.size() == partials)
+                                layer = &candidate;
+                    if (layer == nullptr || !std::isfinite(energy) || energy < 0.0f)
+                        continue;
+                    bool finite = true;
+                    for (const float v : levels)
+                        finite = finite && std::isfinite(v) && v >= 0.0f;
+                    if (!finite)
+                        continue;
+                    layer->attackEnergy = energy;
+                    layer->sustainLevels = std::move(levels);
+                    ++matched;
+                }
+            }
+            std::size_t total = 0;
+            for (const auto& note : p->notes)
+                total += note.layers.size();
+            if (r.ok() && matched == total && attack > 0.0f && to > from && from >= 0.0f) {
+                p->attackSeconds = attack;
+                p->sustainFrom = from;
+                p->sustainTo = to;
+                measureSeparateLevels(*p);
+            }
         } else if (std::memcmp(tag, "PEDL", 4) == 0) {
             r.bytes(p->pedalLift.data(), p->pedalLift.size() * sizeof(float));
         } else if (std::memcmp(tag, "RELN", 4) == 0) {
@@ -474,6 +547,78 @@ std::shared_ptr<const ModalProfile> parseModalProfile(std::vector<char> data, co
         return nullptr;
     }
     return p;
+}
+
+void measureLayers(ModalProfile& profile, double attackSeconds, double sustainFrom, double sustainTo)
+{
+    constexpr double kTwoPi = 6.283185307179586;
+    const double rate = profile.residualRate > 0.0 ? profile.residualRate : 44100.0;
+    const int frames = std::max(1, (int) std::lround(attackSeconds * rate));
+    std::vector<double> x((std::size_t) frames);
+    // A mode's mono sound over the attack, added to x (at the residual's rate; inaudible past its Nyquist).
+    auto addMode = [&](double freq, double decay, std::complex<float> left, std::complex<float> right) {
+        if (freq >= 0.5 * rate)
+            return;
+        const auto pole = std::polar(std::exp(-decay / rate), kTwoPi * freq / rate);
+        auto z = 0.5 * (std::complex<double>(left) + std::complex<double>(right));
+        for (auto& v : x) {
+            v += z.real();
+            z *= pole;
+        }
+    };
+    // The energy of sum_k Re(a_k e^(s_k t)), s_k = -decay + i 2 pi freq, over [t0, t1], in closed form:
+    // 1/2 sum_j sum_k Re(a_j a_k I(s_j + s_k) + a_j conj(a_k) I(s_j + conj(s_k))), I(s) = (e^(s t1) - e^(s t0)) / s.
+    const double t0 = sustainFrom, t1 = sustainTo;
+    auto integral = [t0, t1](std::complex<double> s) {
+        if (std::abs(s) < 1e-9)
+            return std::complex<double>(t1 - t0);
+        return (std::exp(s * t1) - std::exp(s * t0)) / s;
+    };
+    const bool body = profile.bodyDecay.size() == profile.bodyFreq.size();
+    for (auto& note : profile.notes)
+        for (auto& layer : note.layers) {
+            // The attack as recorded: the residual cancels the modes and the soundboard's resonances extrapolated
+            // back to the note-on (at the softest layers of the bass, most of the soundboard's).
+            for (int i = 0; i < frames; ++i)
+                x[(std::size_t) i] = i < layer.residualFrames ? 0.5 * ((double) layer.residual[(std::size_t) (2 * i)]
+                                                                       + (double) layer.residual[(std::size_t) (2 * i + 1)])
+                                                              : 0.0;
+            for (const auto& part : layer.partials) // the modes the engine plays (those of the partials)
+                for (int q = 0; q < part.modeCount; ++q) {
+                    const auto& m = layer.modes[(std::size_t) (part.firstMode + q)];
+                    addMode(m.freq, m.decay, m.left, m.right);
+                }
+            if (body && layer.bodyLeft.size() == profile.bodyFreq.size() && layer.bodyRight.size() == profile.bodyFreq.size())
+                for (std::size_t b = 0; b < profile.bodyFreq.size(); ++b)
+                    addMode(profile.bodyFreq[b], profile.bodyDecay[b], layer.bodyLeft[b], layer.bodyRight[b]);
+            double e = 0.0;
+            for (const double v : x)
+                e += v * v;
+            layer.attackEnergy = (float) (e / frames);
+
+            // Each partial over the sustain: its RMS, both channels averaged (as the profile's level, which is the
+            // j = k terms over the first second).
+            layer.sustainLevels.assign(layer.partials.size(), 0.0f);
+            for (std::size_t pi = 0; pi < layer.partials.size(); ++pi) {
+                const auto& part = layer.partials[pi];
+                double sum = 0.0;
+                for (int a = 0; a < part.modeCount; ++a) {
+                    const auto& ma = layer.modes[(std::size_t) (part.firstMode + a)];
+                    const std::complex<double> sa(-ma.decay, kTwoPi * ma.freq), la(ma.left), ra(ma.right);
+                    for (int b = 0; b < part.modeCount; ++b) {
+                        const auto& mb = layer.modes[(std::size_t) (part.firstMode + b)];
+                        const std::complex<double> sb(-mb.decay, kTwoPi * mb.freq), lb(mb.left), rb(mb.right);
+                        sum += 0.25 * ((la * lb + ra * rb) * integral(sa + sb)
+                                       + (la * std::conj(lb) + ra * std::conj(rb)) * integral(sa + std::conj(sb))).real();
+                    }
+                }
+                layer.sustainLevels[pi] = (float) std::sqrt(std::max(sum, 0.0) / (t1 - t0));
+            }
+        }
+    profile.attackSeconds = attackSeconds;
+    profile.sustainFrom = sustainFrom;
+    profile.sustainTo = sustainTo;
+    measureSeparateLevels(profile);
 }
 
 } // namespace pf
