@@ -49,6 +49,16 @@ struct FeedInfo {
 
 enum class FeedReaderKind : std::uint32_t { none = 0, audio = 1, keyboard = 2, text = 3 };
 
+/// A command for OBS, from a gesture played in PianoForge (the plugin carries it out, if its audio source lets it).
+enum class FeedCommand : std::uint32_t {
+    none = 0,
+    obsRecordToggle = 1, // start or stop OBS's recording
+    obsStreamToggle = 2, // start or stop OBS's stream
+    obsChapter = 3,      // a chapter marker in OBS's recording
+    obsNextScene = 4,
+    obsPreviousScene = 5,
+};
+
 /// The steady clock the feed's instants are on (nanoseconds; the same in every process of the machine).
 std::uint64_t feedClockNs() noexcept;
 
@@ -88,6 +98,8 @@ public:
     void setInfo(const FeedInfo& info) noexcept;
     /// Message thread: a mark (a chapter of an OBS recording), at most 127 bytes of UTF-8.
     void addMark(const char* text) noexcept;
+    /// Message thread: a command for OBS.
+    void addCommand(FeedCommand command) noexcept;
 
     /// Message thread: the readers heard from in the last two seconds.
     struct Reader {
@@ -148,6 +160,10 @@ public:
     /// Marks added since the feed was created; mark `index` (if still kept: the last kMarks) into `out`.
     std::uint32_t marks() const noexcept;
     bool mark(std::uint32_t index, char* out, int size) const noexcept;
+    /// Commands sent since the feed was created; command `index` (none once older than the last kCommands).
+    static constexpr std::uint32_t kCommands = 16;
+    std::uint32_t commands() const noexcept;
+    FeedCommand command(std::uint32_t index) const noexcept;
 
     /// What this reader reads and how late it is (every few hundred milliseconds: a slot not heard from for two
     /// seconds counts as free).

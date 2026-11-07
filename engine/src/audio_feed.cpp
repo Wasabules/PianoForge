@@ -52,6 +52,10 @@ struct AudioFeedHeader {
     FeedInfo info;                        // under infoSequence
     char markText[AudioFeedReader::kMarks][kMarkBytes];
     ReaderSlot readers[AudioFeedWriter::kMaxReaders];
+    // Added after the first release of version 2, at the end (an older reader ignores them; a newer one with an older
+    // writer sees none: the header is zeroed when created).
+    std::atomic<std::uint32_t> commandCount;
+    std::atomic<std::uint32_t> commandCodes[AudioFeedReader::kCommands];
 };
 
 namespace {
@@ -220,6 +224,9 @@ bool AudioFeedWriter::create()
         header->markCount.store(0);
         header->info = FeedInfo {};
         std::memset(header->markText, 0, sizeof(header->markText));
+        header->commandCount.store(0);
+        for (auto& code : header->commandCodes)
+            code.store(0);
         for (auto& r : header->readers) {
             r.heartbeatNs.store(0);
             r.kind.store(0);
@@ -341,6 +348,15 @@ void AudioFeedWriter::addMark(const char* text) noexcept
     }
     std::memcpy(slotText, text, length);
     header->markCount.store(n + 1, std::memory_order_release);
+}
+
+void AudioFeedWriter::addCommand(FeedCommand command) noexcept
+{
+    if (header == nullptr || command == FeedCommand::none)
+        return;
+    const std::uint32_t n = header->commandCount.load(std::memory_order_relaxed);
+    header->commandCodes[n % AudioFeedReader::kCommands].store((std::uint32_t) command, std::memory_order_relaxed);
+    header->commandCount.store(n + 1, std::memory_order_release);
 }
 
 int AudioFeedWriter::readers(Reader* out, int max) const noexcept
@@ -545,6 +561,24 @@ bool AudioFeedReader::mark(std::uint32_t index, char* out, int size) const noexc
     std::memcpy(out, copy, n);
     out[n] = 0;
     return true;
+}
+
+std::uint32_t AudioFeedReader::commands() const noexcept
+{
+    return header != nullptr ? header->commandCount.load(std::memory_order_acquire) : 0;
+}
+
+FeedCommand AudioFeedReader::command(std::uint32_t index) const noexcept
+{
+    if (header == nullptr)
+        return FeedCommand::none;
+    const std::uint32_t count = header->commandCount.load(std::memory_order_acquire);
+    if (index >= count || count - index > kCommands)
+        return FeedCommand::none;
+    const auto code = header->commandCodes[index % kCommands].load(std::memory_order_relaxed);
+    if (header->commandCount.load(std::memory_order_acquire) - index > kCommands)
+        return FeedCommand::none;
+    return code <= (std::uint32_t) FeedCommand::obsPreviousScene ? (FeedCommand) code : FeedCommand::none;
 }
 
 void AudioFeedReader::heartbeat(FeedMix mix, float latencyMs) noexcept

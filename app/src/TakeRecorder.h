@@ -3,6 +3,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <vector>
@@ -35,8 +36,11 @@ public:
     std::size_t size() const noexcept { return events.size(); }
 
     /// Events after the last silence of at least `gapSeconds`, starting `leadSeconds` before the first one, with
-    /// the pedal state at that moment re-stated at the start. Empty when nothing was played.
-    std::optional<Take> lastTake(double gapSeconds = 10.0, double leadSeconds = 0.2) const;
+    /// the pedal state at that moment re-stated at the start. Empty when nothing was played. `before` (a position
+    /// in the last device session): only what came before it (a gesture that asked for the save left out), the
+    /// notes and pedals still down there released there.
+    std::optional<Take> lastTake(double gapSeconds = 10.0, double leadSeconds = 0.2,
+                                 std::int64_t before = std::numeric_limits<std::int64_t>::max()) const;
 
     /// The events of device session `segment` in [from, to) (sample positions), relative to `from`, with the
     /// pedal state at `from` re-stated at the start: the MIDI of a live recording, aligned with its WAV.

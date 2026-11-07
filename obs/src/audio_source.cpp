@@ -44,7 +44,7 @@ struct Source {
     obs_source_t* source = nullptr;
     std::atomic<bool> running { true };
     std::atomic<int> latencyMs { kDefaultLatencyMs }, mix { (int) pf::FeedMix::speakers };
-    std::atomic<bool> followVolume { false }, chapters { false };
+    std::atomic<bool> followVolume { false }, chapters { false }, control { false };
     std::atomic<float> gainDb { 0.0f };
     std::atomic<bool> restart { false };
     std::thread worker;
@@ -64,6 +64,10 @@ double dbToGain(double db)
 
 void run(Source* s)
 {
+#if defined(_WIN32)
+    // Above the ordinary threads, as OBS's own audio threads are: a busy machine does not starve the stream.
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+#endif
     pf::AudioFeedReader feed;
     pf::DriftResampler resampler;
     pf::Limiter limiter;
@@ -324,6 +328,7 @@ void run(Source* s)
                 if (resampler.renderable() == 0 || fade <= 0.0) {
                     resampler.reset();
                     stopTimeline();
+                    s->resyncs.fetch_add(1); // (a gap in the stream, if faded: counted)
                     break;
                 }
                 due -= m;
@@ -409,6 +414,7 @@ void sourceDefaults(obs_data_t* settings)
     obs_data_set_default_bool(settings, "follow_volume", false);
     obs_data_set_default_double(settings, "gain_db", 0.0);
     obs_data_set_default_bool(settings, "chapters", true);
+    obs_data_set_default_bool(settings, "control", true);
 }
 
 void sourceUpdate(void* data, obs_data_t* settings)
@@ -421,6 +427,9 @@ void sourceUpdate(void* data, obs_data_t* settings)
     const bool chapters = obs_data_get_bool(settings, "chapters");
     if (chapters != s->chapters.exchange(chapters))
         chapterSources.fetch_add(chapters ? 1 : -1);
+    const bool control = obs_data_get_bool(settings, "control");
+    if (control != s->control.exchange(control))
+        controlSources.fetch_add(control ? 1 : -1);
 }
 
 void* sourceCreate(obs_data_t* settings, obs_source_t* source)
@@ -440,6 +449,8 @@ void sourceDestroy(void* data)
         s->worker.join();
     if (s->chapters.load())
         chapterSources.fetch_sub(1);
+    if (s->control.load())
+        controlSources.fetch_sub(1);
     delete s;
 }
 
@@ -475,6 +486,8 @@ obs_properties_t* sourceProperties(void* data)
     obs_properties_add_button2(props, "resync", text("Resync"), resynchronise, data);
     obs_property_t* chapters = obs_properties_add_bool(props, "chapters", text("Chapters"));
     obs_property_set_long_description(chapters, text("Chapters.Description"));
+    obs_property_t* control = obs_properties_add_bool(props, "control", text("Control"));
+    obs_property_set_long_description(control, text("Control.Description"));
     obs_property_t* help = obs_properties_add_text(props, "help", text("Help"), OBS_TEXT_INFO);
     obs_property_text_set_info_word_wrap(help, true);
     // The status last: its lines come and go without moving the controls.

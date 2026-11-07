@@ -13,11 +13,19 @@ namespace pf::app {
 ///
 /// The audio path is left as it is: no buffering, no added latency. On the audio thread, push() only copies the
 /// block that was just sent to the device into a pre-allocated lock-free FIFO (no lock, no allocation, no I/O);
-/// a background thread writes the FIFO to a 32-bit float WAV file. The recording starts and ends on block
-/// boundaries, and its first and last sample positions in the device session are kept: the MIDI captured by the
-/// audio host over the same span lines up with the WAV to the sample (MIDI tick 0 = WAV sample 0).
+/// a background thread writes the FIFO to a 32-bit float WAV file. The recording's first and last sample positions
+/// in the device session are kept: the MIDI captured by the audio host over the same span lines up with the WAV to
+/// the sample (MIDI tick 0 = WAV sample 0).
+///
+/// - Armed at the first note (start(..., atFirstNote)): the recording waits for the first note that reaches the
+///   engine (the audio host tells it, noteOn()), and starts kPrerollSeconds before it: no silence recorded before
+///   the music, its first attack whole.
+/// - The writer keeps the last kHoldSeconds before writing them: a recording can end before where it was stopped
+///   (stop(at)), the notes of a gesture that stopped it left out.
 class LiveRecorder {
 public:
+    static constexpr double kPrerollSeconds = 0.25, kHoldSeconds = 0.5;
+
     struct Span {
         bool valid = false;
         double sampleRate = 0.0;
@@ -34,20 +42,28 @@ public:
     // Audio thread.
     /// After the engine filled `outputs` for the block that starts at `blockStart` (device session position).
     void push(const float* const* outputs, int numChannels, int numSamples, std::int64_t blockStart) noexcept;
+    /// A note reached the engine at `position` (device session): an armed recording starts with it.
+    void noteOn(std::int64_t position) noexcept;
     /// The device stops: a recording in progress ends with the last block pushed.
     void deviceStopped() noexcept;
 
     // Message thread.
-    /// Arms a recording; it starts with the next audio block. `wav` empty: positions only (MIDI recording).
-    juce::Result start(const juce::File& wav, double sampleRate, std::uint32_t segment, const juce::String& description);
-    /// Ends the recording at the next block boundary, finishes the WAV file and returns the span recorded.
-    Span stop();
+    /// Starts a recording with the next audio block, or at the first note (atFirstNote). `wav` empty: positions
+    /// only (MIDI recording).
+    juce::Result start(const juce::File& wav, double sampleRate, std::uint32_t segment, const juce::String& description,
+                       bool atFirstNote = false);
+    /// Ends the recording (at `at`, a device session position, if it is earlier than where it is now: kHoldSeconds
+    /// back at most), finishes the WAV file and returns the span recorded. Armed and no note yet: nothing recorded.
+    Span stop(std::int64_t at = -1);
     bool recording() const noexcept { return armed; }
+    /// Armed, waiting for the first note.
+    bool waiting() const noexcept { return armed && trigger.load(std::memory_order_acquire) < 0; }
     /// The device stopped while recording: stop() should be called.
     bool endedByDevice() const noexcept { return state.load() == kStopped && armed; }
     /// stop() is waiting for the audio thread (tests).
     bool stopPending() const noexcept { return state.load() == kStopRequested; }
-    double seconds() const noexcept { return rate > 0.0 ? (double) pushed.load() / rate : 0.0; }
+    /// Seconds recorded so far (0 while waiting for the first note).
+    double seconds() const noexcept;
     std::int64_t droppedSamples() const noexcept { return dropped.load(); }
 
 private:
@@ -55,19 +71,27 @@ private:
     static constexpr double kFifoSeconds = 10.0;
 
     void writerLoop();
-    void drain();
+    /// The writer: discard or write what is ready, up to what may be written now (`final`: everything up to the end).
+    void drain(bool final);
+    /// Where the recording starts: the first note less the pre-roll, not before the first block pushed.
+    std::int64_t beginning() const noexcept;
 
     std::atomic<int> state { kIdle };
-    std::atomic<std::int64_t> startSample { 0 }, endSample { 0 }, pushed { 0 }, dropped { 0 };
+    std::atomic<std::int64_t> firstSample { 0 }, endSample { 0 }, pushed { 0 }, dropped { 0 };
+    std::atomic<std::int64_t> trigger { -1 }; // the first note's position (-1: none yet), or the first block's
+    std::atomic<std::int64_t> endAt { -1 };   // an end asked for before the last block (-1: none)
     bool withAudio = false;                   // set before arming, read by the audio thread after it
+    bool atFirst = false;
+    std::int64_t preroll = 0, hold = 0;
     int channels = 2;
     juce::AbstractFifo fifo { 1 };
     juce::AudioBuffer<float> buffer;          // the FIFO's storage
-    juce::AudioBuffer<float> chunk;           // writer thread
     std::unique_ptr<juce::AudioFormatWriter> writer;
     std::thread writerThread;
     std::atomic<bool> writing { false };
     std::atomic<bool> writeFailed { false };
+    std::int64_t front = 0;                   // writer thread: the position of the FIFO's next frame
+    std::int64_t written = 0;                 // writer thread: frames written to the file
 
     // Message thread.
     bool armed = false;

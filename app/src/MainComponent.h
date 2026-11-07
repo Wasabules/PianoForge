@@ -8,6 +8,7 @@
 #include "SampleBank.h"
 #include "TakeRecorder.h"
 #include "VelocityCurveEditor.h"
+#include "ui/GesturesPanel.h"
 #include "ui/AudioPanel.h"
 #include "ui/EnginePanel.h"
 #include "ui/Meters.h"
@@ -21,6 +22,7 @@
 #include <pianoforge/modal_engine.hpp>
 #include <pianoforge/velocity_curve.hpp>
 
+#include <limits>
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include <atomic>
@@ -68,8 +70,10 @@ private:
     void selectEngine(bool modal);
     bool modalSelected() const { return engines.selected.load() == 1; }
     void toggleRecording();
-    void finishRecording();
-    void saveLastTake();
+    void finishRecording(std::int64_t at = -1);
+    void saveLastTake(std::int64_t before = std::numeric_limits<std::int64_t>::max());
+    void runGesture(int action, double start); // a piano gesture recognized (Keyboard > Piano gestures)
+    juce::String gesturesHelp() const;
     void chooseCorpus();
     void loadCorpus(const juce::File& folder);
     void loadModalProfile();
@@ -138,7 +142,8 @@ private:
     std::unique_ptr<AudioPanel> audioPanel;
     PerformancePanel performancePanel;
     std::unique_ptr<RoomPanel> roomPanel;
-    std::unique_ptr<ToolWindow> engineWindow, audioWindow, performanceWindow, roomWindow, takesWindow;
+    std::unique_ptr<ToolWindow> engineWindow, audioWindow, performanceWindow, roomWindow, takesWindow, gesturesWindow;
+    std::unique_ptr<GesturesPanel> gesturesPanel;
     std::unique_ptr<TakesPanel> takesPanel;
     void openTakes();
     void toggleHeadphones();
@@ -200,6 +205,8 @@ private:
 
     int keyLayout = 1;          // 1 AZERTY, 2 QWERTY
     bool recordMidi = true;
+    bool recordAtFirstNote = true; // a recording armed starts with the first note
+    bool recordingMarked = false;  // its start marked in the feed (a chapter in OBS's recording)
     std::vector<SoundFormat> recordFormats { SoundFormat::wavFloat }; // the sound's formats (File > Record formats)
     bool recordsFormat(SoundFormat f) const { return std::find(recordFormats.begin(), recordFormats.end(), f) != recordFormats.end(); }
     void toggleRecordFormat(SoundFormat f);

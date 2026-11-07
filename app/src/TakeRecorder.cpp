@@ -13,7 +13,7 @@ void TakeRecorder::add(const std::vector<RecordedEvent>& newEvents, std::uint32_
     events.insert(events.end(), newEvents.begin(), newEvents.end());
 }
 
-std::optional<TakeRecorder::Take> TakeRecorder::lastTake(double gapSeconds, double leadSeconds) const
+std::optional<TakeRecorder::Take> TakeRecorder::lastTake(double gapSeconds, double leadSeconds, std::int64_t before) const
 {
     if (events.empty())
         return std::nullopt;
@@ -21,10 +21,16 @@ std::optional<TakeRecorder::Take> TakeRecorder::lastTake(double gapSeconds, doub
     const auto rate = rates.count(segment) != 0 ? rates.at(segment) : 0.0;
     if (rate <= 0.0)
         return std::nullopt;
+    // The events up to `before` (in the last session): [0, end).
+    std::size_t end = events.size();
+    while (end > 0 && events[end - 1].segment == segment && events[end - 1].sample >= before)
+        --end;
+    if (end == 0 || events[end - 1].segment != segment)
+        return std::nullopt;
 
     // Walk back to the last long silence (or the start of the device session).
     const auto gap = (std::int64_t) std::llround(gapSeconds * rate);
-    std::size_t first = events.size() - 1;
+    std::size_t first = end - 1;
     while (first > 0 && events[first - 1].segment == segment && events[first].sample - events[first - 1].sample < gap)
         --first;
 
@@ -41,11 +47,26 @@ std::optional<TakeRecorder::Take> TakeRecorder::lastTake(double gapSeconds, doub
     for (const int cc : { 64, 66, 67 })
         if (controllers[(size_t) cc] > 0)
             take.events.push_back({ 0, segment, 0xB0, (std::uint8_t) cc, (std::uint8_t) controllers[(size_t) cc] });
-    for (std::size_t i = first; i < events.size(); ++i) {
+    std::array<bool, 128> held {};
+    for (std::size_t i = first; i < end; ++i) {
         auto e = events[i];
         e.sample -= start;
         take.events.push_back(e);
-        take.notes += ((e.status & 0xF0) == 0x90 && e.data2 > 0) ? 1 : 0;
+        const int type = e.status & 0xF0;
+        take.notes += (type == 0x90 && e.data2 > 0) ? 1 : 0;
+        if (type == 0x90 || type == 0x80)
+            held[e.data1 & 0x7F] = type == 0x90 && e.data2 > 0;
+        if (type == 0xB0)
+            controllers[e.data1 & 0x7F] = e.data2;
+    }
+    if (end < events.size()) { // cut before `before`: what is still down there is released there
+        const auto at = std::max(take.events.back().sample, before - start);
+        for (int k = 0; k < 128; ++k)
+            if (held[(std::size_t) k])
+                take.events.push_back({ at, segment, 0x80, (std::uint8_t) k, 0 });
+        for (const int cc : { 64, 66, 67 })
+            if (controllers[(std::size_t) cc] > 0)
+                take.events.push_back({ at, segment, 0xB0, (std::uint8_t) cc, 0 });
     }
     take.lengthSamples = take.events.back().sample;
     return take;

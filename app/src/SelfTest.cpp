@@ -495,6 +495,86 @@ int runSelfTest(const juce::StringArray& arguments)
                                            : juce::String("NOT aligned")) + startError);
     }
 
+    // 8b2. A recording armed at the first note: started early, it begins 0.25 s before the first note (no silence
+    //      before the music, its attack whole); stopped later at an earlier position (a gesture's notes left out),
+    //      it ends there, the WAV exactly that span of the audio sent to the device. Armed with no note: nothing.
+    {
+        constexpr int block = 256;
+        auto hostOwner = std::make_unique<AudioHost>(player); // on the heap: hosts are large
+        AudioHost& host = *hostOwner;
+        host.start(fs, block);
+        const int blocks = 260;
+        juce::AudioBuffer<float> live(2, blocks * block);
+        std::vector<float> l(block), rr(block);
+        float* outputs[2] = { l.data(), rr.data() };
+        const auto wav = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("pianoforge-selftest-armed.wav");
+        std::vector<RecordedEvent> recorded;
+        LiveRecorder::Span span;
+        std::thread stopper;
+        bool waitedBefore = false, startedAfter = false;
+        std::int64_t at = -1, firstNote = -1;
+        for (int k = 0; k < blocks; ++k) {
+            if (k == 10)
+                host.live.start(wav, fs, host.currentSegment(), "self-test armed", true);
+            if (k == 60)
+                host.send(juce::MidiMessage::noteOn(1, 60, (juce::uint8) 90));
+            if (k == 120)
+                host.send(juce::MidiMessage::noteOff(1, 60));
+            if (k == 59)
+                waitedBefore = host.live.waiting();
+            if (k == 200) { // stopped from another thread, at 0.6 s after the note (a gesture's notes were after it)
+                host.drainRecorded(recorded);
+                for (const auto& e : recorded)
+                    if ((e.status & 0xF0) == 0x90 && firstNote < 0)
+                        firstNote = e.sample;
+                at = firstNote + (std::int64_t) std::llround(0.6 * fs);
+                stopper = std::thread([&] { span = host.live.stop(at); });
+                while (!host.live.stopPending())
+                    std::this_thread::yield();
+            }
+            host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, block, {});
+            live.copyFrom(0, k * block, l.data(), block);
+            live.copyFrom(1, k * block, rr.data(), block);
+            if (k == 61)
+                startedAfter = !host.live.waiting();
+            if (k == 200)
+                stopper.join();
+        }
+        float wavError = -1.0f, before = 0.0f;
+        int frames = 0;
+        if (span.valid) {
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+            if (std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(wav)); reader != nullptr) {
+                frames = (int) reader->lengthInSamples;
+                juce::AudioBuffer<float> file(2, frames);
+                reader->read(&file, 0, frames, 0, true, true);
+                wavError = 0.0f;
+                for (int c = 0; c < 2; ++c)
+                    for (int k = 0; k < frames && span.start + k < live.getNumSamples(); ++k)
+                        wavError = juce::jmax(wavError, std::abs(file.getSample(c, k) - live.getSample(c, (int) span.start + k)));
+                before = file.getMagnitude(0, (int) std::min<std::int64_t>(frames, firstNote - span.start));
+            }
+        }
+        wav.deleteFile();
+        const auto preroll = (std::int64_t) std::llround(LiveRecorder::kPrerollSeconds * fs);
+        // Armed, no note: nothing recorded.
+        host.live.start(wav, fs, host.currentSegment(), "self-test armed, no note", true);
+        for (int k = 0; k < 20; ++k)
+            host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, block, {});
+        LiveRecorder::Span none;
+        std::thread([&] { none = host.live.stop(); }).join();
+        wav.deleteFile();
+        r.check(waitedBefore && startedAfter && span.valid && span.start == firstNote - preroll && span.end == at
+                    && frames == (int) (span.end - span.start) && wavError == 0.0f && before < 1e-6f && !none.valid
+                    && none.error == "no note was played",
+                "recording armed at the first note: waiting, then started by it, from " + juce::String((double) (firstNote - span.start) / fs, 3)
+                    + " s before it; stopped at an earlier position, " + juce::String((double) (span.end - span.start) / fs, 3)
+                    + " s recorded (expected 0.85), the WAV " + (wavError == 0.0f ? juce::String("identical to the audio sent")
+                                                                                   : "off by " + juce::String(wavError))
+                    + "; armed with no note: " + (none.valid ? juce::String("a recording") : none.error));
+    }
+
     // 8c. Stream output: two devices on their own clocks (and rates). Over two minutes, a 1 kHz sine must come out
     //     at 1 kHz in the consumer's real time, clean, without a dropout once settled, the FIFO at its target.
     {

@@ -82,8 +82,9 @@ void publishTimeline(const Timeline& t);
 /// The latest timeline, if one was published in the last half second.
 bool latestTimeline(Timeline& out);
 
-/// Audio sources with the chapter markers on (the chapters follow PianoForge's marks only while one is).
-extern std::atomic<int> chapterSources;
+/// Audio sources with the chapter markers on (the chapters follow PianoForge's marks only while one is), and with
+/// PianoForge's gestures let to control OBS.
+extern std::atomic<int> chapterSources, controlSources;
 
 void registerAudioSource();
 void registerKeyboardSource();

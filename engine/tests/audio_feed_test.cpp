@@ -135,6 +135,13 @@ int main()
         check(reader.marks() == marksBefore + 20 && reader.mark(marksBefore + 19, text, sizeof(text)) && std::string(text) == "Take 19"
                   && !reader.mark(marksBefore, text, sizeof(text)),
               "marks: the last 16 kept, older ones gone");
+        const auto commandsBefore = reader.commands();
+        writer.addCommand(pf::FeedCommand::obsRecordToggle);
+        writer.addCommand(pf::FeedCommand::obsNextScene);
+        check(reader.commands() == commandsBefore + 2 && reader.command(commandsBefore) == pf::FeedCommand::obsRecordToggle
+                  && reader.command(commandsBefore + 1) == pf::FeedCommand::obsNextScene
+                  && reader.command(commandsBefore + 2) == pf::FeedCommand::none,
+              "commands for OBS, in order");
         pf::AudioFeedReader audioReader, keyboardReader;
         audioReader.open(pf::FeedReaderKind::audio);
         keyboardReader.open(pf::FeedReaderKind::keyboard);

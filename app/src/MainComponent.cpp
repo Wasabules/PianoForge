@@ -13,7 +13,7 @@ constexpr int kLayoutAzerty = 1, kLayoutQwerty = 2;
 
 enum MenuId {
     // File
-    kRecord = 1, kRecordMidi, kSaveTake, kTakes, kOpenRecordings, kOpenTakes, kChangeCorpus, kQuit, kOpenMidi,
+    kRecord = 1, kRecordMidi, kSaveTake, kTakes, kOpenRecordings, kOpenTakes, kChangeCorpus, kQuit, kOpenMidi, kRecordAtFirstNote,
     // Player
     kPlayPause = 80, kStopPlayer, kBack, kForward, kLoop, kCloseMidi, kSpeed = 100,
     // Engine
@@ -21,7 +21,7 @@ enum MenuId {
     // Audio
     kAudioSettings = 60, kPerformance, kResetDropouts,
     // Keyboard
-    kVelocityCurve = 70, kAzerty, kQwerty, kOctaveDown, kOctaveUp, kVelocityDown, kVelocityUp, kPedalCurve,
+    kVelocityCurve = 70, kAzerty, kQwerty, kOctaveDown, kOctaveUp, kVelocityDown, kVelocityUp, kPedalCurve, kGestures,
     // Help
     kShortcuts = 90, kAbout, kCheckUpdates, kUpdateSettings,
     // Engine > Room presets (one per preset, built-in then the user's)
@@ -138,6 +138,12 @@ MainComponent::MainComponent()
         loadTracker.reset(host.load, d != nullptr ? d->getXRunCount() : -1);
     };
     roomPanel = std::make_unique<RoomPanel>(host.room, *settings);
+    gesturesPanel = std::make_unique<GesturesPanel>(keyboardInput, *settings);
+    gesturesPanel->onMessage = [this](const juce::String& text) { showMessage(text, theme::good); };
+    keyboardInput.onGesture = [safe = juce::Component::SafePointer<MainComponent>(this)](int action, double start) {
+        if (safe != nullptr)
+            safe->runGesture(action, start);
+    };
     roomPanel->onChange = [this] { refreshRoomButton(); };
     playerBar = std::make_unique<PlayerBar>(host.filePlayer, *settings);
     playerBar->onOpen = [this] { chooseMidiFile(); };
@@ -161,6 +167,7 @@ MainComponent::MainComponent()
     recordButton.setTooltip("Record what you play: the sound in the formats ticked in File > Record formats, and the MIDI (Ctrl+R)");
     recordButton.onClick = [this] { toggleRecording(); };
     recordMidi = settings->getBoolValue("recordMidi", true);
+    recordAtFirstNote = settings->getBoolValue("recordAtFirstNote", true);
     // The sound's formats: "wav32 flac mp3"...; before them, a single WAV switch.
     if (const auto keys = juce::StringArray::fromTokens(settings->getValue("recordFormats", settings->getBoolValue("recordWav", true) ? "wav32" : ""), " ", {});
         true) {
@@ -304,6 +311,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         formats.addSeparator();
         formats.addItem(item(kRecordMidi, "MIDI (aligned with the sound)", {}, recordMidi, !host.live.recording()));
         menu.addSubMenu("Record formats", formats);
+        menu.addItem(item(kRecordAtFirstNote, "Start recordings at the first note", {}, recordAtFirstNote, !host.live.recording()));
         menu.addItem(item(kSaveTake, "Save last take (MIDI and WAV render)", "Ctrl+S"));
         menu.addSeparator();
         menu.addItem(item(kOpenRecordings, "Open the recordings folder"));
@@ -389,6 +397,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
     case 5:
         menu.addItem(item(kVelocityCurve, "Velocity curve..."));
         menu.addItem(item(kPedalCurve, "Pedal curve..."));
+        menu.addItem(item(kGestures, "Piano gestures..."));
         menu.addSeparator();
         menu.addItem(item(kAzerty, "Computer keyboard: AZERTY", {}, keyLayout == kLayoutAzerty));
         menu.addItem(item(kQwerty, "Computer keyboard: QWERTY", {}, keyLayout == kLayoutQwerty));
@@ -460,6 +469,7 @@ void MainComponent::menuItemSelected(int id, int)
     case kCloseMidi: closeMidiFile(); break;
     case kRecord: toggleRecording(); break;
     case kRecordMidi: recordMidi = !recordMidi; saveSettings(); break;
+    case kRecordAtFirstNote: recordAtFirstNote = !recordAtFirstNote; saveSettings(); break;
     case kSaveTake: saveLastTake(); break;
     case kOpenRecordings: recordingsFolder().createDirectory(); recordingsFolder().startAsProcess(); break;
     case kOpenTakes: takesFolder().createDirectory(); takesFolder().startAsProcess(); break;
@@ -477,6 +487,7 @@ void MainComponent::menuItemSelected(int id, int)
     case kResetDropouts: performancePanel.onReset(); break;
     case kVelocityCurve: openVelocityCurve(); break;
     case kPedalCurve: openPedalCurve(); break;
+    case kGestures: showWindow(gesturesWindow, "Piano gestures", *gesturesPanel); break;
     case kAzerty: setKeyLayout(kLayoutAzerty); break;
     case kQwerty: setKeyLayout(kLayoutQwerty); break;
     case kOctaveDown: shiftOctave(-1); break;
@@ -511,7 +522,17 @@ void MainComponent::showShortcuts()
               "  Ctrl+Home: stop, back to the start\n  Ctrl+Left / Ctrl+Right: 5 s back / forward\n  Ctrl+L: loop\n\n"
               "Application\n  Ctrl+R: record / stop\n  Ctrl+S: save the last take\n  Ctrl+1 / Ctrl+2: reference / modal engine\n"
               "  Ctrl+T: takes and recordings\n  Ctrl+E: engine settings\n  Ctrl+M: room settings\n  Ctrl+H: heard on headphones / speakers\n  Ctrl+,: audio, MIDI and streaming\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
-              "The mouse plays too: lower on a key is louder.");
+              "Piano gestures, on the MIDI keyboard (Keyboard > Piano gestures)\n" + gesturesHelp()
+            + "\nThe mouse plays too: lower on a key is louder.");
+}
+
+juce::String MainComponent::gesturesHelp() const
+{
+    juce::String out;
+    for (int a = 0; a < (int) PianoAction::count; ++a)
+        if (const auto g = keyboardInput.gesture(a); !g.empty())
+            out << "  " << juce::String(g.describe()) << ": " << pianoActions()[(std::size_t) a].name << "\n";
+    return out.isEmpty() ? juce::String("  none\n") : out;
 }
 
 void MainComponent::showAbout()
@@ -887,6 +908,7 @@ void MainComponent::reloadSettings()
     volume.setValue(s->getDoubleValue("volume", volume.getValue()), juce::sendNotificationSync);
     enginePanel->reload();
     roomPanel->reload();
+    gesturesPanel->reload();
     if (s->getIntValue("engine", 2) == 2 ? !modalSelected() : modalSelected())
         selectEngine(s->getIntValue("engine", 2) == 2);
     refreshRoomButton();
@@ -1120,26 +1142,32 @@ void MainComponent::toggleRecording()
                          : recordingsFolder().getChildFile(recordingStem + (recordsFormat(SoundFormat::wavFloat) ? ".wav" : ".master.wav"));
     const auto engineName = modalSelected() ? juce::String("modal engine") : juce::String("reference player");
     if (const auto started = host.live.start(wavFile, host.currentRate(), host.currentSegment(),
-                                             "PianoForge live recording (" + engineName + ")");
+                                             "PianoForge live recording (" + engineName + ")", recordAtFirstNote);
         started.failed()) {
         showMessage("Cannot record: " + started.getErrorMessage(), theme::bad);
         return;
     }
-    recordButton.setColour(juce::TextButton::buttonColourId, theme::record);
-    host.addFeedMark("PianoForge recording: " + recordingStem);
+    recordButton.setColour(juce::TextButton::buttonColourId, recordAtFirstNote ? theme::busy : theme::record);
+    recordingMarked = false; // the mark (a chapter in OBS's recording) when it starts: now, or at the first note
 }
 
-void MainComponent::finishRecording()
+void MainComponent::finishRecording(std::int64_t at)
 {
-    const auto span = host.live.stop();
+    const bool started = !host.live.waiting();
+    const auto span = host.live.stop(at);
     recordButton.removeColour(juce::TextButton::buttonColourId);
-    host.addFeedMark("PianoForge recording stopped");
+    if (started)
+        host.addFeedMark("PianoForge recording stopped");
     drained.clear(); // every event up to the stop, into the session record
     host.drainRecorded(drained);
     takes.add(drained, host.currentSegment(), host.currentRate());
     if (!span.valid) {
         if (span.wav != juce::File())
             span.wav.deleteFile();
+        if (!started) {
+            showMessage("Recording disarmed: no note was played", theme::busy);
+            return;
+        }
         showMessage("Recording failed: " + (span.error.isNotEmpty() ? span.error : juce::String("nothing recorded")), theme::bad);
         return;
     }
@@ -1212,9 +1240,52 @@ juce::String MainComponent::recordingExtensions() const
     return e.joinIntoString(" ");
 }
 
-void MainComponent::saveLastTake()
+void MainComponent::runGesture(int action, double start)
 {
-    const auto take = takes.lastTake();
+    if (action < 0 || action >= (int) PianoAction::count)
+        return;
+    const auto& info = pianoActions()[(std::size_t) action];
+    const auto gesture = juce::String(keyboardInput.gesture(action).describe());
+    // Where the gesture's first note reached the engine, a little before: a recording or a take ends there.
+    const auto before = host.positionAt(start) - (std::int64_t) std::llround(0.01 * host.currentRate());
+    auto toObs = [&](pf::FeedCommand command) {
+        host.addFeedCommand(command);
+        pf::AudioFeedWriter::Reader readers[pf::AudioFeedWriter::kMaxReaders];
+        bool obs = false;
+        for (int i = 0, n = host.feedReaders(readers, pf::AudioFeedWriter::kMaxReaders); i < n; ++i)
+            obs = obs || readers[i].kind == pf::FeedReaderKind::audio;
+        showMessage("Gesture " + gesture + ": " + info.name + (obs ? juce::String() : juce::String(" (no PianoForge source in OBS reads the feed)")),
+                    obs ? theme::good : theme::busy);
+    };
+    switch ((PianoAction) action) {
+    case PianoAction::record:
+        if (host.live.recording()) {
+            finishRecording(host.live.waiting() ? -1 : before);
+        } else {
+            toggleRecording();
+            if (host.live.recording())
+                showMessage("Gesture " + gesture + ": " + (recordAtFirstNote ? juce::String("recording armed, it starts with the first note")
+                                                                              : juce::String("recording")),
+                            theme::good);
+        }
+        break;
+    case PianoAction::saveTake: saveLastTake(before); break;
+    case PianoAction::playPause:
+        playerBar->togglePlay();
+        showMessage("Gesture " + gesture + ": " + info.name, theme::good);
+        break;
+    case PianoAction::obsRecord: toObs(pf::FeedCommand::obsRecordToggle); break;
+    case PianoAction::obsStream: toObs(pf::FeedCommand::obsStreamToggle); break;
+    case PianoAction::obsChapter: toObs(pf::FeedCommand::obsChapter); break;
+    case PianoAction::obsNextScene: toObs(pf::FeedCommand::obsNextScene); break;
+    case PianoAction::obsPreviousScene: toObs(pf::FeedCommand::obsPreviousScene); break;
+    default: break;
+    }
+}
+
+void MainComponent::saveLastTake(std::int64_t before)
+{
+    const auto take = takes.lastTake(10.0, 0.2, before);
     if (!take.has_value() || take->notes == 0) {
         showMessage("Nothing played yet: play something, then save it.", theme::busy);
         return;
@@ -1569,6 +1640,7 @@ void MainComponent::saveSettings()
     s->setValue("pedalCurve", formatCurve(pedalSettings));
     s->setValue("engine", modalSelected() ? 2 : 1);
     s->setValue("recordMidi", recordMidi);
+    s->setValue("recordAtFirstNote", recordAtFirstNote);
     juce::StringArray formats;
     for (const auto f : recordFormats)
         formats.add(infoFor(f).key);
@@ -1743,7 +1815,11 @@ void MainComponent::refreshDashboard()
                        deviceManager.getCurrentAudioDevice() == nullptr ? theme::bad : theme::text);
 
     // Session.
-    if (host.live.recording()) {
+    if (host.live.recording() && host.live.waiting()) {
+        sessionCard.setLines({ "Armed", "the recording starts with the first note (" + recordingStem + ")", feedSummary(),
+                               audioPanel->mirrorSummary() },
+                             theme::busy);
+    } else if (host.live.recording()) {
         const double t = host.live.seconds();
         sessionCard.setLines({ juce::String::formatted("Recording  %d:%04.1f", (int) t / 60, std::fmod(t, 60.0)),
                                recordingStem + " " + recordingExtensions(), feedSummary(), audioPanel->mirrorSummary() },
@@ -1772,9 +1848,18 @@ void MainComponent::timerCallback()
         finishRecording();
     for (const auto& report : exporter.takeReports())
         showMessage(report.text + (report.ok ? " in " + recordingsFolder().getFullPathName() : juce::String()), report.ok ? theme::good : theme::bad);
-    recordButton.setButtonText(host.live.recording()
-                                   ? juce::String::formatted("Stop  %d:%04.1f", (int) host.live.seconds() / 60, std::fmod(host.live.seconds(), 60.0))
-                                   : juce::String("Record"));
+    if (host.live.recording() && host.live.waiting()) {
+        recordButton.setButtonText("Armed: play");
+    } else if (host.live.recording()) {
+        if (!recordingMarked) { // it started (at once, or with the first note): a chapter in OBS's recording
+            recordingMarked = true;
+            host.addFeedMark("PianoForge recording: " + recordingStem);
+            recordButton.setColour(juce::TextButton::buttonColourId, theme::record);
+        }
+        recordButton.setButtonText(juce::String::formatted("Stop  %d:%04.1f", (int) host.live.seconds() / 60, std::fmod(host.live.seconds(), 60.0)));
+    } else {
+        recordButton.setButtonText("Record");
+    }
 
     playerBar->refresh();
     refreshFeed();

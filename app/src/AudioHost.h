@@ -73,6 +73,15 @@ public:
     /// Message thread: the state for overlays, the marks (chapters in OBS's recordings), the readers.
     void setFeedInfo(const pf::FeedInfo& info) noexcept { feed.setInfo(info); }
     void addFeedMark(const juce::String& text) noexcept { feed.addMark(text.toRawUTF8()); }
+    void addFeedCommand(pf::FeedCommand command) noexcept { feed.addCommand(command); }
+    /// Message thread: the device session position of something that happened at `seconds`
+    /// (juce::Time::getMillisecondCounterHiRes() / 1000, the clock of the MIDI's timestamps), at the engine's rate:
+    /// within a block of where its MIDI reached the engine (a little early: a cut there leaves it out).
+    std::int64_t positionAt(double seconds) const noexcept
+    {
+        const double rate = recordingRate.load();
+        return callbackElapsed.load() + (std::int64_t) std::floor((seconds - callbackSeconds.load()) * rate);
+    }
     int feedReaders(pf::AudioFeedWriter::Reader* out, int max) const noexcept { return feed.readers(out, max); }
 
     /// Message thread: sends a message as if it came from a keyboard.
@@ -164,6 +173,8 @@ public:
                                           const juce::AudioIODeviceCallbackContext&) override
     {
         const auto startTicks = juce::Time::getHighResolutionTicks(); // QueryPerformanceCounter: no system call
+        callbackSeconds.store(juce::Time::getMillisecondCounterHiRes() * 0.001, std::memory_order_relaxed);
+        callbackElapsed.store(samplesElapsed, std::memory_order_relaxed);
         const int k = factor;
         // The device's first `carry` samples come from the engine frame rendered last time; the engine renders the
         // frames that cover the rest (blocks are longer than 8 samples, so longer than the carry; a block longer
@@ -186,6 +197,8 @@ public:
                                          (std::uint8_t) (meta.numBytes > 2 ? meta.data[2] : 0) };
             if (meta.numBytes == 3 && (meta.data[0] & 0xF0) == 0xB0 && meta.data[1] == 64) // the sustain pedal, for the UI
                 pedalValue.store(meta.data[2], std::memory_order_relaxed);
+            if (meta.numBytes == 3 && (meta.data[0] & 0xF0) == 0x90 && meta.data[2] > 0) // a recording armed starts with it
+                live.noteOn(samplesElapsed + at);
         }
         if (count > 0) { // record what reaches the engine, at its exact position
             const auto seg = segment.load(std::memory_order_relaxed);
@@ -356,6 +369,8 @@ private:
     std::atomic<bool> ready { false };
 
     std::int64_t samplesElapsed = 0; // audio thread
+    std::atomic<double> callbackSeconds { 0.0 };     // the last callback's start (positionAt)
+    std::atomic<std::int64_t> callbackElapsed { 0 }; // and the session position then
     std::int64_t lastCallbackTicks = 0; // audio thread
     bool lastWasLate = false;           // audio thread
     std::atomic<double> recordingRate { 0.0 }, device { 0.0 };

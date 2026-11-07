@@ -72,6 +72,14 @@ the 88 notes can ring at once.
 Record (Ctrl+R) writes the sound live as a 32-bit float WAV; when it stops, the formats ticked in File > Record
 formats are made from it in the background: WAV 24-bit, FLAC 24-bit, MP3 320 kbit/s (Windows' Media Foundation
 encoder), Opus 192 kbit/s; plus the MIDI, aligned to the sample. Recordings go to Documents/PianoForge/Recordings.
+By default (File > Start recordings at the first note) Record arms: the recording starts 0.25 s before the first
+note, no silence before the music.
+
+Keyboard > Piano gestures: keys struck together that no piece asks for, or one key struck twice quickly, played on
+the MIDI keyboard, do what is chosen there (learned by playing them): arm or stop a recording (A0 + A#0 + B0 by
+default; stopped so, it ends before the gesture's notes), save the last take (C8 twice, without the gesture), play or
+pause the MIDI file (A0 twice), and in OBS through the plugin: start or stop the recording (A#7 + B7 + C8), the
+stream, add a chapter marker, change scene.
 
 File > Takes and recordings (Ctrl+T) lists the takes (Ctrl+S) and the recordings together, with their date, length,
 notes and files. Listen to one (Space), or to two in A/B from the same instant (A and B switch between them with a

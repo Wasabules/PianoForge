@@ -14,15 +14,18 @@ void LiveRecorder::push(const float* const* outputs, int numChannels, int numSam
 {
     int s = state.load(std::memory_order_acquire);
     if (s == kRequested) {
-        startSample.store(blockStart, std::memory_order_relaxed);
+        firstSample.store(blockStart, std::memory_order_relaxed);
         pushed.store(0, std::memory_order_relaxed);
+        if (!atFirst) { // at once: from this block
+            std::int64_t none = -1;
+            trigger.compare_exchange_strong(none, blockStart, std::memory_order_acq_rel);
+        }
         if (!state.compare_exchange_strong(s, kRecording, std::memory_order_acq_rel))
             return; // cancelled meanwhile
         s = kRecording;
     } else if (s == kStopRequested) {
-        // The recording ends where this block starts: [start, start + pushed).
-        endSample.store(startSample.load(std::memory_order_relaxed) + pushed.load(std::memory_order_relaxed),
-                        std::memory_order_relaxed);
+        // The blocks pushed end where this one starts: [first, first + pushed).
+        endSample.store(firstSample.load(std::memory_order_relaxed) + pushed.load(std::memory_order_relaxed), std::memory_order_relaxed);
         state.compare_exchange_strong(s, kStopped, std::memory_order_acq_rel);
         return;
     }
@@ -52,17 +55,38 @@ void LiveRecorder::push(const float* const* outputs, int numChannels, int numSam
     pushed.fetch_add(numSamples, std::memory_order_relaxed);
 }
 
+void LiveRecorder::noteOn(std::int64_t position) noexcept
+{
+    const int s = state.load(std::memory_order_acquire);
+    if (!atFirst || (s != kRequested && s != kRecording))
+        return;
+    std::int64_t none = -1;
+    trigger.compare_exchange_strong(none, position, std::memory_order_acq_rel);
+}
+
 void LiveRecorder::deviceStopped() noexcept
 {
     for (int s = state.load(); s == kRecording || s == kStopRequested; s = state.load()) {
-        endSample.store(startSample.load() + pushed.load());
+        endSample.store(firstSample.load() + pushed.load());
         if (state.compare_exchange_strong(s, kStopped))
             break;
     }
 }
 
+std::int64_t LiveRecorder::beginning() const noexcept
+{
+    return std::max(trigger.load(std::memory_order_acquire) - preroll, firstSample.load(std::memory_order_acquire));
+}
+
+double LiveRecorder::seconds() const noexcept
+{
+    if (rate <= 0.0 || trigger.load() < 0)
+        return 0.0;
+    return (double) std::max<std::int64_t>(0, firstSample.load() + pushed.load() - beginning()) / rate;
+}
+
 juce::Result LiveRecorder::start(const juce::File& wav, double sampleRate, std::uint32_t sessionSegment,
-                                 const juce::String& description)
+                                 const juce::String& description, bool atFirstNote)
 {
     if (armed)
         return juce::Result::fail("already recording");
@@ -74,6 +98,11 @@ juce::Result LiveRecorder::start(const juce::File& wav, double sampleRate, std::
     channels = 2;
     pushed = 0;
     dropped = 0;
+    trigger = -1;
+    endAt = -1;
+    atFirst = atFirstNote;
+    preroll = atFirstNote ? (std::int64_t) std::llround(kPrerollSeconds * rate) : 0;
+    hold = (std::int64_t) std::llround(kHoldSeconds * rate);
     writeFailed = false;
     withAudio = wav != juce::File();
     if (withAudio) {
@@ -106,6 +135,8 @@ juce::Result LiveRecorder::start(const juce::File& wav, double sampleRate, std::
         buffer.clear();
         fifo.setTotalSize(capacity);
         fifo.reset();
+        front = 0;
+        written = 0;
         writing = true;
         writerThread = std::thread([this] { writerLoop(); });
     }
@@ -114,29 +145,58 @@ juce::Result LiveRecorder::start(const juce::File& wav, double sampleRate, std::
     return juce::Result::ok();
 }
 
-void LiveRecorder::drain()
+void LiveRecorder::drain(bool final)
 {
-    const auto scope = fifo.read(fifo.getNumReady());
+    int ready = fifo.getNumReady();
+    if (ready <= 0)
+        return;
+    if (front == 0)
+        front = firstSample.load(std::memory_order_acquire); // the first block's position (pushed before its frames)
+    auto discard = [&](int n) {
+        const auto scope = fifo.read(n);
+        front += scope.blockSize1 + scope.blockSize2;
+        ready -= scope.blockSize1 + scope.blockSize2;
+    };
+    if (trigger.load(std::memory_order_acquire) < 0) { // waiting for the first note: only the pre-roll kept
+        if (ready > preroll)
+            discard(ready - (int) preroll);
+        return;
+    }
+    if (const auto begin = beginning(); front < begin)
+        discard((int) std::min<std::int64_t>(ready, begin - front));
+    // What may be written now: all but the last kHoldSeconds (an end may still come before), up to an end asked for.
+    std::int64_t limit = final ? ready : std::max<std::int64_t>(0, ready - hold);
+    if (const auto at = endAt.load(std::memory_order_acquire); at >= 0)
+        limit = std::min(limit, std::max<std::int64_t>(0, at - front));
+    if (final)
+        limit = std::min(limit, std::max<std::int64_t>(0, endSample.load(std::memory_order_acquire) - front));
+    if (limit <= 0)
+        return;
+    const auto scope = fifo.read((int) limit);
     if (scope.blockSize1 > 0 && !writer->writeFromAudioSampleBuffer(buffer, scope.startIndex1, scope.blockSize1))
         writeFailed = true;
     if (scope.blockSize2 > 0 && !writer->writeFromAudioSampleBuffer(buffer, scope.startIndex2, scope.blockSize2))
         writeFailed = true;
+    front += scope.blockSize1 + scope.blockSize2;
+    written += scope.blockSize1 + scope.blockSize2;
 }
 
 void LiveRecorder::writerLoop()
 {
     while (writing.load()) {
-        drain();
+        drain(false);
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    drain();
+    drain(true);
 }
 
-LiveRecorder::Span LiveRecorder::stop()
+LiveRecorder::Span LiveRecorder::stop(std::int64_t at)
 {
     Span span;
     if (!armed)
         return span;
+    if (at >= 0)
+        endAt.store(at, std::memory_order_release); // the writer goes no further from now on
     bool started = true;
     for (int s = state.load();; s = state.load()) {
         if (s == kRecording && state.compare_exchange_strong(s, kStopRequested))
@@ -159,15 +219,20 @@ LiveRecorder::Span LiveRecorder::stop()
         writerThread.join();
     }
     writer.reset(); // flushes and closes the file
+    const bool played = trigger.load() >= 0;
     span.sampleRate = rate;
     span.segment = segment;
-    span.start = startSample.load();
-    span.end = started ? endSample.load() : span.start;
+    span.start = played ? beginning() : 0;
+    span.end = endSample.load();
+    if (at >= 0 && at < span.end) // ended earlier: where asked, or as near as the frames already written allow
+        span.end = std::max(at, withAudio ? span.start + written : span.start);
     span.dropped = dropped.load();
     span.wav = withAudio ? wavFile : juce::File();
-    span.valid = started && span.end > span.start;
+    span.valid = started && played && span.end > span.start;
     if (!started)
         span.error = "the audio device did not run";
+    else if (!played)
+        span.error = "no note was played";
     else if (writeFailed.load())
         span.error = "writing " + wavFile.getFullPathName() + " failed (disk full?)";
     state = kIdle;

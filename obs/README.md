@@ -10,6 +10,9 @@ no system mixer in between, and the main audio output (ASIO) untouched.
   preset, the room...), drawn by OBS's own text source.
 - **Chapter markers**: at each take saved, recording started or stopped and MIDI file played in PianoForge, a chapter
   in OBS's recording (OBS 30.2 and later, recordings in Hybrid MP4).
+- **Piano gestures**: gestures played on PianoForge's keyboard (chosen in PianoForge, Keyboard > Piano gestures)
+  start or stop OBS's recording or stream, add a chapter marker, or move to the next or previous scene, if the audio
+  source lets them (on by default).
 
 The texts are in English and French (`data/locale`).
 
@@ -65,6 +68,7 @@ Properties) so that it is not heard twice.
 - **Follow PianoForge's volume** (off by default: the stream keeps its level whatever volume is heard), **Gain**.
 - **Latency** (10 to 100 ms, 20 by default), **Resynchronise**.
 - **Chapter markers in OBS recordings** (on by default).
+- **Let PianoForge's gestures control OBS** (on by default).
 
 **PianoForge keyboard**: width, trails above the keys (height, length in seconds; 0: the keyboard alone), the
 pedals; the colours: each hand's (estimated from the notes: where each hand plays, how far it stretches, chords too

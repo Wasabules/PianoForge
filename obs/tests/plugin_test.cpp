@@ -221,6 +221,9 @@ int main(int argc, char** argv)
 
     std::atomic<bool> producing { true };
     std::thread producer([&] {
+#if defined(_WIN32)
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL); // as an audio driver's callback runs
+#endif
         std::vector<float> mixes[3][2];
         for (auto& m : mixes)
             for (auto& c : m)
