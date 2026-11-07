@@ -3,6 +3,8 @@
 
 #include "AudioExport.h"
 #include "AudioHost.h"
+
+#include <memory>
 #include "KeyboardInput.h"
 #include "MidiFilePlayer.h"
 #include "OfflineRender.h"
@@ -93,6 +95,12 @@ int runSelfTest(const juce::StringArray& arguments)
     const int i = arguments.indexOf("--selftest");
     const juce::File folder(arguments[i + 1]);
     const juce::File reportFile(arguments[i + 2].isNotEmpty() ? arguments[i + 2] : "selftest.txt");
+    // The audio hosts below feed an OBS feed of their own: a PianoForge running beside keeps its own.
+#if JUCE_WINDOWS
+    _putenv_s("PIANOFORGE_AUDIO_FEED", "PianoForgeFeedSelfTest");
+#else
+    setenv("PIANOFORGE_AUDIO_FEED", "PianoForgeFeedSelfTest", 1);
+#endif
     Report r;
     r.line("PianoForge self-test - " + juce::Time::getCurrentTime().toString(true, true));
     r.line("Corpus: " + folder.getFullPathName());
@@ -229,7 +237,8 @@ int runSelfTest(const juce::StringArray& arguments)
     // 6. A chord through the application's MIDI path (keyboard -> velocity curve -> collector -> audio host ->
     //    player), 480-sample blocks, timestamps 31 ms in the past as delivered by Windows MIDI Services.
     {
-        AudioHost host { player };
+        auto hostOwner = std::make_unique<AudioHost>(player); // on the heap: hosts are large
+        AudioHost& host = *hostOwner;
         pf::VelocityCurve curve;
         KeyboardInput keyboard { host.collector, curve };
         host.collector.reset(fs);
@@ -329,7 +338,8 @@ int runSelfTest(const juce::StringArray& arguments)
     {
         player.playWholeTake = false;
         player.restrikeFadeSeconds = 0.8f;
-        AudioHost host { player };
+        auto hostOwner = std::make_unique<AudioHost>(player); // on the heap: hosts are large
+        AudioHost& host = *hostOwner;
         host.start(fs, 512);
         const int blocks = (int) (4.0 * fs) / 512;
         juce::AudioBuffer<float> live(2, blocks * 512);
@@ -411,7 +421,8 @@ int runSelfTest(const juce::StringArray& arguments)
     //     = WAV sample 0, the pedal already down re-stated there).
     {
         constexpr int block = 256;
-        AudioHost host { player };
+        auto hostOwner = std::make_unique<AudioHost>(player); // on the heap: hosts are large
+        AudioHost& host = *hostOwner;
         host.start(fs, block);
         const int blocks = (int) (3.0 * fs) / block;
         juce::AudioBuffer<float> live(2, blocks * block);
@@ -603,7 +614,8 @@ int runSelfTest(const juce::StringArray& arguments)
         std::vector<float> l(512), rr(512);
         float* outputs[2] = { l.data(), rr.data() };
         for (const double speed : { 1.0, 1.5 }) {
-            AudioHost host { player };
+            auto hostOwner = std::make_unique<AudioHost>(player); // on the heap: hosts are large
+            AudioHost& host = *hostOwner;
             host.start(fs, 512);
             host.filePlayer.load(sequence);
             host.filePlayer.setSpeed(speed);
@@ -621,7 +633,8 @@ int runSelfTest(const juce::StringArray& arguments)
                         + (host.filePlayer.wantsToPlay() ? "still playing" : "stopped at the end"));
         }
         {
-            AudioHost host { player };
+            auto hostOwner = std::make_unique<AudioHost>(player); // on the heap: hosts are large
+            AudioHost& host = *hostOwner;
             host.start(fs, 512);
             host.filePlayer.load(sequence);
             host.filePlayer.play();
@@ -656,7 +669,8 @@ int runSelfTest(const juce::StringArray& arguments)
     {
         auto play = [&](bool roomOn, float distance) {
             player.playWholeTake = false;
-            AudioHost host { player };
+            auto hostOwner = std::make_unique<AudioHost>(player); // on the heap: hosts are large
+            AudioHost& host = *hostOwner;
             pf::Room::Settings s;
             s.enabled = roomOn;
             s.levelDb = 0.0f;
@@ -709,7 +723,8 @@ int runSelfTest(const juce::StringArray& arguments)
         player.playWholeTake = false;
         const double device = 4.0 * fs;
         auto play = [&](double rate, int block, std::vector<float>& out, int& factor, double& engineRate) {
-            AudioHost host { player };
+            auto hostOwner = std::make_unique<AudioHost>(player); // on the heap: hosts are large
+            AudioHost& host = *hostOwner;
             host.start(rate, block);
             factor = host.rateFactor();
             engineRate = host.currentRate();
@@ -760,7 +775,8 @@ int runSelfTest(const juce::StringArray& arguments)
             above += (bin == n / 2 ? 1.0 : 2.0) * (re * re + im * im) / n; // Parseval: one-sided, both halves
         }
         const double imagesDb = 10.0 * std::log10(above / std::max(total, 1e-30) + 1e-30);
-        AudioHost atDevice { player };
+        auto atDeviceOwner = std::make_unique<AudioHost>(player); // on the heap: hosts are large
+        AudioHost& atDevice = *atDeviceOwner;
         atDevice.rateMode = 1;
         atDevice.start(device, 1001);
         r.check(baseFactor == 1 && highFactor == 4 && baseRate == fs && highRate == fs && levelGap < 0.1 && imagesDb < -80.0
@@ -961,7 +977,8 @@ int runSelfTest(const juce::StringArray& arguments)
         const auto tone = write(dir.getChildFile("tone.wav"), 0.25);
         write(dir.getChildFile("silence.wav"), 0.0);
         player.playWholeTake = false;
-        AudioHost host { player };
+        auto hostOwner = std::make_unique<AudioHost>(player); // on the heap: hosts are large
+        AudioHost& host = *hostOwner;
         host.start(fs, 512);
         std::vector<float> l(512), rr(512);
         float* outputs[2] = { l.data(), rr.data() };
@@ -1001,6 +1018,77 @@ int runSelfTest(const juce::StringArray& arguments)
                     + (stopped ? "yes" : "no"));
         host.playback.release();
         dir.deleteRecursively();
+    }
+
+    // 8k. The OBS plugin's feed: a chord through the audio host, the room heard on headphones, the volume at -6 dB.
+    //     The device plays the feed's heard mix at the volume (it comes after the room, the feed before it); the
+    //     speakers mix is what the room gives on speakers (a host whose room is heard on speakers: the same, sample
+    //     for sample); the dry mix is the engine's sound; the events ride along at their frames, the volume too.
+    {
+        auto play = [&](bool headphones, std::vector<float> (&mixes)[3], std::vector<float>& device, std::vector<pf::FeedEvent>& events,
+                        float& volume) {
+            player.playWholeTake = false;
+            auto hostOwner = std::make_unique<AudioHost>(player); // on the heap: hosts are large
+            AudioHost& host = *hostOwner;
+            pf::Room::Settings s;
+            s.enabled = true;
+            s.size = 0.5f;
+            s.distance = 3.0f;
+            s.headphones = headphones;
+            host.room.applySettings(s);
+            host.volume = 0.5f;
+            host.speakersWanted = true;
+            host.start(fs, 512);
+            pf::AudioFeedReader reader;
+            const bool open = reader.open();
+            const auto from = reader.written();
+            const auto eventsFrom = reader.eventsWritten();
+            std::vector<float> l(512), rr(512), frames(2 * 1024);
+            float* outputs[2] = { l.data(), rr.data() };
+            auto at = from;
+            for (int k = 0; k < (int) fs / 512; ++k) {
+                for (const int note : { 48, 64, 67 })
+                    if (k == 2)
+                        host.send(juce::MidiMessage::noteOn(1, note, (juce::uint8) 50));
+                host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, 512, {});
+                device.insert(device.end(), l.begin(), l.end());
+                // The block's frames of each mix, read as they come (as OBS does).
+                const auto written = reader.written();
+                for (int m = 0; m < 3 && open && written > at; ++m) {
+                    const int n = reader.read((pf::FeedMix) m, at, frames.data(), (int) (written - at));
+                    for (int i = 0; i < n; ++i)
+                        mixes[m].push_back(frames[(std::size_t) (2 * i)]);
+                }
+                at = written;
+            }
+            pf::FeedEvent got[16];
+            const int n = open ? reader.readEvents(eventsFrom, got, 16) : 0;
+            for (int i = 0; i < n; ++i)
+                events.push_back(got[i]);
+            volume = reader.volume();
+            return open && host.feedOn();
+        };
+        std::vector<float> phones[3], speakers[3], phonesDevice, speakersDevice;
+        std::vector<pf::FeedEvent> events, ignored;
+        float volume = 0.0f, ignoredVolume = 0.0f;
+        const bool fed = play(true, phones, phonesDevice, events, volume) && play(false, speakers, speakersDevice, ignored, ignoredVolume);
+        float deviceWorst = 0.0f, speakersWorst = 0.0f, phonesApart = 0.0f, dryApart = 0.0f, peak = 0.0f;
+        for (const float v : phones[0])
+            peak = std::max(peak, std::abs(v));
+        const std::size_t n = std::min({ phones[0].size(), phones[1].size(), phones[2].size(), speakers[0].size(), phonesDevice.size() });
+        for (std::size_t k = 0; k < n; ++k) {
+            deviceWorst = std::max(deviceWorst, std::abs(phonesDevice[k] - 0.5f * phones[0][k]));
+            speakersWorst = std::max(speakersWorst, std::abs(phones[1][k] - speakers[0][k]));
+            phonesApart = std::max(phonesApart, std::abs(phones[0][k] - phones[1][k]));
+            dryApart = std::max(dryApart, std::abs(phones[2][k] - phones[1][k]));
+        }
+        const bool chord = events.size() == 3 && (events[0].status & 0xF0) == 0x90 && events[0].data1 == 48 && events[2].data1 == 67;
+        r.check(fed && n > 40000 && deviceWorst < 1e-6f && speakersWorst < 1e-6f && phonesApart > 1e-3f && dryApart > 1e-3f && chord
+                    && volume == 0.5f,
+                "OBS feed: the device plays the heard mix at the volume (" + juce::String(deviceWorst, 7) + " apart), the speakers mix is the room on speakers ("
+                    + juce::String(speakersWorst, 7) + " apart, the headphones' " + juce::String(phonesApart, 3) + " away), the dry one the engine's ("
+                    + juce::String(dryApart, 3) + " away), " + juce::String((int) events.size()) + " events, volume " + juce::String(volume, 2)
+                    + "; peak " + juce::String(peak, 3) + ", " + juce::String((int) n) + " frames");
     }
 
     // 8j. Updates: versions compared; a manifest of our own (a relative installer, next to it) read from a file

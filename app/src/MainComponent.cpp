@@ -1,5 +1,7 @@
 #include "MainComponent.h"
 
+#include <cstring>
+
 #include "CurveText.h"
 #include "OfflineRender.h"
 
@@ -179,7 +181,8 @@ MainComponent::MainComponent()
     volume.setTextValueSuffix(" dB");
     volume.setTextBoxStyle(juce::Slider::TextBoxRight, false, 62, 20);
     volume.setDoubleClickReturnValue(true, 6.0);
-    volume.onValueChange = [this] { player.outputGain = modal.outputGain = juce::Decibels::decibelsToGain((float) volume.getValue()); };
+    // After the room, in the host: the OBS plugin's feed takes the sound before it (the stream keeps its level).
+    volume.onValueChange = [this] { host.volume = juce::Decibels::decibelsToGain((float) volume.getValue()); };
     volume.onDragEnd = [this] { saveSettings(); };
     volume.setValue(settings->getDoubleValue("volume", 6.0));
     velocityLabel.setText("Velocity", juce::dontSendNotification);
@@ -1123,12 +1126,14 @@ void MainComponent::toggleRecording()
         return;
     }
     recordButton.setColour(juce::TextButton::buttonColourId, theme::record);
+    host.addFeedMark("PianoForge recording: " + recordingStem);
 }
 
 void MainComponent::finishRecording()
 {
     const auto span = host.live.stop();
     recordButton.removeColour(juce::TextButton::buttonColourId);
+    host.addFeedMark("PianoForge recording stopped");
     drained.clear(); // every event up to the stop, into the session record
     host.drainRecorded(drained);
     takes.add(drained, host.currentSegment(), host.currentRate());
@@ -1227,6 +1232,7 @@ void MainComponent::saveLastTake()
     }
     const auto summary = juce::String(take->notes) + " notes, " + juce::String((double) take->lengthSamples / take->sampleRate, 1) + " s";
     lastSaved = stem + " (" + summary + ")";
+    host.addFeedMark("Take " + stem + " (" + summary + ")");
     auto bank = player.sharedBank();
     auto profile = modal.sharedProfile();
     const bool withModal = modalSelected() && profile != nullptr;
@@ -1623,6 +1629,73 @@ juce::StringArray MainComponent::adviceLines() const
     return tips;
 }
 
+void MainComponent::refreshFeed()
+{
+    if (!host.feedOn())
+        return;
+    // The state for overlays (the OBS text source), when it changes.
+    pf::FeedInfo info;
+    auto put = [](char* to, std::size_t size, const juce::String& text) {
+        const auto utf8 = text.toUTF8();
+        std::size_t n = std::min(size - 1, std::strlen(utf8.getAddress()));
+        while (n > 0 && ((unsigned char) utf8.getAddress()[n] & 0xC0) == 0x80) // whole characters
+            --n;
+        std::memcpy(to, utf8.getAddress(), n);
+        to[n] = 0;
+    };
+    put(info.engine, sizeof(info.engine), modalSelected() ? "Modal" : "Reference");
+    put(info.preset, sizeof(info.preset), properties.getUserSettings()->getValue("instrumentPreset"));
+    put(info.room, sizeof(info.room), roomPanel->isOn() ? roomPanel->presetName() : juce::String("off"));
+    const auto sequence = host.filePlayer.sequence();
+    const bool playing = sequence != nullptr && host.filePlayer.isPlaying();
+    if (sequence != nullptr)
+        put(info.file, sizeof(info.file), juce::String::fromUTF8(sequence->name.c_str()));
+    info.filePlaying = playing ? 1u : 0u;
+    info.recording = host.live.recording() ? 1u : 0u;
+    if (std::memcmp(&info, &feedInfo, sizeof(info)) != 0) {
+        feedInfo = info;
+        host.setFeedInfo(info);
+    }
+    // A MIDI file starting to play: a mark (a chapter in OBS's recording).
+    if (playing && !filePlayingBefore && sequence != nullptr)
+        host.addFeedMark("MIDI: " + juce::String::fromUTF8(sequence->name.c_str()));
+    filePlayingBefore = playing;
+    // The readers: the speakers mix rendered only while an OBS source takes it.
+    pf::AudioFeedWriter::Reader readers[pf::AudioFeedWriter::kMaxReaders];
+    const int count = host.feedReaders(readers, pf::AudioFeedWriter::kMaxReaders);
+    bool speakers = false;
+    for (int i = 0; i < count; ++i)
+        speakers = speakers || (readers[i].kind == pf::FeedReaderKind::audio && readers[i].mix == pf::FeedMix::speakers);
+    host.speakersWanted = speakers;
+}
+
+juce::String MainComponent::feedSummary() const
+{
+    if (!host.feedOn())
+        return "OBS plugin not fed (another PianoForge)";
+    pf::AudioFeedWriter::Reader readers[pf::AudioFeedWriter::kMaxReaders];
+    const int count = host.feedReaders(readers, pf::AudioFeedWriter::kMaxReaders);
+    if (count == 0)
+        return "OBS plugin fed, no OBS source reading";
+    int audio = 0, keys = 0, text = 0;
+    float latency = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        audio += readers[i].kind == pf::FeedReaderKind::audio ? 1 : 0;
+        keys += readers[i].kind == pf::FeedReaderKind::keyboard ? 1 : 0;
+        text += readers[i].kind == pf::FeedReaderKind::text ? 1 : 0;
+        if (readers[i].kind == pf::FeedReaderKind::audio)
+            latency = std::max(latency, readers[i].latencyMs);
+    }
+    juce::StringArray what;
+    if (audio > 0)
+        what.add("sound");
+    if (keys > 0)
+        what.add("keyboard");
+    if (text > 0)
+        what.add("text");
+    return "OBS reads the " + what.joinIntoString(", ") + (latency > 0.0f ? ", key to OBS " + juce::String(juce::roundToInt(latency)) + " ms" : juce::String());
+}
+
 void MainComponent::refreshDashboard()
 {
     // Engine.
@@ -1663,13 +1736,12 @@ void MainComponent::refreshDashboard()
     if (host.live.recording()) {
         const double t = host.live.seconds();
         sessionCard.setLines({ juce::String::formatted("Recording  %d:%04.1f", (int) t / 60, std::fmod(t, 60.0)),
-                               recordingStem + " " + recordingExtensions(),
-                               host.feedOn() ? "OBS plugin fed" : "OBS plugin not fed (another PianoForge)", audioPanel->mirrorSummary() },
+                               recordingStem + " " + recordingExtensions(), feedSummary(), audioPanel->mirrorSummary() },
                              theme::record);
     } else {
         sessionCard.setLines({ exporter.busy() ? "Converting " + exporter.progressText() : juce::String("Not recording"),
                                lastSaved.isEmpty() ? juce::String("Ctrl+R records, Ctrl+S saves the last take") : "Last: " + lastSaved,
-                               host.feedOn() ? "OBS plugin fed" : "OBS plugin not fed (another PianoForge)", audioPanel->mirrorSummary() });
+                               feedSummary(), audioPanel->mirrorSummary() });
     }
 }
 
@@ -1694,6 +1766,7 @@ void MainComponent::timerCallback()
                                    : juce::String("Record"));
 
     playerBar->refresh();
+    refreshFeed();
 
     // Corpus loading.
     if (loader.isLoading()) {

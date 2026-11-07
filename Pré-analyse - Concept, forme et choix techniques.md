@@ -1019,6 +1019,39 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     Les tests du plugin, de l'application et de la page web passent aussi.
   - *`modal_render --nearest`* joue sans la fusion des couches (la couche la plus proche au gain global), pour comparer.
 
+**Le plugin OBS, pour le stream (7 novembre 2026).** Dix points, demandés ensemble. Le plugin ne donnait que le son, tel qu'entendu.
+  - *La mémoire partagée, version 2* (`PianoForgeFeed`, `pf::AudioFeedWriter`). Elle porte :
+    - trois mix des mêmes trames, avant le volume et le limiteur de l'application : tel qu'entendu, sur enceintes, sec ;
+    - le volume de l'application ;
+    - l'instant de chaque bloc, sur l'horloge stable de la machine (la même dans tous les processus) ;
+    - les évènements MIDI à leur trame ;
+    - l'état pour les incrustations, et des marques ;
+    - huit emplacements de lecteurs, où chaque source dit ce qu'elle lit et avec quel retard.
+
+    Le nom change : un ancien plugin qui garderait l'ancienne mémoire ouverte ne bloque pas la nouvelle. L'application et le plugin vont donc ensemble.
+  - *1. Le mix et le niveau du stream.* Au casque, OBS recevait le rendu binaural, fait pour des écouteurs et coloré sur des enceintes, et le volume d'écoute changeait le niveau du stream.
+    - Le volume passe après la salle, dans l'hôte audio ; le flux prend le son avant lui.
+    - Le mix « sur enceintes » (par défaut) vient d'une seconde salle, aux réglages de la première sans la tête. Elle tourne seulement quand une source OBS prend ce mix, et part des réglages courants, sans glisser vers eux. Sur enceintes, elle redonne la salle entendue à l'échantillon près.
+    - Le plugin a son gain, suit ou non le volume de l'application (non par défaut), et a son propre limiteur sous −1 dBFS.
+  - *2. Le test instable.* La fréquence s'écartait de 50 à 350 ppm sur des fenêtres d'une seconde. La boucle PI corrigeait le rapport d'après le remplissage du tampon, une dent de scie déchiquetée quand les blocs arrivent en rafales (une minuterie de 15,6 ms) ; une seconde de moyenne ne la lissait pas, et la boucle errait.
+    - Le débit de l'application est désormais mesuré sur les instants de ses blocs : une droite des moindres carrés, uniforme au démarrage puis pondérée sur une minute.
+    - Le rapport nominal suit ce débit, et la boucle, purement proportionnelle et calme, ne tient plus que le remplissage.
+    - Le remplissage est compté depuis les instants des trames : la dent de scie est retirée, sa moyenne gardée.
+    - Résultat : quatre passages sur quatre, la fréquence à ±8 ppm (tolérance ±50), le résidu après ajustement d'une sinusoïde à −62 dB.
+    - Trois essais écartés en route. Ajouter la dent de scie sans retirer sa moyenne déplaçait la consigne d'une demi-rafale : la boucle partait en butée, puis en sous-alimentation, en boucle. Garder l'intégrale avec le débit mesuré, ou la compenser à chaque mise à jour, annulait l'apport de la mesure ou figeait un écart du démarrage. La moyenne exponentielle seule surpondérait le premier point (−300 ppm à 5 s).
+  - *3. Des fondus.* Tout démarrage monte en 10 ms. Tout arrêt prévu descend en 10 ms : nouveau mix, nouvelle latence ou nouveau format, bouton de resynchronisation, audio de l'application arrêté. Pour ce dernier cas, un bloc de l'application est en retard quand il dépasse une fois et demie le plus long intervalle récent entre blocs : avec un seuil fixe, les rafales passaient pour des arrêts et coupaient le son.
+  - *4. La source « clavier ».* Les 88 touches éclairées selon la vélocité, les trois pédales, et des traînées qui montent des touches tant qu'elles sont tenues. Elle montre la trame que la source audio horodate à cet instant : l'image rejoint le son. Sans source audio, elle suit l'application, 20 ms derrière.
+  - *5. La latence de la touche à OBS*, dans l'état de la source : l'âge des trames horodatées, d'après les instants de l'application. Dans le test, 18 à 26 ms pour une latence de 20 ms. Elle sert à régler le décalage de synchronisation face à une caméra.
+  - *6. Des marqueurs de chapitre* dans l'enregistrement d'OBS, à chaque prise sauvegardée, enregistrement lancé ou arrêté et fichier MIDI joué (API du frontend d'OBS, sur le fil de l'interface ; OBS 30.2 et plus récent, MP4 hybride). Quand OBS n'enregistre pas, le journal le dit.
+  - *7. La source « texte »* : un modèle dont les champs ({file}, {state}, {preset}, {room}, {engine}, {recording}) prennent l'état de l'application. Elle est dessinée par la source texte d'OBS elle-même, dont les propriétés (police, couleurs, contour) restent disponibles. Une ligne dont tous les champs sont vides disparaît.
+  - *8. Une seule conversion de fréquence* : le plugin sort directement à la fréquence d'OBS, dans le même rééchantillonneur que la correction de dérive.
+  - *9. Le signal de vie* : la carte Session de l'application dit ce qu'OBS lit (son, clavier, texte) et la latence de la touche à OBS, ou qu'aucune source ne lit le flux.
+  - *10. Un état qui se rafraîchit seul* (à chaque changement de ce qu'il dit, et toutes les cinq secondes en marche, pour les mesures) et des textes traduisibles, en anglais et en français.
+  - *Tests.*
+    - Le test du plugin dans libobs démarre désormais aussi la vidéo (module Direct3D 11 d'OBS, hors écran) et charge la source texte d'OBS. Il vérifie le son (mix, niveaux, fondus, fréquence, propreté), l'état, les lecteurs, le rendu du clavier pixel par pixel, le texte et les chapitres.
+    - Un test sans OBS couvre la logique des incrustations, et le test de la mémoire partagée ses nouveautés.
+    - L'autotest de l'application vérifie les trois mix à l'échantillon près.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

@@ -45,6 +45,11 @@ struct AudioLoad {
 /// the device's by a polyphase interpolator (pf::Upsampler: flat to 20 kHz, images 90 dB down, 0.7 ms): four times
 /// less work at 192 kHz, for nothing audible lost. What is recorded, captured as takes, streamed (OBS, mirror) is
 /// the engine's sound, at its rate; the MIDI events keep their timing to within one engine sample.
+///
+/// The volume comes after the room, before the limiter: what is heard and recorded. The OBS plugin's feed takes the
+/// sound before both, as three mixes (pf::FeedMix): as heard, as on speakers (a second room, the head left out, run
+/// while an OBS source takes that mix), and dry; the MIDI events with their frames, the state for overlays and the
+/// marks (chapters) ride along.
 class AudioHost final : public juce::AudioIODeviceCallback {
 public:
     explicit AudioHost(pf::Engine& e) : engine(e) { feedOpen = feed.create(); }
@@ -56,11 +61,19 @@ public:
     MidiFilePlayer filePlayer;             // a MIDI file, played to the sample with what the keyboards play
     pf::Room room;                         // the room around the piano, at the output (off until the interface sets it)
     pf::Limiter limiter;                   // after it: nothing over -1 dBFS reaches the device, a recording or a stream
+    /// The lab's volume (linear), after the room (what is heard and recorded; the feed comes before it).
+    std::atomic<float> volume { 1.0f };
+    /// An OBS source takes the speakers mix (the interface sets it from the feed's readers): the second room runs.
+    std::atomic<bool> speakersWanted { false };
     TakePlayback playback;                 // takes listened to: heard only (after the recording and streaming taps)
     /// The engine's rate: 0 the device's divided down to 48 kHz or less (applies at the next device start), 1 the
     /// device's own.
     std::atomic<int> rateMode { 0 };
     bool feedOn() const noexcept { return feedOpen; } // the audio feed of the OBS plugin (obs/)
+    /// Message thread: the state for overlays, the marks (chapters in OBS's recordings), the readers.
+    void setFeedInfo(const pf::FeedInfo& info) noexcept { feed.setInfo(info); }
+    void addFeedMark(const juce::String& text) noexcept { feed.addMark(text.toRawUTF8()); }
+    int feedReaders(pf::AudioFeedWriter::Reader* out, int max) const noexcept { return feed.readers(out, max); }
 
     /// Message thread: sends a message as if it came from a keyboard.
     void send(const juce::MidiMessage& m)
@@ -83,10 +96,17 @@ public:
         const int engineBlock = std::max(1, blockSize) / k + 2;
         engine.prepare(rate, engineBlock);
         room.prepare(rate);
+        { // the speakers mix's room: the heard one's settings, the head left out (prepare starts on them, no glide)
+            auto s = room.settings();
+            s.headphones = false;
+            roomSpeakers.applySettings(s);
+        }
+        roomSpeakers.prepare(rate);
+        speakersRunning = false;
         limiter.prepare(rate);
         mirror.mainFormat(rate, engineBlock);
         feed.setFormat((std::uint32_t) std::lround(rate), (std::uint32_t) engineBlock);
-        for (auto& b : { &engineL, &engineR })
+        for (auto& b : { &engineL, &engineR, &dryL, &dryR, &speakersL, &speakersR })
             b->assign((std::size_t) engineBlock, 0.0f);
         for (auto& b : { &upL, &upR })
             b->assign((std::size_t) (engineBlock * k), 0.0f);
@@ -180,18 +200,14 @@ public:
         }
         if (k == 1) {
             engine.process(outputs, numOutputs, n, events.data(), count);
-            if (numOutputs >= 2 && outputs[0] != nullptr && outputs[1] != nullptr)
-                room.process(outputs[0], outputs[1], n); // whichever engine: what is heard, recorded and streamed
-            if (numOutputs >= 2 && outputs[0] != nullptr && outputs[1] != nullptr)
-                limiter.process(outputs[0], outputs[1], n);
+            shape(numOutputs > 0 ? outputs[0] : nullptr, numOutputs > 1 ? outputs[1] : nullptr, n, count);
             finish(outputs, numOutputs, n);
             if (numOutputs >= 2)
                 playback.render(outputs[0], outputs[1], n, recordingRate.load(std::memory_order_relaxed));
         } else {
             float* engineOut[2] = { engineL.data(), engineR.data() };
             engine.process(engineOut, 2, frames, events.data(), count);
-            room.process(engineOut[0], engineOut[1], frames);
-            limiter.process(engineOut[0], engineOut[1], frames);
+            shape(engineOut[0], engineOut[1], frames, count);
             finish(engineOut, 2, frames);
             playback.render(engineOut[0], engineOut[1], frames, recordingRate.load(std::memory_order_relaxed));
             // Up to the device's rate: the carry from last time, then the new frames; what is left over waits.
@@ -219,12 +235,75 @@ public:
     }
 
 private:
-    /// The engine's sound, at its rate: recorded, streamed, measured; then the engine's clock advances.
+    /// The engine's sound (frames at its rate) through the room, whichever engine; the OBS feed's mixes taken from it
+    /// (before the volume and the limiter); then the volume (a ramp over the block) and the limiter: what is heard.
+    void shape(float* left, float* right, int frames, int numEvents) noexcept
+    {
+        if (left == nullptr || frames <= 0)
+            return;
+        const bool stereo = right != nullptr;
+        const bool mixes = feedOpen && stereo && frames <= (int) dryL.size(); // (a block longer than announced: heard only)
+        const bool speakers = mixes && speakersWanted.load(std::memory_order_relaxed);
+        if (mixes) {
+            std::copy(left, left + frames, dryL.begin());
+            std::copy(right, right + frames, dryR.begin());
+        }
+        if (speakers) { // the heard room's settings, the head left out (from silence when it starts)
+            if (!speakersRunning)
+                roomSpeakers.reset();
+            speakersRunning = true;
+            auto s = room.settings();
+            s.headphones = false;
+            roomSpeakers.applySettings(s);
+            std::copy(left, left + frames, speakersL.begin());
+            std::copy(right, right + frames, speakersR.begin());
+            roomSpeakers.process(speakersL.data(), speakersR.data(), frames);
+        } else {
+            speakersRunning = false;
+        }
+        if (stereo)
+            room.process(left, right, frames);
+        if (feedOpen) {
+            pf::AudioFeedWriter::Block b;
+            b.left[0] = left;
+            b.right[0] = stereo ? right : left;
+            if (speakers) {
+                b.left[1] = speakersL.data();
+                b.right[1] = speakersR.data();
+            }
+            if (mixes) {
+                b.left[2] = dryL.data();
+                b.right[2] = dryR.data();
+            }
+            b.frames = frames;
+            for (int i = 0; i < numEvents; ++i)
+                feedEvents[(std::size_t) i] = { events[(std::size_t) i].offset, events[(std::size_t) i].status,
+                                                events[(std::size_t) i].data1, events[(std::size_t) i].data2, 0, 0 };
+            b.events = feedEvents.data();
+            b.numEvents = numEvents;
+            b.volume = volume.load(std::memory_order_relaxed);
+            feed.write(b);
+        }
+        const float target = volume.load(std::memory_order_relaxed);
+        if (target != volumeNow || target != 1.0f) {
+            const float step = (target - volumeNow) / (float) frames;
+            for (int k = 0; k < frames; ++k) {
+                const float g = volumeNow + step * (float) (k + 1);
+                left[k] *= g;
+                if (stereo)
+                    right[k] *= g;
+            }
+            volumeNow = target;
+        }
+        if (stereo)
+            limiter.process(left, right, frames);
+    }
+
+    /// The engine's sound, at its rate: recorded, mirrored, measured; then the engine's clock advances.
     void finish(float* const* out, int channels, int frames) noexcept
     {
         live.push(out, channels, frames, samplesElapsed); // a copy into a lock-free FIFO: nothing waits on it
         mirror.push(out, channels, frames);               // likewise
-        feed.write(out, channels, frames);                // the OBS plugin's feed: a copy into shared memory
         notePeak(load.peakLeft, channels > 0 ? out[0] : nullptr, frames);
         notePeak(load.peakRight, channels > 1 ? out[1] : nullptr, frames);
         samplesElapsed += frames;
@@ -265,8 +344,13 @@ private:
     static constexpr int kMaxEvents = 1024;
     static constexpr int kRecordCapacity = 1 << 16;
     pf::Engine& engine;
-    pf::AudioFeedWriter feed; // before the callbacks start; written by the audio thread only
+    pf::AudioFeedWriter feed; // before the callbacks start; written by the audio thread (blocks), the message thread (info)
     bool feedOpen = false;
+    pf::Room roomSpeakers;    // the speakers mix's room (audio thread)
+    bool speakersRunning = false;
+    float volumeNow = 1.0f;   // the volume applied at the end of the last block (audio thread)
+    std::vector<float> dryL, dryR, speakersL, speakersR;
+    std::vector<pf::FeedEvent> feedEvents = std::vector<pf::FeedEvent>(kMaxEvents); // on the heap: hosts live on stacks (the self-test)
     juce::MidiBuffer midi;
     std::array<pf::Event, kMaxEvents> events {};
     std::atomic<bool> ready { false };

@@ -23,7 +23,9 @@ set(with_obs 0)
 if(OBS_DLL AND EXISTS "${OBS_DLL}")
     file(MAKE_DIRECTORY "${STAGE}/obs")
     file(COPY_FILE "${OBS_DLL}" "${STAGE}/obs/pianoforge-obs.dll")
-    file(COPY_FILE "${OBS_LOCALE}" "${STAGE}/obs/en-US.ini")
+    foreach(language en-US fr-FR)
+        file(COPY_FILE "${OBS_LOCALES}/${language}.ini" "${STAGE}/obs/${language}.ini")
+    endforeach()
     set(with_obs 1)
 endif()
 
@@ -44,7 +46,7 @@ endif()
 
 # Never the corpus nor a profile calibrated on it (rendered from a commercial library: its licence forbids passing
 # them on). Only the files above, by name; and the executable carries no data of that size (a profile is tens of MB).
-set(allowed PianoForge.exe msvcp140.dll vcruntime140.dll vcruntime140_1.dll obs/pianoforge-obs.dll obs/en-US.ini
+set(allowed PianoForge.exe msvcp140.dll vcruntime140.dll vcruntime140_1.dll obs/pianoforge-obs.dll obs/en-US.ini obs/fr-FR.ini
     vst3/PianoForge.vst3/Contents/x86_64-win/PianoForge.vst3 vst3/PianoForge.vst3/Contents/Resources/moduleinfo.json
     vst3/PianoForge.vst3/desktop.ini vst3/PianoForge.vst3/Plugin.ico)
 file(GLOB_RECURSE staged RELATIVE "${STAGE}" "${STAGE}/*")

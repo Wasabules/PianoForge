@@ -47,7 +47,7 @@ add_custom_target(installer
             -DEXE=$<TARGET_FILE:PianoForgeApp>
             -DRUNTIME=${runtime_argument}
             -DOBS_DLL=${obs_dll}
-            -DOBS_LOCALE=${PROJECT_SOURCE_DIR}/obs/data/locale/en-US.ini
+            -DOBS_LOCALES=${PROJECT_SOURCE_DIR}/obs/data/locale
             -DVST3_BINARY=${vst3_binary}
             -DICON=${CMAKE_BINARY_DIR}/app/PianoForgeApp_artefacts/JuceLibraryCode/icon.ico
             -DISCC=${PIANOFORGE_ISCC}

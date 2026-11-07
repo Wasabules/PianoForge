@@ -61,7 +61,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "vst3"; Description: "The VST3 plugin (PianoForge in a host: REAPER, FL Studio, Cubase...)"; GroupDescription: "Plugins:"
 #endif
 #if WithObs == "1"
-Name: "obsplugin"; Description: "The OBS Studio plugin (the PianoForge audio source, for streaming)"; GroupDescription: "OBS Studio:"; Check: ObsInstalled
+Name: "obsplugin"; Description: "The OBS Studio plugin (the PianoForge sound, keyboard and text sources, for streaming)"; GroupDescription: "OBS Studio:"; Check: ObsInstalled
 #endif
 
 [Files]
@@ -78,6 +78,7 @@ Source: "{#StageDir}\vst3\PianoForge.vst3\Plugin.ico"; DestDir: "{autocf64}\VST3
 #if WithObs == "1"
 Source: "{#StageDir}\obs\pianoforge-obs.dll"; DestDir: "{commonappdata}\obs-studio\plugins\pianoforge-obs\bin\64bit"; Flags: ignoreversion; Tasks: obsplugin; BeforeInstall: MovePluginAside
 Source: "{#StageDir}\obs\en-US.ini"; DestDir: "{commonappdata}\obs-studio\plugins\pianoforge-obs\data\locale"; Flags: ignoreversion; Tasks: obsplugin
+Source: "{#StageDir}\obs\fr-FR.ini"; DestDir: "{commonappdata}\obs-studio\plugins\pianoforge-obs\data\locale"; Flags: ignoreversion; Tasks: obsplugin
 #endif
 
 [Icons]

@@ -206,6 +206,11 @@ private:
     juce::String recordingExtensions() const;
     RecordingExporter exporter; // the formats made from the live recording once it stops
     juce::String recordingStem, lastSaved;
+    // The OBS plugin's feed: the state for overlays last published, a MIDI file playing at the last look.
+    pf::FeedInfo feedInfo {};
+    bool filePlayingBefore = false;
+    void refreshFeed();
+    juce::String feedSummary() const;
     double messageUntil = 0.0;
     int octave = 4;             // scientific octave of the first computer-keyboard note (C4 = middle C)
     bool spaceDown = false, pedalFromSpace = false, sostenutoKeyDown = false, softKeyDown = false, focusGiven = false, bankInstalled = false;

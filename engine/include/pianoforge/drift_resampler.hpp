@@ -18,6 +18,12 @@ namespace pf {
 /// (settled within seconds, the correction a little nervous), then slows down over kLockSeconds to its steady gains
 /// (calm, slow to move); its integral is kept as a correction, so that the change of gains is seamless.
 ///
+/// The fill level is a sawtooth: each of the producer's blocks raises it at once, the consumer lowers it frame by
+/// frame. A producer whose blocks arrive in bursts (a timer of 15.6 ms, a busy machine) makes it a ragged one, which
+/// a second of averaging does not smooth enough: the loop wanders (by a hundred ppm, a wobble of the pitch). A
+/// consumer that knows when the producer wrote its last block (a shared clock) gives render() the frames produced
+/// since then at the nominal rate, less their average (fillOffset): the sawtooth taken out, the fill's average kept.
+///
 /// append() and render() run on the consumer's thread, without allocation or lock; prepare() allocates. The
 /// statistics may be read from any thread.
 class DriftResampler {
@@ -30,6 +36,7 @@ public:
         inRate = inputRate;
         outRate = outputRate;
         baseRatio = inputRate / outputRate;
+        rateMeasured = false;
         target = 1.5 * ((double) maxInputBlock + (double) maxOutputBlock * baseRatio) + (0.002 + extraSeconds) * inputRate;
         capacity = (int) std::ceil(std::max(inputRate, 8.0 * target)) + 4 * kHalfTaps;
         pending.assign((std::size_t) capacity * 2, 0.0f);
@@ -77,13 +84,35 @@ public:
         fillSum = 0.0;
         fillAverage = target;
         correctionValue = 0.0;
+        lastRatio = baseRatio;
         playing = false;
+    }
+
+    /// The producer's rate as measured on the consumer's clock (from a shared clock's timestamps of its blocks, a
+    /// line through them over seconds): the nominal ratio follows it (within 0.5 % of the nominal one), and the loop,
+    /// left with the fill level alone, keeps only its proportional term, a calm one (the drift is the ratio's: an
+    /// integral would only wind up the start's transients). The first time, the ratio moves by the drift found, a few
+    /// hundred ppm at most: inaudible.
+    void setProducerRate(double measured) noexcept
+    {
+        if (!(measured > 0.0) || outRate <= 0.0)
+            return;
+        const double nominal = inRate / outRate;
+        baseRatio = std::clamp(measured / outRate, nominal * 0.995, nominal * 1.005);
+        if (!rateMeasured)
+            integral = 0.0;
+        rateMeasured = true;
     }
 
     /// Frames append() can take now.
     int room() const noexcept { return capacity - pendingFrames; }
     /// Frames waiting, ahead of the read position.
     double waiting() const noexcept { return pendingFrames - readPos; }
+    /// Frames render() can still produce before it runs dry (at the last ratio).
+    int renderable() const noexcept
+    {
+        return std::max(0, (int) std::floor((pendingFrames - kHalfTaps - 1 - readPos) / std::max(lastRatio, 1e-9)));
+    }
     /// Enough frames waiting to start (render() starts by itself; a consumer keeping its own timeline asks first).
     bool readyToStart() const noexcept { return waiting() >= target + kHalfTaps; }
 
@@ -95,8 +124,9 @@ public:
         pendingFrames += frames;
     }
 
-    /// numFrames at the consumer's rate (silence until the target is reached, and after an underrun).
-    void render(float* const* output, int numChannels, int numFrames) noexcept
+    /// numFrames at the consumer's rate (silence until the target is reached, and after an underrun). fillOffset:
+    /// the frames the producer has made since its last block less their average (see above), added to the fill level.
+    void render(float* const* output, int numChannels, int numFrames, double fillOffset = 0.0) noexcept
     {
         auto silence = [&](int from) {
             for (int c = 0; c < numChannels; ++c)
@@ -121,13 +151,15 @@ public:
         // the steady ones (0.07 rad/s, damping 0.75), the integral term carried over as it is.
         const double dt = numFrames / outRate;
         playedSeconds += dt;
-        const double lock = std::clamp((playedSeconds - kLockSeconds) / kLockSeconds, 0.0, 1.0); // 0 fast, 1 steady
-        const double kp = 0.03 + lock * (0.002 - 0.03), ki = 0.02 + lock * (0.0001 - 0.02);
+        const double lock = rateMeasured ? 1.0 : std::clamp((playedSeconds - kLockSeconds) / kLockSeconds, 0.0, 1.0); // 0 fast, 1 steady
+        // (The producer's rate measured, the loop only holds the fill level: proportional, calm.)
+        const double kp = rateMeasured ? 0.0003 : 0.03 + lock * (0.002 - 0.03);
+        const double ki = rateMeasured ? 0.0 : 0.02 + lock * (0.0001 - 0.02);
         if (fillCount == fills.size())
             fillSum -= fills[fillAt];
         else
             ++fillCount;
-        fills[fillAt] = waiting();
+        fills[fillAt] = waiting() + fillOffset;
         fillSum += fills[fillAt];
         fillAt = (fillAt + 1) % fills.size();
         const double smoothed = fillSum / (double) fillCount;
@@ -135,6 +167,8 @@ public:
         integral = std::clamp(integral + ki * error * dt, -kMaxCorrection, kMaxCorrection); // as a correction
         const double correction = std::clamp(kp * error + integral, -kMaxCorrection, kMaxCorrection);
         const double ratio = baseRatio * (1.0 + correction);
+        lastRatio = ratio;
+        ratioValue.store(ratio, std::memory_order_relaxed);
         fillAverage.store(smoothed, std::memory_order_relaxed);
         correctionValue.store(correction, std::memory_order_relaxed);
         // Windowed-sinc interpolation, phases interpolated linearly.
@@ -186,6 +220,8 @@ public:
     double targetSeconds() const noexcept { return inRate > 0.0 ? target / inRate : 0.0; }
     double fillSeconds() const noexcept { return inRate > 0.0 ? fillAverage.load() / inRate : 0.0; }
     double correctionPpm() const noexcept { return 1e6 * correctionValue.load(); }
+    /// The ratio against the nominal one (the drift compensated, measured rate and loop together), at the last render.
+    double ratioPpm() const noexcept { return inRate > 0.0 ? 1e6 * (ratioValue.load() * outRate / inRate - 1.0) : 0.0; }
     std::uint32_t underruns() const noexcept { return underrunCount.load(); }
     std::uint32_t overruns() const noexcept { return overrunCount.load(); }
     bool running() const noexcept { return playing.load(); }
@@ -193,7 +229,8 @@ public:
 private:
     static constexpr double kMaxCorrection = 0.003, kPi = 3.141592653589793;
     static constexpr double kLockSeconds = 6.0; // fast gains this long, then as long again to blend into the steady ones
-    double inRate = 0.0, outRate = 0.0, baseRatio = 1.0, target = 0.0;
+    double inRate = 0.0, outRate = 0.0, baseRatio = 1.0, target = 0.0, lastRatio = 1.0;
+    bool rateMeasured = false; // setProducerRate() gives the nominal ratio
     int capacity = 0;
     std::vector<float> kernel;   // (kPhases + 1) x 2 kHalfTaps
     std::vector<float> pending;  // interleaved stereo, frames not yet consumed
@@ -202,7 +239,7 @@ private:
     std::vector<double> fills;   // the fill level at the last renders (about a second of them)
     std::size_t fillAt = 0, fillCount = 0;
     double fillSum = 0.0, integral = 0.0, playedSeconds = 0.0;
-    std::atomic<double> fillAverage { 0.0 }, correctionValue { 0.0 };
+    std::atomic<double> fillAverage { 0.0 }, correctionValue { 0.0 }, ratioValue { 0.0 };
     std::atomic<bool> playing { false };
     std::atomic<std::uint32_t> underrunCount { 0 }, overrunCount { 0 };
 };
