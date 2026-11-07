@@ -15,6 +15,7 @@
 #include "ui/PlayerBar.h"
 #include "ui/RoomPanel.h"
 #include "ui/TakesPanel.h"
+#include "UpdateChecker.h"
 #include "ui/ToolWindow.h"
 
 #include <pianoforge/modal_engine.hpp>
@@ -141,6 +142,14 @@ private:
     std::unique_ptr<TakesPanel> takesPanel;
     void openTakes();
     void toggleHeadphones();
+    // Updates (Help menu): where to look and whether to look at start are settings; without an address, nothing is
+    // checked. A newer version is offered, downloaded and checked in the background, then installed once closed.
+    void checkForUpdates(bool manual);
+    void askUpdateSettings();
+    void offerUpdate(const UpdateChecker::Release& release);
+    void installUpdate(const UpdateChecker::Release& release);
+    std::thread updateThread;
+    std::atomic<bool> updateBusy { false }, updateCancel { false };
     /// Renders `sequence` (seconds) with the engine heard, its settings, the room and the limiter as they are now, to
     /// `wavFile`, in the background; then `done(ok)` on the message thread.
     void renderInBackground(juce::MidiMessageSequence sequence, double rate, juce::File wavFile, juce::String summary,

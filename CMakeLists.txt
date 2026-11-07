@@ -41,3 +41,8 @@ option(PIANOFORGE_OBS_PLUGIN "Build the OBS Studio plugin (the PianoForge audio 
 if(PIANOFORGE_OBS_PLUGIN)
     add_subdirectory(obs)
 endif()
+
+# The Windows installer (installer/): cmake --build --preset windows-release --target installer (Inno Setup 6).
+if(WIN32)
+    add_subdirectory(installer)
+endif()

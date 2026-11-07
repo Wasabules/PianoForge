@@ -19,6 +19,9 @@ switches between that reference and the modal engine while playing.
 | `tools/bench/` | Reference bench (Python): renders a VST3 instrument through measurement sessions and checks the takes. |
 | `tools/forge/` | Forge (Python): analysis and calibration, from the reference corpus to engine data. |
 | `studies/` | Standalone computations and spikes behind design decisions (resonator precision, CPU budget, resynthesis). |
+| `obs/` | OBS Studio plugin: the PianoForge audio source, fed by the application through shared memory. |
+| `web/` | The modal engine and the room in WebAssembly, played from a browser page. |
+| `installer/` | The Windows installer (Inno Setup 6) and the update manifest it comes with. |
 | `corpus/` | Rendered takes and plugin states. Local only, never committed (commercial sample library licences). |
 
 ## Build the application
@@ -90,6 +93,35 @@ Offline render of a MIDI file, through the reference player or the modal engine:
 ```
 PianoForge.exe --render take.mid take.wav corpus/reference/noire-dry/single-notes [--engine modal]
 ```
+
+## Install (Windows)
+
+With Inno Setup 6 installed:
+
+```
+cmake --build --preset windows-release --target installer
+```
+
+makes `build/windows-msvc/installer/output/PianoForge-<version>-setup.exe` (the version is the project's, in the
+root `CMakeLists.txt`), with `latest.json` (the update manifest) and the installer's SHA-256 next to it. The
+installer holds the application, the Visual C++ runtime it needs (next to it: nothing else to install) and,
+optionally, the OBS plugin (when OBS Studio is installed; a plugin OBS is using moves aside and the new one loads at
+its next start). It installs for the current user without administrator rights (`%LOCALAPPDATA%\Programs\PianoForge`),
+or for every user if chosen. Settings, takes and recordings are never touched, by an update or an uninstall.
+It never holds the corpus nor a profile calibrated on it (the build refuses anything but its six files): the
+installed application asks for its corpus (File > Change corpus). Not code-signed: Windows SmartScreen warns
+about it the first time.
+
+## Updates
+
+Help > Update settings: the address of an update manifest (`latest.json` as written by the installer build; its
+`url` may be relative to it, or set at build time with `-DPIANOFORGE_UPDATE_BASE_URL=https://...`) or of a GitHub
+release (`https://api.github.com/repos/<owner>/<repo>/releases/latest`: the asset ending in `-setup.exe`, its digest
+or a `.sha256` asset). https or a file; empty by default, and then nothing is looked for. Help > Check for updates,
+or at start once a day if ticked. A newer version is offered (install, skip this version, later); it is downloaded
+to the temporary folder, its size and SHA-256 checked, then PianoForge closes, the installer runs silently and opens
+it again. `PianoForge.exe --check-update <address> report.txt` reads an address and checks its installer without
+running it.
 
 ## Reference bench
 

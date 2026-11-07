@@ -52,6 +52,11 @@ public:
             quit();
             return;
         }
+        if (arguments.contains("--check-update")) {
+            setApplicationReturnValue(runCheckUpdate(arguments));
+            quit();
+            return;
+        }
         if (arguments.contains("--list-audio")) {
             setApplicationReturnValue(runListAudio(arguments));
             quit();

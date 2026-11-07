@@ -20,7 +20,7 @@ enum MenuId {
     // Keyboard
     kVelocityCurve = 70, kAzerty, kQwerty, kOctaveDown, kOctaveUp, kVelocityDown, kVelocityUp, kPedalCurve,
     // Help
-    kShortcuts = 90, kAbout,
+    kShortcuts = 90, kAbout, kCheckUpdates, kUpdateSettings,
     // Engine > Room presets (one per preset, built-in then the user's)
     kRoomPresetBase = 300,
     // Presets: the instrument presets (apply, then delete), save, export, import
@@ -252,11 +252,19 @@ MainComponent::MainComponent()
     setSize(1440, 600);
     constructed = true;
     startTimerHz(20);
+    // Updates at start, if asked for (Help > Update settings), once the window is up.
+    juce::Timer::callAfterDelay(4000, [safe = juce::Component::SafePointer<MainComponent>(this)] {
+        if (auto* self = safe.getComponent())
+            self->checkForUpdates(false);
+    });
 }
 
 MainComponent::~MainComponent()
 {
     stopTimer();
+    updateCancel = true; // a download stops at its next block; a check, at its timeout at worst
+    if (updateThread.joinable())
+        updateThread.join();
     host.mirror.close();
     if (host.live.recording())
         finishRecording();
@@ -414,6 +422,9 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
     case 6:
         menu.addItem(item(kShortcuts, "Keyboard shortcuts", "F1"));
         menu.addItem(item(kAbout, "About PianoForge"));
+        menu.addSeparator();
+        menu.addItem(item(kCheckUpdates, "Check for updates..."));
+        menu.addItem(item(kUpdateSettings, "Update settings..."));
         break;
     default:
         break;
@@ -494,6 +505,8 @@ void MainComponent::menuItemSelected(int id, int)
     case kVelocityDown: velocity.setValue(velocity.getValue() - 10.0); break;
     case kVelocityUp: velocity.setValue(velocity.getValue() + 10.0); break;
     case kShortcuts: showShortcuts(); break;
+    case kCheckUpdates: checkForUpdates(true); break;
+    case kUpdateSettings: askUpdateSettings(); break;
     case kAbout: showAbout(); break;
     default: break;
     }
@@ -528,10 +541,178 @@ void MainComponent::showAbout()
         juce::MessageBoxIconType::NoIcon, "About PianoForge",
         "PianoForge " + juce::String(PIANOFORGE_VERSION) + "\n\nA concert grand played from a MIDI keyboard: a modal engine "
         "calibrated on a reference library, with the reference itself for A/B listening.\n\nAudio thread: lock-free, "
-        "no allocation. Recording, the mirror output and the OBS plugin's feed only copy each block.");
+        "no allocation. Recording, the mirror output and the OBS plugin's feed only copy each block.\n\nUpdates: "
+            + (properties.getUserSettings()->getValue("updateAddress").trim().isEmpty()
+                   ? juce::String("none looked for (Help > Update settings).")
+                   : properties.getUserSettings()->getValue("updateAddress").trim()
+                         + (properties.getUserSettings()->getBoolValue("updateAtStart", false) ? ", checked at start." : ", checked on request.")));
 }
 
 // ---- Actions ----
+
+void MainComponent::checkForUpdates(bool manual)
+{
+    auto* s = properties.getUserSettings();
+    const auto address = s->getValue("updateAddress").trim();
+    if (address.isEmpty()) {
+        if (manual)
+            askUpdateSettings();
+        return;
+    }
+    if (!manual) { // at start: if asked for, once a day at most
+        const auto last = s->getValue("updateLastCheck", "0").getLargeIntValue();
+        if (!s->getBoolValue("updateAtStart", false) || juce::Time::currentTimeMillis() - last < 20LL * 3600 * 1000)
+            return;
+    }
+    if (updateBusy.exchange(true)) {
+        if (manual)
+            showMessage("Already looking for an update", theme::busy);
+        return;
+    }
+    if (updateThread.joinable())
+        updateThread.join();
+    if (manual)
+        showMessage("Looking for an update...", theme::busy);
+    updateThread = std::thread([address, manual, safe = juce::Component::SafePointer<MainComponent>(this)] {
+        const auto result = UpdateChecker::fetch(address, PIANOFORGE_VERSION);
+        juce::MessageManager::callAsync([safe, result, manual] {
+            auto* self = safe.getComponent();
+            if (self == nullptr)
+                return;
+            self->updateBusy = false;
+            auto* settings = self->properties.getUserSettings();
+            if (!result.ok) {
+                if (manual)
+                    self->showMessage("No update: " + result.error, theme::bad);
+                return;
+            }
+            settings->setValue("updateLastCheck", juce::String(juce::Time::currentTimeMillis()));
+            if (!result.newer) {
+                if (manual)
+                    self->showMessage("PianoForge " PIANOFORGE_VERSION " is up to date (the latest: " + result.release.version + ")", theme::good);
+                return;
+            }
+            if (!manual && settings->getValue("updateSkipped") == result.release.version)
+                return; // skipped: offered again only on request
+            self->offerUpdate(result.release);
+        });
+    });
+}
+
+void MainComponent::askUpdateSettings()
+{
+    auto* s = properties.getUserSettings();
+    auto* window = new juce::AlertWindow("Updates",
+                                         "Where to look for a newer PianoForge: the address of a manifest (latest.json, written next "
+                                         "to the installer by the installer build) or of a GitHub release "
+                                         "(https://api.github.com/repos/<owner>/<repo>/releases/latest). https or a file. Empty: "
+                                         "nothing is looked for, nothing leaves this computer.",
+                                         juce::MessageBoxIconType::NoIcon, this);
+    window->addTextEditor("address", s->getValue("updateAddress"), "Address");
+    auto atStart = std::make_shared<juce::ToggleButton>("Look when PianoForge starts (once a day at most)");
+    atStart->setToggleState(s->getBoolValue("updateAtStart", false), juce::dontSendNotification);
+    atStart->setSize(420, 26);
+    window->addCustomComponent(atStart.get());
+    window->addButton("Save and look now", 2);
+    window->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    window->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    window->enterModalState(true, juce::ModalCallbackFunction::create([this, window, atStart](int result) {
+        if (result == 0)
+            return;
+        const auto address = window->getTextEditorContents("address").trim();
+        if (address.isNotEmpty() && !UpdateChecker::addressAllowed(address)) {
+            showMessage("Not saved: the address must be https (or a file)", theme::bad);
+            return;
+        }
+        auto* settings = properties.getUserSettings();
+        settings->setValue("updateAddress", address);
+        settings->setValue("updateAtStart", atStart->getToggleState());
+        settings->saveIfNeeded();
+        if (result == 2 && address.isNotEmpty())
+            checkForUpdates(true);
+        else
+            showMessage(address.isEmpty() ? juce::String("Updates: none looked for") : "Updates looked for at " + address, theme::good);
+    }), true);
+}
+
+void MainComponent::offerUpdate(const UpdateChecker::Release& release)
+{
+    auto notes = release.notes.trim();
+    if (notes.length() > 700)
+        notes = notes.substring(0, 700).trimEnd() + "...";
+    const auto size = release.size > 0 ? " (" + juce::String((double) release.size / 1048576.0, 1) + " MB)" : juce::String();
+    juce::AlertWindow::showAsync(juce::MessageBoxOptions {}
+                                     .withIconType(juce::MessageBoxIconType::InfoIcon)
+                                     .withTitle("PianoForge " + release.version)
+                                     .withMessage("PianoForge " + release.version + " is available; this is " PIANOFORGE_VERSION ".\n\n"
+                                                  + (notes.isNotEmpty() ? notes + "\n\n" : juce::String()) + "Download and install" + size
+                                                  + ": the installer is checked (SHA-256), then PianoForge closes, installs it and opens "
+                                                    "again. The settings, takes and recordings stay.")
+                                     .withButton("Download and install", 1)
+                                     .withButton("Skip this version", 2)
+                                     .withButton("Later", 0)
+                                     .withAssociatedComponent(this),
+                                 [safe = juce::Component::SafePointer<MainComponent>(this), release](int result) {
+                                     auto* self = safe.getComponent();
+                                     if (self == nullptr || result == 0)
+                                         return;
+                                     if (result == 2) {
+                                         self->properties.getUserSettings()->setValue("updateSkipped", release.version);
+                                         self->showMessage("PianoForge " + release.version + " skipped (Help > Check for updates offers it again)");
+                                         return;
+                                     }
+                                     self->installUpdate(release);
+                                 });
+}
+
+void MainComponent::installUpdate(const UpdateChecker::Release& release)
+{
+    if (host.live.recording()) {
+        showMessage("Stop the recording first (Ctrl+R), then Help > Check for updates", theme::busy);
+        return;
+    }
+    if (updateBusy.exchange(true))
+        return;
+    if (updateThread.joinable())
+        updateThread.join();
+    updateCancel = false;
+    const auto destination = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("PianoForge-update").getChildFile(release.fileName());
+    showMessage("Downloading PianoForge " + release.version + "...", theme::busy);
+    updateThread = std::thread([release, destination, cancel = &updateCancel, safe = juce::Component::SafePointer<MainComponent>(this)] {
+        int shown = -1;
+        const auto error = UpdateChecker::download(release, destination, [&](double done) {
+            if (const int percent = (int) (100.0 * done); percent / 5 != shown / 5) {
+                shown = percent;
+                juce::MessageManager::callAsync([safe, percent, version = release.version] {
+                    if (auto* self = safe.getComponent())
+                        self->showMessage("Downloading PianoForge " + version + ": " + juce::String(percent) + " %", theme::busy);
+                });
+            }
+            return !cancel->load();
+        });
+        juce::MessageManager::callAsync([safe, error, destination] {
+            auto* self = safe.getComponent();
+            if (self == nullptr)
+                return;
+            self->updateBusy = false;
+            if (error.isNotEmpty()) {
+                self->showMessage("Update not installed: " + error, theme::bad);
+                return;
+            }
+            if (self->host.live.recording()) {
+                self->showMessage("Update downloaded: stop the recording, then Help > Check for updates", theme::busy);
+                return;
+            }
+            // The installer waits for PianoForge to have closed (it closes what uses its files), installs, and opens it.
+            if (!destination.startAsProcess(UpdateChecker::installerArguments())) {
+                self->showMessage("Cannot start the installer " + destination.getFullPathName(), theme::bad);
+                return;
+            }
+            self->saveSettings();
+            juce::JUCEApplication::getInstance()->systemRequestedQuit();
+        });
+    });
+}
 
 void MainComponent::toggleHeadphones()
 {
@@ -825,7 +1006,8 @@ namespace {
 bool machineSetting(const juce::String& key)
 {
     return key == "audio" || key.startsWith("audioDevice.") || key == "corpus" || key == "midiFolder" || key == "mirrorDevice"
-        || key == "engineRateMode" || key == "roomHeadphones"; // what this computer plays through
+        || key == "engineRateMode" || key == "roomHeadphones" // what this computer plays through
+        || key == "updateLastCheck" || key == "updateSkipped";
 }
 } // namespace
 

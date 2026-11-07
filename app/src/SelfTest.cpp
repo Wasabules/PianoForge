@@ -1,3 +1,4 @@
+#include "UpdateChecker.h"
 #include "SelfTest.h"
 
 #include "AudioExport.h"
@@ -999,6 +1000,55 @@ int runSelfTest(const juce::StringArray& arguments)
                     + juce::String(before, 4) + ", B " + juce::String(after, 4) + " RMS (expected 0, 0.177); stopped at the end: "
                     + (stopped ? "yes" : "no"));
         host.playback.release();
+        dir.deleteRecursively();
+    }
+
+    // 8j. Updates: versions compared; a manifest of our own (a relative installer, next to it) read from a file
+    //     address, the installer downloaded and checked; a wrong SHA-256 or size refused, nothing left behind;
+    //     GitHub's release format; plain http refused. The installer is never run here.
+    {
+        const bool versions = UpdateChecker::compareVersions("0.10.0", "0.9.3") > 0 && UpdateChecker::compareVersions("v1.2", "1.2.0") == 0
+                           && UpdateChecker::compareVersions("2.0.0-beta", "2.0.0") < 0 && UpdateChecker::compareVersions("0.1.0", PIANOFORGE_VERSION) <= 0;
+        const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("pianoforge-selftest-update");
+        dir.deleteRecursively();
+        dir.getChildFile("site").createDirectory();
+        const auto setup = dir.getChildFile("site").getChildFile("PianoForge-9.9.9-setup.exe");
+        {
+            juce::MemoryBlock bytes(300000);
+            juce::Random random(7);
+            random.fillBitsRandomly(bytes.getData(), bytes.getSize());
+            setup.replaceWithData(bytes.getData(), bytes.getSize());
+        }
+        const auto sum = UpdateChecker::sha256Of(setup);
+        auto manifest = [&](const juce::String& sha, juce::int64 size) {
+            const auto file = dir.getChildFile("site").getChildFile("latest.json");
+            file.replaceWithText("{ \"version\": \"9.9.9\", \"url\": \"PianoForge-9.9.9-setup.exe\", \"sha256\": \"" + sha
+                                 + "\", \"size\": " + juce::String(size) + ", \"notes\": \"Test\" }");
+            return juce::URL(file).toString(false);
+        };
+        const auto found = UpdateChecker::fetch(manifest(sum, setup.getSize()), PIANOFORGE_VERSION);
+        const auto saved = dir.getChildFile("download").getChildFile(found.release.fileName());
+        const auto downloaded = found.ok ? UpdateChecker::download(found.release, saved) : found.error;
+        const bool good = found.ok && found.newer && downloaded.isEmpty() && saved.existsAsFile() && UpdateChecker::sha256Of(saved) == sum;
+        saved.deleteFile();
+        auto wrongSum = sum.replaceSection(0, 1, sum[0] == 'a' ? "b" : "a");
+        const auto badSum = UpdateChecker::download(UpdateChecker::fetch(manifest(wrongSum, setup.getSize()), "0.1.0").release, saved);
+        const bool refusedSum = badSum.contains("SHA-256") && !saved.exists() && !saved.getSiblingFile(saved.getFileName() + ".part").exists();
+        const auto badSize = UpdateChecker::download(UpdateChecker::fetch(manifest(sum, setup.getSize() - 1), "0.1.0").release, saved);
+        const bool refusedSize = badSize.isNotEmpty() && !saved.exists();
+        const auto github = UpdateChecker::parse(
+            "{\"tag_name\":\"v1.2.3\",\"body\":\"Notes\",\"assets\":[{\"name\":\"PianoForge-1.2.3-setup.exe\",\"size\":42,"
+            "\"browser_download_url\":\"https://github.com/o/r/releases/download/v1.2.3/PianoForge-1.2.3-setup.exe\","
+            "\"digest\":\"sha256:" + sum + "\"}]}", "1.2.2", "https://api.github.com/repos/o/r/releases/latest");
+        const bool githubOk = github.ok && github.newer && github.release.version == "1.2.3" && github.release.sha256 == sum
+                           && github.release.size == 42 && github.release.fileName() == "PianoForge-1.2.3-setup.exe";
+        const bool httpRefused = !UpdateChecker::addressAllowed("http://example.com/latest.json")
+                              && !UpdateChecker::fetch("http://example.com/latest.json", "0.1.0").ok;
+        r.check(versions && good && refusedSum && refusedSize && githubOk && httpRefused,
+                "updates: versions " + juce::String(versions ? "ordered" : "MISORDERED") + "; manifest " + (found.ok ? "read" : found.error)
+                    + (found.newer ? ", 9.9.9 newer" : "") + "; download " + (downloaded.isEmpty() ? "checked" : downloaded)
+                    + "; wrong SHA-256 " + (refusedSum ? "refused" : "ACCEPTED") + ", wrong size " + (refusedSize ? "refused" : "ACCEPTED")
+                    + "; GitHub release " + (githubOk ? "read" : github.error) + "; plain http " + (httpRefused ? "refused" : "ACCEPTED"));
         dir.deleteRecursively();
     }
 

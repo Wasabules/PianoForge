@@ -1,3 +1,4 @@
+#include "UpdateChecker.h"
 #include "Diagnostics.h"
 
 #include "AudioHost.h"
@@ -436,6 +437,34 @@ int runUiSnapshots(const juce::StringArray& arguments)
     }
     juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
     return 0;
+}
+
+int runCheckUpdate(const juce::StringArray& arguments)
+{
+    const int at = arguments.indexOf("--check-update");
+    const auto address = arguments[at + 1].unquoted();
+    const juce::File reportFile(arguments[at + 2].isNotEmpty() ? arguments[at + 2] : "update-check.txt");
+    juce::String report;
+    report << "PianoForge " << PIANOFORGE_VERSION << ", update address: " << address << "\n";
+    const auto result = UpdateChecker::fetch(address, PIANOFORGE_VERSION);
+    int code = 1;
+    if (!result.ok) {
+        report << "not read: " << result.error << "\n";
+    } else {
+        report << "offers " << result.release.version << " (" << (result.newer ? "newer" : "not newer") << " than this one), installer "
+               << result.release.installer << ", " << juce::String(result.release.size) << " bytes, SHA-256 " << result.release.sha256 << "\n";
+        const auto destination = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("PianoForge-update-check")
+                                     .getChildFile(result.release.fileName());
+        if (const auto error = UpdateChecker::download(result.release, destination); error.isNotEmpty()) {
+            report << "download: " << error << "\n";
+        } else {
+            report << "downloaded and checked: " << destination.getFullPathName() << " (not run)\n";
+            destination.deleteFile();
+            code = 0;
+        }
+    }
+    reportFile.replaceWithText(report, false, false, "\n");
+    return code;
 }
 
 } // namespace pf::app

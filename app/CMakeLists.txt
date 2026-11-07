@@ -23,6 +23,7 @@ target_sources(PianoForgeApp PRIVATE
     src/ui/PlayerBar.cpp
     src/ui/RoomPanel.cpp
     src/ui/TakesPanel.cpp
+    src/UpdateChecker.cpp
     src/MainComponent.cpp
     src/VelocityCurveEditor.cpp
     src/SelfTest.cpp
@@ -62,6 +63,7 @@ target_link_libraries(PianoForgeApp
         juce::juce_audio_utils
         juce::juce_audio_formats
         juce::juce_audio_devices
+        juce::juce_cryptography
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags

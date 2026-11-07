@@ -13,6 +13,9 @@ int runMidiMonitor(const juce::StringArray& arguments);
 
 /// Lists the audio driver types (WASAPI, ASIO, DirectSound...) and their output devices:
 ///   PianoForge --list-audio <report file>
+/// --check-update <address> [report]: what the address offers (a manifest or a GitHub release) against this version, then the
+/// installer downloaded to the temporary folder and checked (size, SHA-256), never run. 0 if all of it worked.
+int runCheckUpdate(const juce::StringArray& arguments);
 int runListAudio(const juce::StringArray& arguments);
 /// --audio-restore <report>: the saved audio device reopened as at start, and what JUCE says.
 int runAudioRestore(const juce::StringArray& arguments);
