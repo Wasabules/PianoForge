@@ -58,6 +58,8 @@ output { display: inline-block; min-width: 48px; color: var(--dim); }
   color: var(--dim);
 }
 .lamp.on { background: var(--accent); border-color: var(--accent); color: #0d1a24; }
+/* The pedal's travel, as the engine receives it: the lamp fills from the left. */
+#pedal.partial { background: linear-gradient(90deg, var(--accent) var(--depth), transparent var(--depth)); color: var(--text); }
 
 .meter { width: 140px; height: 10px; background: #1f252b; border-radius: 3px; overflow: hidden; }
 .meter span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--good) 75%, var(--busy) 90%, var(--bad)); }

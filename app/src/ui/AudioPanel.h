@@ -35,7 +35,10 @@ private:
     juce::TextButton refreshDevices { "Refresh" };
     juce::ComboBox rateChoice; // 1: the engine at 44.1 / 48 kHz under a faster device, 2: at the device's rate
     juce::Label rateStatus, rateNote;
-    juce::Rectangle<int> deviceArea, rateArea, mirrorArea, feedArea;
+    juce::ToggleButton limiterOn { "Safety limiter at -1 dBFS" };
+    juce::Label limiterStatus;
+    float limiterDeepest = 0.0f;
+    juce::Rectangle<int> deviceArea, rateArea, limiterArea, mirrorArea, feedArea;
 };
 
 } // namespace pf::app

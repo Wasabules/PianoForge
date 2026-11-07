@@ -823,13 +823,15 @@ void MainComponent::saveLastTake()
     // Every setting of the engine heard (tuning, sympathetic resonance, pedal catch, release noise...) and the room,
     // as they are now; the tail is longer by the room's.
     takeRender = std::thread([sequence = TakeRecorder::toSequence(*take), bank = std::move(bank), profile = std::move(profile),
-                              withModal, settings = modal.settings(), room = host.room.settings(), rate = take->sampleRate,
+                              withModal, settings = modal.settings(), room = host.room.settings(), limit = host.limiter.enabled.load(),
+                              rate = take->sampleRate,
                               restrike = enginePanel->restrikeSeconds(), whole = enginePanel->isOn(EnginePanel::Option::wholeTake),
                               wavFile, summary, safe = juce::Component::SafePointer<MainComponent>(this)] {
         const double tail = 4.0 + (room.enabled ? pf::Room::tailSeconds(room) : 0.0);
         auto audio = withModal ? renderSequenceModal(sequence, profile, rate, settings, tail)
                                : renderSequence(sequence, bank, rate, restrike, whole, tail);
         applyRoom(audio, room, rate);
+        applyLimiter(audio, limit, rate);
         const auto written = writeWav(audio, rate, wavFile);
         juce::MessageManager::callAsync([safe, written, wavFile, summary] {
             if (auto* self = safe.getComponent()) {

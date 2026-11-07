@@ -45,6 +45,9 @@ Play a MIDI file live: File > Open MIDI file (Ctrl+O), drop it on the window, or
 Tracks... picks the parts to play (a part is a track's channel; drums off by default); -oct, -, +, +oct
 transpose the file by semitones or octaves.
 
+A safety limiter at the output (Audio > Output) keeps everything heard, recorded and streamed under -1 dBFS, with
+no latency and untouched while under it.
+
 Keyboard > Pedal curve shapes the MIDI keyboard's sustain pedal like the velocity curve (the travel it really
 covers, where the half pedal falls); the Pedal button fills with the pedal's travel. Rooms and listening positions
 can be saved under names of your own (Room window: Save..., Delete; Engine > Room presets).

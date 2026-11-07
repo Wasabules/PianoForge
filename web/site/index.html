@@ -59,6 +59,24 @@
           <label class="field">A4 <input id="a4" type="number" min="415" max="466" step="0.1" value="440"> Hz</label>
           <label class="field" title="The highest velocity the MIDI keyboard really sends (Korg B2: about 114)">MIDI keyboard top velocity <input id="curveMax" type="number" min="20" max="127" step="1" value="127"></label>
         </details>
+        <details>
+          <summary>Room and listening position</summary>
+          <label class="field" title="From the piano to the listener (1 m: the engine's sound, heard from the keyboard)">Distance <input id="roomDistance" type="range" min="1" max="30" step="0.1" value="1"><output id="roomDistanceOut">1.0 m</output></label>
+          <label class="field" title="Moving away changes the balance between the piano and the room, not the volume"><input id="roomKeep" type="checkbox" checked> Keep loudness</label>
+          <p class="field">My presets (this room and this position):
+            <button id="roomSave" title="Keep them under a name of your own (an existing name is replaced)">Save...</button>
+            <button id="roomDelete" title="Delete the preset of your own selected in the room list" disabled>Delete</button></p>
+        </details>
+        <details>
+          <summary>Sustain pedal</summary>
+          <label class="field" title="What the pedal sends when up: under it, the engine gets 0">Pedal up sends at most <input id="pedalMin" type="number" min="0" max="126" step="1" value="0"></label>
+          <label class="field" title="What the pedal sends when down: over it, the engine gets 127">Pedal down sends at least <input id="pedalMax" type="number" min="1" max="127" step="1" value="127"></label>
+          <label class="field">Curve <select id="pedalShape">
+            <option value="1">Linear</option><option value="0.6">Half pedal sooner</option><option value="1.6">Half pedal later</option>
+          </select></label>
+          <p class="field"><button id="pedalLearn" title="Press the pedal slowly all the way down, let it up, then stop">Learn range</button>
+            <span id="pedalReadout" class="dim">Press the MIDI keyboard's sustain pedal.</span></p>
+        </details>
       </div>
     </section>
 

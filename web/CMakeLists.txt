@@ -6,7 +6,7 @@ set_target_properties(pianoforge_web PROPERTIES OUTPUT_NAME pianoforge SUFFIX .w
 target_compile_options(pianoforge_web PRIVATE -O3 -fno-exceptions)
 set(pianoforge_exports
     _pf_init _pf_alloc _pf_free _pf_load_profile _pf_error _pf_profile_notes _pf_profile_layers _pf_event _pf_render
-    _pf_left _pf_right _pf_all_sound_off _pf_set_volume_db _pf_set_option _pf_set_sympathetic_db _pf_set_unison _pf_soft _pf_set_tuning
+    _pf_left _pf_right _pf_all_sound_off _pf_set_volume_db _pf_set_option _pf_set_sympathetic_db _pf_set_unison _pf_soft _pf_pedal_value _pf_set_tuning
     _pf_set_room _pf_set_velocity_curve _pf_voices _pf_resonators _pf_sustain _pf_sostenuto _pf_last_note
     _pf_last_velocity _pf_last_layer _pf_midi_load _pf_midi_close _pf_midi_notes _pf_midi_tracks
     _pf_midi_parts _pf_midi_part_name _pf_midi_part_instrument _pf_midi_part_track _pf_midi_part_channel

@@ -33,6 +33,8 @@ juce::AudioBuffer<float> renderSequenceModal(const juce::MidiMessageSequence& se
 /// Adds the room to a rendered buffer (when `settings` has it on), as the audio host does live. The modulation's
 /// phases start from zero here, so the result is the same room, not the same samples.
 void applyRoom(juce::AudioBuffer<float>& audio, const pf::Room::Settings& settings, double sampleRate);
+/// The output limiter, as live (nothing when it is off).
+void applyLimiter(juce::AudioBuffer<float>& audio, bool enabled, double sampleRate);
 
 /// Writes a 32-bit float WAV file (creating the folder when needed).
 juce::Result writeWav(const juce::AudioBuffer<float>& audio, double sampleRate, const juce::File& file);

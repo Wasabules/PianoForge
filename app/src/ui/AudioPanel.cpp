@@ -48,18 +48,28 @@ AudioPanel::AudioPanel(juce::AudioDeviceManager& d, AudioHost& h, juce::Properti
                      "sound is brought up to the device's (flat to 20 kHz, images 90 dB down, 0.7 ms). Recordings, takes "
                      "and streams are at the engine's rate.",
                      juce::dontSendNotification);
+    limiterOn.setTooltip("Nothing over -1 dBFS reaches the device, a recording or the OBS plugin: a loud chord with the room "
+                         "is brought down at once, then let back within a second. No latency; untouched while under it.");
+    limiterOn.setToggleState(settings.getBoolValue("outputLimiter", true), juce::dontSendNotification);
+    host.limiter.enabled = limiterOn.getToggleState();
+    limiterOn.onClick = [this] {
+        host.limiter.enabled = limiterOn.getToggleState();
+        settings.setValue("outputLimiter", limiterOn.getToggleState());
+        settings.saveIfNeeded();
+    };
     for (auto* l : { &mirrorNote, &feedNote, &rateNote }) {
         l->setColour(juce::Label::textColourId, theme::dim);
         l->setFont(theme::font(12.0f));
         l->setJustificationType(juce::Justification::topLeft);
     }
     for (auto* c : std::initializer_list<juce::Component*> { &mirrorChoice, &refreshDevices, &mirrorStatus, &mirrorNote,
-                                                             &feedStatus, &feedNote, &rateChoice, &rateStatus, &rateNote })
+                                                             &feedStatus, &feedNote, &rateChoice, &rateStatus, &rateNote,
+                                                             &limiterOn, &limiterStatus })
         addAndMakeVisible(*c);
     mirrorStatus.setText("Off", juce::dontSendNotification);
     if (settings.getIntValue("engineRateMode", 0) == 1) // the device started in the default mode: again in this one
         applyRateMode(1);
-    setSize(660, 880);
+    setSize(660, 950);
     startTimerHz(4);
 }
 
@@ -119,6 +129,11 @@ void AudioPanel::timerCallback()
     feedStatus.setText(host.feedOn() ? "Feeding the OBS plugin" : "Not feeding: another PianoForge is feeding the OBS plugin",
                        juce::dontSendNotification);
     feedStatus.setColour(juce::Label::textColourId, host.feedOn() ? theme::good : theme::busy);
+    limiterDeepest = std::min(limiterDeepest, host.limiter.takeReduction());
+    limiterStatus.setText(!host.limiter.enabled.load() ? juce::String("Off: nothing stops an over")
+                          : limiterDeepest < 0.0f ? "Acted, at most " + juce::String(limiterDeepest, 1) + " dB (since this window opened)"
+                                                  : juce::String("Never needed so far"),
+                          juce::dontSendNotification);
     if (const double device = host.deviceRate(); device > 0.0)
         rateStatus.setText("Engine at " + juce::String(host.currentRate() / 1000.0, 1) + " kHz, device at " + juce::String(device / 1000.0, 1)
                                + " kHz" + (host.rateFactor() > 1 ? " (x" + juce::String(host.rateFactor()) + ", brought up)" : juce::String()),
@@ -137,6 +152,7 @@ void AudioPanel::paint(juce::Graphics& g)
     g.fillAll(theme::background);
     theme::drawCard(g, deviceArea, "Audio device and MIDI inputs");
     theme::drawCard(g, rateArea, "Engine rate");
+    theme::drawCard(g, limiterArea, "Output");
     theme::drawCard(g, mirrorArea, "Mirror output");
     theme::drawCard(g, feedArea, "OBS plugin");
 }
@@ -150,6 +166,8 @@ void AudioPanel::resized()
     area.removeFromBottom(10);
     rateArea = area.removeFromBottom(120);
     area.removeFromBottom(10);
+    limiterArea = area.removeFromBottom(60);
+    area.removeFromBottom(10);
     deviceArea = area;
     selector.setBounds(deviceArea.reduced(6, 4).withTrimmedTop(20));
 
@@ -162,6 +180,11 @@ void AudioPanel::resized()
     mirrorStatus.setBounds(row);
     inner.removeFromTop(4);
     mirrorNote.setBounds(inner);
+
+    inner = limiterArea.reduced(12, 8).withTrimmedTop(20);
+    row = inner.removeFromTop(24);
+    limiterOn.setBounds(row.removeFromLeft(260));
+    limiterStatus.setBounds(row);
 
     inner = rateArea.reduced(12, 8).withTrimmedTop(20);
     row = inner.removeFromTop(26);

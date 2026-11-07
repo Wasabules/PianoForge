@@ -108,6 +108,7 @@ public:
     std::atomic<int> activeVoices { 0 }, activeModes { 0 }, ringingStrings { 0 };
     std::atomic<bool> sustainDown { false }, sostenutoDown { false };
     std::atomic<float> softPedalPosition { 0.0f }; // the soft pedal (CC67), 0 to 1
+    std::atomic<int> pedalValue { 0 };              // the last sustain pedal value received (CC64, 0 to 127)
     std::atomic<float> pedalPosition { 0.0f }; // damper lift, 0 to 1
     std::atomic<float> outputPeak { 0.0f };
     std::atomic<std::uint32_t> stolenVoices { 0 }, noteOnsReceived { 0 };

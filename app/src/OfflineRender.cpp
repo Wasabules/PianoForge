@@ -1,5 +1,7 @@
 #include "OfflineRender.h"
 
+#include <pianoforge/limiter.hpp>
+
 #include "ReferencePlayer.h"
 
 #include <pianoforge/modal_engine.hpp>
@@ -31,6 +33,15 @@ juce::AudioBuffer<float> renderSequenceModal(const juce::MidiMessageSequence& se
     engine.install(std::move(profile));
     engine.outputGain = 1.0f;
     return renderWith(engine, sequence, sampleRate, tailSeconds);
+}
+
+void applyLimiter(juce::AudioBuffer<float>& audio, bool enabled, double sampleRate)
+{
+    if (!enabled || audio.getNumChannels() < 2)
+        return;
+    pf::Limiter limiter;
+    limiter.prepare(sampleRate);
+    limiter.process(audio.getWritePointer(0), audio.getWritePointer(1), audio.getNumSamples());
 }
 
 void applyRoom(juce::AudioBuffer<float>& audio, const pf::Room::Settings& settings, double sampleRate)

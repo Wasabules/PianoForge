@@ -7,6 +7,7 @@
 
 #include <pianoforge/audio_feed.hpp>
 #include <pianoforge/engine.hpp>
+#include <pianoforge/limiter.hpp>
 #include <pianoforge/room.hpp>
 #include <pianoforge/upsampler.hpp>
 
@@ -53,6 +54,7 @@ public:
     MirrorOutput mirror;                   // a copy for streaming software, on another device
     MidiFilePlayer filePlayer;             // a MIDI file, played to the sample with what the keyboards play
     pf::Room room;                         // the room around the piano, at the output (off until the interface sets it)
+    pf::Limiter limiter;                   // after it: nothing over -1 dBFS reaches the device, a recording or a stream
     /// The engine's rate: 0 the device's divided down to 48 kHz or less (applies at the next device start), 1 the
     /// device's own.
     std::atomic<int> rateMode { 0 };
@@ -79,6 +81,7 @@ public:
         const int engineBlock = std::max(1, blockSize) / k + 2;
         engine.prepare(rate, engineBlock);
         room.prepare(rate);
+        limiter.prepare(rate);
         mirror.mainFormat(rate, engineBlock);
         feed.setFormat((std::uint32_t) std::lround(rate), (std::uint32_t) engineBlock);
         for (auto& b : { &engineL, &engineR })
@@ -177,11 +180,14 @@ public:
             engine.process(outputs, numOutputs, n, events.data(), count);
             if (numOutputs >= 2 && outputs[0] != nullptr && outputs[1] != nullptr)
                 room.process(outputs[0], outputs[1], n); // whichever engine: what is heard, recorded and streamed
+            if (numOutputs >= 2 && outputs[0] != nullptr && outputs[1] != nullptr)
+                limiter.process(outputs[0], outputs[1], n);
             finish(outputs, numOutputs, n);
         } else {
             float* engineOut[2] = { engineL.data(), engineR.data() };
             engine.process(engineOut, 2, frames, events.data(), count);
             room.process(engineOut[0], engineOut[1], frames);
+            limiter.process(engineOut[0], engineOut[1], frames);
             finish(engineOut, 2, frames);
             // Up to the device's rate: the carry from last time, then the new frames; what is left over waits.
             upsampleL.process(engineL.data(), frames, upL.data());

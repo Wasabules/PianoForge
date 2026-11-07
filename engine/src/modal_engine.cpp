@@ -463,6 +463,7 @@ void ModalEngine::apply(const ModalProfile& p, const Event& e) noexcept
             pedalLift = std::clamp(p.pedalLift[(std::size_t) std::min<int>(e.data2, 127)], 0.0f, 1.0f);
             sustainDown.store(pedalLift >= 0.5f, std::memory_order_relaxed);
             pedalPosition.store(pedalLift, std::memory_order_relaxed);
+            pedalValue.store(std::min<int>(e.data2, 127), std::memory_order_relaxed);
             updateAllDampers(p);
         } else if (e.data1 == 66) {
             const bool down = e.data2 >= 64;

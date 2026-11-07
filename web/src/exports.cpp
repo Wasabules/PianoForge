@@ -8,6 +8,7 @@
 #include <pianoforge/midi_sequence.hpp>
 #include <pianoforge/modal_engine.hpp>
 #include <pianoforge/modal_profile.hpp>
+#include <pianoforge/limiter.hpp>
 #include <pianoforge/room.hpp>
 #include <pianoforge/velocity_curve.hpp>
 
@@ -25,6 +26,7 @@ constexpr int kMaxEvents = 4608;  // per render: the keyboards', and a release o
 
 pf::ModalEngine* g_engine = nullptr;
 pf::Room* g_room = nullptr;
+pf::Limiter* g_limiter = nullptr;
 pf::SequencePlayer* g_player = nullptr;
 pf::VelocityCurve g_curve;        // MIDI keyboards only (the on-screen keyboard plays its velocity as is)
 float g_left[kMaxFrames], g_right[kMaxFrames];
@@ -49,6 +51,8 @@ int pf_init(int sampleRate)
     g_player = new pf::SequencePlayer();
     g_engine->prepare(g_rate, kMaxFrames);
     g_room->prepare(g_rate);
+    g_limiter = new pf::Limiter();
+    g_limiter->prepare(g_rate);
     g_eventCount = 0;
     return 0;
 }
@@ -124,6 +128,7 @@ void pf_render(int frames)
     g_engine->process(outputs, 2, frames, g_events, g_eventCount);
     g_eventCount = 0;
     g_room->process(g_left, g_right, frames);
+    g_limiter->process(g_left, g_right, frames); // nothing over -1 dBFS
 }
 
 float* pf_left()
@@ -290,6 +295,7 @@ int pf_resonators() { return g_engine != nullptr ? g_engine->activeModes.load() 
 int pf_sustain() { return g_engine != nullptr && g_engine->sustainDown.load() ? 1 : 0; }
 int pf_sostenuto() { return g_engine != nullptr && g_engine->sostenutoDown.load() ? 1 : 0; }
 int pf_soft() { return g_engine != nullptr && g_engine->softPedalPosition.load() > 0.0f ? 1 : 0; }
+int pf_pedal_value() { return g_engine != nullptr ? g_engine->pedalValue.load() : 0; }
 int pf_last_note() { return g_engine != nullptr ? g_engine->lastNote.load() : -1; }
 int pf_last_velocity() { return g_engine != nullptr ? g_engine->lastVelocity.load() : 0; }
 int pf_last_layer() { return g_engine != nullptr ? g_engine->lastLayerVelocity.load() : 0; }

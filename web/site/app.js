@@ -246,6 +246,10 @@ async function connectMidi() {
         const [status, data1 = 0, data2 = 0] = data;
         const type = status & 0xf0;
         if (type !== 0x80 && type !== 0x90 && type !== 0xb0) return;
+        if (type === 0xb0 && data1 === 64) { // the sustain pedal, through its curve
+          send({ type: 'midi', status, data1, data2: pedalCurve(data2), curved: false });
+          return;
+        }
         send({ type: 'midi', status, data1, data2, curved: true });
         if (type === 0x90 && data2 > 0) show(data1, true);
         else if (type === 0x80 || type === 0x90) show(data1, false);
@@ -412,12 +416,48 @@ function buildPlayer() {
 }
 
 // ---- Settings ----
+// The rooms of one's own: a built-in room's character, its level, a distance and keep loudness, named.
+let userRooms = store.get('userRooms', []);
+const roomChoice = () => { // the room list's selection: a built-in preset, or one of one's own
+  const v = $('roomPreset').value;
+  return v.startsWith('u') ? userRooms[Number(v.slice(1))] : ROOM_PRESETS[Number(v)];
+};
+function fillRooms(selected) {
+  const list = $('roomPreset');
+  list.innerHTML = '';
+  ROOM_PRESETS.forEach((p, i) => list.add(new Option(p.name, String(i))));
+  if (userRooms.length) {
+    const group = document.createElement('optgroup');
+    group.label = 'My presets';
+    userRooms.forEach((p, i) => group.appendChild(new Option(p.name, 'u' + i)));
+    list.appendChild(group);
+  }
+  list.value = selected;
+  if (list.selectedIndex < 0) list.value = '2';
+  $('roomDelete').disabled = !list.value.startsWith('u');
+}
+
+// The sustain pedal's curve: the travel it really covers, then a power law (the lab draws five points).
+let pedalLearning = null;
+function pedalCurve(value) {
+  const lo = Number($('pedalMin').value) || 0, hi = Math.max(lo + 1, Number($('pedalMax').value) || 127);
+  if (pedalLearning) {
+    pedalLearning.min = Math.min(pedalLearning.min, value);
+    pedalLearning.max = Math.max(pedalLearning.max, value);
+  }
+  const out = value <= lo ? 0 : value >= hi ? 127 : Math.round(127 * Math.pow((value - lo) / (hi - lo), Number($('pedalShape').value) || 1));
+  $('pedalReadout').textContent = `Pedal: sends ${value} -> the engine receives ${out}`
+    + (pedalLearning ? `   (learning: lowest ${pedalLearning.min}, highest ${pedalLearning.max})` : '');
+  return out;
+}
+
 function settings() {
-  const preset = ROOM_PRESETS[Number($('roomPreset').value)] ?? ROOM_PRESETS[2];
-  const position = ROOM_POSITIONS[Number($('roomPosition').value)] ?? ROOM_POSITIONS[0];
+  const preset = roomChoice() ?? ROOM_PRESETS[2];
   return {
     volume: Number($('volume').value),
-    room: { ...preset, on: $('roomOn').checked, levelDb: Number($('roomLevel').value), distance: position.distance, keepLoudness: true },
+    room: { size: preset.size, decay: preset.decay, brightness: preset.brightness, width: preset.width, on: $('roomOn').checked,
+            levelDb: Number($('roomLevel').value), distance: Number($('roomDistance').value), keepLoudness: $('roomKeep').checked },
+    pedal: { min: Number($('pedalMin').value), max: Number($('pedalMax').value), shape: $('pedalShape').value },
     options: OPTIONS.map((_, i) => $('option' + i).checked),
     sympathetic: Number($('sympathetic').value),
     unison: Number($('unison').value),
@@ -430,9 +470,10 @@ function apply() {
   const s = settings();
   $('volumeOut').textContent = `${s.volume.toFixed(1)} dB`;
   $('roomLevelOut').textContent = `${s.room.levelDb} dB`;
+  $('roomDistanceOut').textContent = `${s.room.distance.toFixed(1)} m`;
   $('sympatheticOut').textContent = `${s.sympathetic} dB`;
   $('unisonOut').textContent = `${s.unison} %`;
-  store.set('settings', { ...s, roomPreset: Number($('roomPreset').value), roomPosition: Number($('roomPosition').value), roomModel: ROOM_MODEL });
+  store.set('settings', { ...s, roomPreset: $('roomPreset').value, roomPosition: $('roomPosition').value, roomModel: ROOM_MODEL });
   send({ type: 'volume', db: s.volume });
   send({ type: 'room', ...s.room });
   s.options.forEach((on, option) => send({ type: 'option', option, on }));
@@ -443,16 +484,24 @@ function apply() {
 }
 
 function buildSettings() {
-  ROOM_PRESETS.forEach((p, i) => $('roomPreset').add(new Option(p.name, String(i))));
+  fillRooms('2');
   ROOM_POSITIONS.forEach((p, i) => $('roomPosition').add(new Option(p.name, String(i))));
+  $('roomPosition').add(new Option('Custom', 'custom'));
   OPTIONS.forEach(([name, on], i) => {
     const label = document.createElement('label');
     label.innerHTML = `<input id="option${i}" type="checkbox"${on ? ' checked' : ''}> ${name}`;
     $('options').appendChild(label);
   });
   const saved = store.get('settings', null);
-  $('roomPreset').value = String(saved?.roomPreset ?? 2);
+  fillRooms(String(saved?.roomPreset ?? 2));
   $('roomPosition').value = String(saved?.roomPosition ?? 0);
+  $('roomDistance').value = saved?.room?.distance ?? (ROOM_POSITIONS[Number($('roomPosition').value)]?.distance ?? 1);
+  $('roomKeep').checked = saved?.room?.keepLoudness ?? true;
+  if (saved?.pedal) {
+    $('pedalMin').value = saved.pedal.min;
+    $('pedalMax').value = saved.pedal.max;
+    $('pedalShape').value = saved.pedal.shape;
+  }
   if (saved) {
     $('volume').value = saved.volume;
     $('roomOn').checked = saved.room.on;
@@ -463,8 +512,72 @@ function buildSettings() {
     $('a4').value = saved.a4;
     $('curveMax').value = saved.curveMax;
   }
-  for (const id of ['roomPreset', 'roomPosition'])
+  $('roomPreset').addEventListener('change', () => { // one of one's own brings its level, distance and keep loudness
+    const choice = roomChoice();
+    if ($('roomPreset').value.startsWith('u') && choice) {
+      $('roomLevel').value = choice.levelDb;
+      $('roomDistance').value = choice.distance;
+      $('roomKeep').checked = choice.keepLoudness;
+      const i = ROOM_POSITIONS.findIndex((p) => Math.abs(p.distance - choice.distance) < 0.05);
+      $('roomPosition').value = i >= 0 ? String(i) : 'custom';
+    }
+    $('roomDelete').disabled = !$('roomPreset').value.startsWith('u');
+    apply();
+  });
+  $('roomPosition').addEventListener('change', () => {
+    const p = ROOM_POSITIONS[Number($('roomPosition').value)];
+    if (p) $('roomDistance').value = p.distance;
+    apply();
+  });
+  $('roomDistance').addEventListener('input', () => {
+    const d = Number($('roomDistance').value);
+    const i = ROOM_POSITIONS.findIndex((p) => Math.abs(p.distance - d) < 0.05);
+    $('roomPosition').value = i >= 0 ? String(i) : 'custom';
+    apply();
+  });
+  $('roomKeep').addEventListener('change', apply);
+  $('roomSave').addEventListener('click', () => {
+    const current = roomChoice();
+    const name = (prompt('A name for this room and this listening position (an existing name is replaced):',
+      $('roomPreset').value.startsWith('u') ? current.name : '') ?? '').trim();
+    if (!name) return;
+    const s = settings();
+    const preset = { name, size: s.room.size, decay: s.room.decay, brightness: s.room.brightness, width: s.room.width,
+                     levelDb: s.room.levelDb, distance: s.room.distance, keepLoudness: s.room.keepLoudness };
+    const i = userRooms.findIndex((p) => p.name === name);
+    if (i >= 0) userRooms[i] = preset; else userRooms.push(preset);
+    store.set('userRooms', userRooms);
+    fillRooms('u' + (i >= 0 ? i : userRooms.length - 1));
+    apply();
+  });
+  $('roomDelete').addEventListener('click', () => {
+    const v = $('roomPreset').value;
+    if (!v.startsWith('u')) return;
+    const p = userRooms[Number(v.slice(1))];
+    if (!confirm(`Delete the preset "${p.name}"? The room as it sounds now stays.`)) return;
+    userRooms.splice(Number(v.slice(1)), 1);
+    store.set('userRooms', userRooms);
+    // The room as it sounds: the built-in one with the same character, or the default.
+    const same = ROOM_PRESETS.findIndex((r) => r.size === p.size && r.decay === p.decay);
+    fillRooms(String(same >= 0 ? same : 2));
+    apply();
+  });
+  for (const id of ['pedalMin', 'pedalMax', 'pedalShape'])
     $(id).addEventListener('change', apply);
+  $('pedalLearn').addEventListener('click', () => {
+    if (!pedalLearning) {
+      pedalLearning = { min: 127, max: 0 };
+      $('pedalLearn').textContent = 'Stop learning';
+      return;
+    }
+    if (pedalLearning.max > pedalLearning.min) {
+      $('pedalMin').value = pedalLearning.min;
+      $('pedalMax').value = pedalLearning.max;
+    }
+    pedalLearning = null;
+    $('pedalLearn').textContent = 'Learn range';
+    apply();
+  });
   for (const id of ['volume', 'roomOn', 'roomLevel', 'sympathetic', 'unison', 'a4', 'curveMax'])
     $(id).addEventListener('input', apply);
   $('options').addEventListener('change', apply);
@@ -585,7 +698,11 @@ function received(data) {
       $('voicesLine').textContent = `${data.voices} ${data.voices === 1 ? 'voice' : 'voices'} of 64, ${data.resonators.toLocaleString('en')} resonators`;
       if (data.lastNote >= 0)
         $('noteLine').textContent = `Last note ${data.lastNote}, velocity ${data.lastVelocity} (layer ${data.lastLayer})`;
-      $('pedal').classList.toggle('on', data.sustain);
+      const depth = data.pedalValue / 127; // the pedal's travel, as the engine receives it
+      $('pedal').classList.toggle('on', depth >= 1);
+      $('pedal').classList.toggle('partial', depth > 0 && depth < 1);
+      $('pedal').style.setProperty('--depth', `${Math.round(depth * 100)}%`);
+      $('pedal').textContent = depth > 0 && depth < 1 ? `Pedal ${Math.round(depth * 100)} %` : 'Pedal';
       $('sostenuto').classList.toggle('on', data.sostenuto);
       $('soft').classList.toggle('on', data.soft);
       $('meterFill').style.width = `${Math.min(100, Math.max(0, (20 * Math.log10(data.peak + 1e-9) + 60) / 60 * 100))}%`;

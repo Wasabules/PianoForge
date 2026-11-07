@@ -135,6 +135,7 @@ class PianoForgeProcessor extends AudioWorkletProcessor {
         voices: pf.pf_voices(),
         resonators: pf.pf_resonators(),
         sustain: pf.pf_sustain() !== 0,
+        pedalValue: pf.pf_pedal_value(),
         sostenuto: pf.pf_sostenuto() !== 0,
         soft: pf.pf_soft() !== 0,
         lastNote: pf.pf_last_note(),

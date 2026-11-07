@@ -863,6 +863,19 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - en changeant de type dans la fenêtre Audio, JUCE ouvrait le premier pilote du type (« ASIO Link Pro ») et non le dernier utilisé. L'application retient maintenant le dernier pilote de chaque type ;
     - un périphérique qui ne s'ouvre pas au démarrage (pilote encore tenu par une application qui se ferme, ou par un autre programme) était remplacé, puis le remplaçant était enregistré à la place du choix. Le choix est maintenant gardé, l'application le réessaie pendant 15 s et l'annonce dans la barre d'état. Le pilote ASIO du FiiO accepte deux clients, donc ce second cas ne le touchait pas.
 
+**Limiteur de sortie, et la page web à niveau (7 novembre 2026).**
+  - *Limiteur* (`pf::Limiter`, sans JUCE, après la salle : dans l'atelier, le rendu des prises et la page web). Rien ne dépasse −1 dBFS sur la carte son, dans un enregistrement ou sur le flux OBS. Un gros accord avec la salle pouvait le faire.
+    - Sans anticipation, donc sans latence ajoutée, puisqu'on joue en direct. L'échantillon qui dépasserait est ramené exactement au plafond, le gain est tenu 5 ms puis remonte avec une constante de 100 ms, sans jamais laisser passer un échantillon suivant. Le même gain sur les deux canaux, pour que l'image ne bouge pas.
+    - Tant qu'il n'agit pas, le son passe au bit près ; il revient au bit près dès que le gain est à 0,004 dB de l'unité.
+    - Les crêtes entre échantillons ne sont pas recherchées : le plafond à −1 dBFS leur laisse de la marge.
+    - Réglage et compte rendu dans Audio > Output (« Never needed so far » ou la réduction la plus forte), activé par défaut.
+    - *Tests* (`limiter_test`, natif et sous Node) : transparent sous le plafond ; une rafale à +6 dBFS reste sous −1 dBFS (−7 dB de réduction) ; même gain sur les deux canaux ; retour exact à l'unité une seconde après ; même résultat pour des blocs de 64 ou 509 échantillons ; éteint, le son passe intact.
+  - *Page web à niveau.* Dans Settings :
+    - « Room and listening position » : la distance au mètre, liée à la liste des positions (Custom hors préréglage), Keep loudness, et ses propres préréglages (Save…, Delete), sous « My presets » dans la liste des salles ;
+    - « Sustain pedal » : la plage envoyée par la pédale du clavier MIDI, la forme de la courbe (loi de puissance, l'atelier en dessine cinq points), l'apprentissage de la plage et la valeur en direct.
+
+    Le voyant Pedal se remplit selon la course reçue par le moteur (`pedalValue`, nouveau dans le moteur). Essai dans Edge sans fenêtre : un préréglage enregistré revient avec sa distance et son Keep loudness, puis se supprime ; la courbe est mémorisée.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |
