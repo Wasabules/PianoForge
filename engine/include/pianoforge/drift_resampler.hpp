@@ -153,7 +153,7 @@ public:
         playedSeconds += dt;
         const double lock = rateMeasured ? 1.0 : std::clamp((playedSeconds - kLockSeconds) / kLockSeconds, 0.0, 1.0); // 0 fast, 1 steady
         // (The producer's rate measured, the loop only holds the fill level: proportional, calm.)
-        const double kp = rateMeasured ? 0.0003 : 0.03 + lock * (0.002 - 0.03);
+        const double kp = rateMeasured ? 0.00012 : 0.03 + lock * (0.002 - 0.03);
         const double ki = rateMeasured ? 0.0 : 0.02 + lock * (0.0001 - 0.02);
         if (fillCount == fills.size())
             fillSum -= fills[fillAt];

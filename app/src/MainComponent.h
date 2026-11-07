@@ -222,6 +222,9 @@ private:
     juce::String fallbackType, fallbackName, lastDeviceType;
     bool audioFallback = false;
     int audioRetries = 0;
+    static constexpr int kQuickAudioRetries = 8; // then slow ones, in silence (silentForRetry)
+    bool wantedWasListed = false;                // the device asked for, in its type's list at the last change
+    bool silentForRetry() const;
     double nextAudioRetry = 0.0;
     juce::AudioDeviceManager::AudioDeviceSetup preferredAudio;
     void noteAudioDevice();       // after a device change: the choice kept, the fallback ended, the per-type memory

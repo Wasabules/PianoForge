@@ -242,10 +242,10 @@ int main(int argc, char** argv)
             }
             b.frames = 128;
             b.volume = 0.5f;
-            const pf::FeedEvent events[2] = { { 0, 0x90, 60, 100, 0, 0 }, { 10, 0xB0, 64, 127, 0, 0 } };
+            const pf::FeedEvent events[3] = { { 0, 0x90, 36, 100, 0, 0 }, { 0, 0x90, 60, 100, 0, 0 }, { 10, 0xB0, 64, 127, 0, 0 } };
             if (!struck && produced >= (long long) rate) {
                 b.events = events;
-                b.numEvents = 2;
+                b.numEvents = 3;
                 struck = true;
             }
             feed.write(b);
@@ -289,7 +289,7 @@ int main(int argc, char** argv)
           "properties: status, mix, volume followed, gain, latency, refresh, resync, chapters");
     const std::string first = status();
     say("        status: " + first);
-    const double keyToObs = number(first, "From the key to OBS: ");
+    const double keyToObs = number(first, "from the key to OBS: ");
     check(first.find("PianoForge connected") != std::string::npos && std::fabs(number(first, "Latency: ") - 20.0) < 0.5
               && first.find("into OBS at 48.0 kHz") != std::string::npos,
           "the status says connected, 20 ms of latency by default, straight to OBS's 48 kHz");
@@ -323,11 +323,11 @@ int main(int argc, char** argv)
     check(std::fabs(number(second, "Latency: ") - 50.0) < 0.5 && std::fabs(number(second, "aimed at, ") - 50.0) < 10.0,
           "latency set to 50 ms: aimed at " + std::to_string(number(second, "Latency: ")) + " ms, "
               + std::to_string(number(second, "aimed at, ")) + " ms waiting");
-    const double before = number(second, "created: ");
+    const double before = number(second, "resyncs: ");
     obs_property_button_clicked(obs_properties_get(props, "resync"), source);
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     const std::string third = status();
-    check(number(third, "created: ") == before + 1.0 && third.find("Running") != std::string::npos,
+    check(number(third, "resyncs: ") == before + 1.0 && third.find("Running") != std::string::npos,
           "resynchronise: one resync more, and running again");
 
     // Another mix (as heard) with the application's volume followed: through a fade out and a fade in.
@@ -356,7 +356,8 @@ int main(int argc, char** argv)
     }
     obs_properties_destroy(props);
 
-    // The keyboard: middle C lit, D not, the sustain pedal's bar full.
+    // The keyboard, its colours by hand (the default): C2 and middle C struck together, too far apart for one hand:
+    // C2 the left hand's (blue), middle C the right's (orange), D not lit, middle C's trail, the sustain pedal's bar.
     if (video && keyboard != nullptr) {
         std::uint32_t w = 0, h = 0;
         const auto px = renderSource(keyboard, w, h);
@@ -366,20 +367,38 @@ int main(int argc, char** argv)
         };
         const int keysTop = 100, keysHeight = 130;
         const double t = 0.55 + 0.45 * 100.0 / 127.0;
-        auto lit = [&](int white, int accent) { return (int) std::lround(white + (accent - white) * t); };
+        auto lit = [&](int white, int color) { return (int) std::lround(white + (color - white) * t); };
+        auto matches = [](const std::array<int, 3>& c, int r, int g, int b) {
+            return std::abs(c[0] - r) <= 3 && std::abs(c[1] - g) <= 3 && std::abs(c[2] - b) <= 3;
+        };
         bool ok = !px.empty() && w == 1040 && h == 100 + 130 + 16;
+        if (ok) { // the image, for the record (keyboard.bmp beside the report: 32-bit, bottom-up rows)
+            const auto bmp = std::filesystem::path(std::filesystem::absolute(argv[3])).replace_filename("keyboard.bmp");
+            if (FILE* f = std::fopen(bmp.string().c_str(), "wb")) {
+                const std::uint32_t size = 54 + w * h * 4;
+                const std::uint8_t header[54] = { 'B', 'M', (std::uint8_t) size, (std::uint8_t) (size >> 8), (std::uint8_t) (size >> 16),
+                                                  (std::uint8_t) (size >> 24), 0, 0, 0, 0, 54, 0, 0, 0, 40, 0, 0, 0,
+                                                  (std::uint8_t) w, (std::uint8_t) (w >> 8), 0, 0, (std::uint8_t) h, (std::uint8_t) (h >> 8), 0, 0,
+                                                  1, 0, 32, 0 };
+                std::fwrite(header, 1, 54, f);
+                for (std::uint32_t y = h; y-- > 0;)
+                    std::fwrite(px.data() + (std::size_t) y * w * 4, 1, (std::size_t) w * 4, f);
+                std::fclose(f);
+            }
+        }
         if (ok) {
-            const auto c = at(23 * 20 + 10, keysTop + (int) (0.8 * keysHeight)), d = at(24 * 20 + 10, keysTop + (int) (0.8 * keysHeight));
+            const int y = keysTop + (int) (0.8 * keysHeight);
+            const auto c2 = at(9 * 20 + 10, y), c4 = at(23 * 20 + 10, y), d4 = at(24 * 20 + 10, y);
             const auto pedal = at(1040 - 20, keysTop + keysHeight + 8);
             const auto trail = at(23 * 20 + 10, keysTop - 5);
-            say("        middle C " + std::to_string(c[0]) + "," + std::to_string(c[1]) + "," + std::to_string(c[2]) + "; D "
-                + std::to_string(d[0]) + "," + std::to_string(d[1]) + "," + std::to_string(d[2]) + "; pedal " + std::to_string(pedal[0])
-                + "," + std::to_string(pedal[1]) + "," + std::to_string(pedal[2]));
-            ok = std::abs(c[0] - lit(0xF2, 0x4F)) <= 3 && std::abs(c[1] - lit(0xF2, 0xA3)) <= 3 && std::abs(c[2] - lit(0xF2, 0xE0)) <= 3
-                 && d[0] == 0xF2 && d[1] == 0xF2 && d[2] == 0xF2 && std::abs(pedal[0] - 0x4F) <= 3 && std::abs(pedal[2] - 0xE0) <= 3
-                 && trail[2] > 100;
+            auto show = [](const std::array<int, 3>& c) {
+                return std::to_string(c[0]) + "," + std::to_string(c[1]) + "," + std::to_string(c[2]);
+            };
+            say("        C2 " + show(c2) + "; middle C " + show(c4) + "; D " + show(d4) + "; pedal " + show(pedal) + "; trail " + show(trail));
+            ok = matches(c2, lit(0xF2, 0x3B), lit(0xF2, 0x82), lit(0xF2, 0xF6)) && matches(c4, lit(0xF2, 0xF9), lit(0xF2, 0x73), lit(0xF2, 0x16))
+                 && matches(d4, 0xF2, 0xF2, 0xF2) && matches(pedal, 0xF9, 0x73, 0x16) && trail[0] > 100 && trail[2] < 60;
         }
-        check(ok, "the keyboard: middle C held lit, D not, its trail rising, the sustain pedal's bar full");
+        check(ok, "the keyboard by hand: C2 to the left (blue), middle C to the right (orange), D not lit, a trail, the sustain pedal");
     } else {
         check(false, "the keyboard source exists and renders");
     }

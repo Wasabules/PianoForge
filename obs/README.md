@@ -56,9 +56,10 @@ Properties) so that it is not heard twice.
 
 **PianoForge** (audio):
 
-- **Status**: connected or not; the rates and block size; the mix, the volume followed or not, the gain; the latency
-  aimed at and the audio waiting; from the key to OBS (to set a camera's Sync Offset); the drift compensated; the
-  resyncs; the limiter when it acts. It refreshes itself on a change, and every few seconds while running.
+- **Status** (at the bottom, so that its lines never move the controls): connected or not, the rates and block
+  size, how long it has run; the latency aimed at and the audio waiting, from the key to OBS (to set a camera's Sync
+  Offset), the drift compensated, the resyncs of this audio session; the limiter when it acts. It refreshes itself
+  when its state changes; the measures, with Refresh.
 - **Mix**: on speakers (default: the room as speakers give it, even while PianoForge is heard on headphones, whose
   binaural rendering colours the sound on speakers), as heard, or dry (the piano without the room).
 - **Follow PianoForge's volume** (off by default: the stream keeps its level whatever volume is heard), **Gain**.
@@ -66,7 +67,11 @@ Properties) so that it is not heard twice.
 - **Chapter markers in OBS recordings** (on by default).
 
 **PianoForge keyboard**: width, trails above the keys (height, length in seconds; 0: the keyboard alone), the
-pedals, the colours of the keys pressed and of the trails, an offset against the sound.
+pedals; the colours: each hand's (estimated from the notes: where each hand plays, how far it stretches, chords too
+wide for one hand split at their widest interval; or a fixed split), with a shade for the black keys (blue and dark
+blue, orange and dark orange by default), one for the white keys and one for the black, or one colour; the light: a
+glow rising from the keys pressed, a flash toward white at the strike (by its velocity), an afterglow once a key is
+up; an offset against the sound.
 
 **PianoForge text**: the template (fields `{file}`, `{state}`, `{preset}`, `{room}`, `{engine}`, `{recording}`; a
 line whose fields are all empty disappears), then OBS's text properties (font, colours, outline, background...).

@@ -1051,6 +1051,11 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - Le test du plugin dans libobs démarre désormais aussi la vidéo (module Direct3D 11 d'OBS, hors écran) et charge la source texte d'OBS. Il vérifie le son (mix, niveaux, fondus, fréquence, propreté), l'état, les lecteurs, le rendu du clavier pixel par pixel, le texte et les chapitres.
     - Un test sans OBS couvre la logique des incrustations, et le test de la mémoire partagée ses nouveautés.
     - L'autotest de l'application vérifie les trois mix à l'échantillon près.
+  - *Compléments après l'essai de l'utilisateur.*
+    - *Couleurs du clavier* : par main (bleu et bleu foncé, orange et orange foncé, le foncé pour les touches noires), par type de touche, ou une seule. L'estimation des mains part des notes seules. Chaque main a une place, et un groupe de notes frappées ensemble (35 ms, déjà en file, le son étant en retard) va à la main qui lui coûte le moins : distance à sa place, écart qu'il lui demanderait, croisement des touches de l'autre main. Un accord trop large pour une main (plus de 14 demi-tons) est partagé à son plus grand intervalle. Un partage fixe reste possible.
+    - *Effets lumineux* : un halo qui monte des touches enfoncées, un éclair vers le blanc à la frappe (selon la vélocité, un dixième de seconde) et une rémanence quand la touche remonte.
+    - *L'état de la source audio* faisait un pavé, reconstruit toutes les cinq secondes : sa hauteur changeait et déplaçait les boutons sous la souris. Il tient en deux lignes, en bas des propriétés, et ne se reconstruit que quand l'état change. L'explication sur la caméra est passée dans l'aide.
+    - *101 resynchronisations en 2 min 30* : ce n'était pas le plugin. Le FiiO absent, l'application retentait son pilote ASIO toutes les deux secondes, sans fin : il reste listé sans son appareil, ce qui remettait le compteur de tentatives à zéro. Chaque tentative coupait ASIO4ALL, et le son de l'application sautait. Désormais : huit tentatives, puis une toutes les trente secondes et seulement dans le silence ; le compteur repart quand l'appareil revient vraiment dans la liste. Le plugin compte les resynchronisations par session audio de l'application.
 
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 

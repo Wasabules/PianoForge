@@ -84,6 +84,62 @@ int main()
         check(k.velocity(64) == 0 && !k.notes()[0].open(), "all notes off: every key up");
     }
 
+    // The hands, estimated: a bass under a melody, a chord too wide for a hand, a fixed split; the keys' lights.
+    {
+        KeyboardState k;
+        k.reset();
+        k.setRate(48000.0);
+        std::uint64_t t = 0;
+        auto strike = [&](std::initializer_list<int> keys, std::uint64_t length) {
+            int i = 0;
+            for (const int key : keys)
+                k.add(event(t + (std::uint64_t) (10 * i++), 0x90, key, 80)); // a chord: within a few samples
+            for (const int key : keys)
+                k.add(event(t + length, 0x80, key, 0));
+            t += length + 100;
+        };
+        // An alternating bass (C2, G2) under a melody (E5, G5, then down to C5).
+        for (int bar = 0; bar < 4; ++bar) {
+            strike({ 36 }, 4800);
+            strike({ 76 }, 4800);
+            strike({ 43 }, 4800);
+            strike({ 79 - bar }, 4800);
+        }
+        k.advance(t, 1000000);
+        bool alternating = true;
+        for (const auto& n : k.notes())
+            alternating = alternating && n.hand == (n.key < 60 ? kLeftHand : kRightHand);
+        check(alternating && k.notes().size() == 16, "a bass under a melody: the bass to the left hand, the melody to the right");
+        // A chord over three octaves and a half: split at its widest interval (C3 to E4).
+        strike({ 36, 43, 48, 64, 67, 72 }, 9600);
+        k.advance(t, 1000000);
+        bool split = true;
+        for (const auto& n : k.notes())
+            if (n.start >= t - 9600 - 100 - 100)
+                split = split && n.hand == (n.key <= 48 ? kLeftHand : kRightHand);
+        check(split, "a chord too wide for a hand: split at its widest interval, the lower part to the left hand");
+        // A fixed split: middle C and above, the right hand.
+        KeyboardState f;
+        f.reset();
+        f.setFixedSplit(true, 60);
+        f.add(event(0, 0x90, 59, 80));
+        f.add(event(5000, 0x90, 60, 80));
+        f.advance(10000, 100000);
+        check(f.light(59).hand == kLeftHand && f.light(60).hand == kRightHand, "a fixed split: under it the left hand, from it the right");
+        // The lights: pressed, released, the velocity kept for the afterglow.
+        KeyboardState l;
+        l.reset();
+        l.add(event(100, 0x90, 64, 90));
+        l.add(event(900, 0x80, 64, 0));
+        l.advance(500, 100000);
+        const auto held = l.light(64);
+        l.advance(1000, 100000);
+        const auto after = l.light(64);
+        check(held.velocity == 90 && held.pressed == 100 && after.velocity == 0 && after.released == 900 && after.lastVelocity == 90
+                  && after.struck && !l.light(65).struck,
+              "a key's light: pressed at its frame, released at its frame, its velocity kept");
+    }
+
     // The text template.
     {
         pf::FeedInfo info;

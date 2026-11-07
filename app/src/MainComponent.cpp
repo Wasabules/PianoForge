@@ -1481,10 +1481,11 @@ void MainComponent::noteAudioDevice()
                         theme::busy);
             audioRetries = 0;
             nextAudioRetry = juce::Time::getMillisecondCounterHiRes() + 1500.0;
-        } else if (wantedListed && audioRetries >= 8) { // back in the list: tried again
+        } else if (wantedListed && !wantedWasListed) { // back in the list: tried again, at once
             audioRetries = 0;
             nextAudioRetry = juce::Time::getMillisecondCounterHiRes() + 500.0;
         }
+        wantedWasListed = wantedListed; // (an ASIO driver stays listed without its device: no reason to try again)
         if (d != nullptr) {
             fallbackType = type;
             fallbackName = name;
@@ -1515,6 +1516,13 @@ void MainComponent::noteAudioDevice()
     }
 }
 
+bool MainComponent::silentForRetry() const
+{
+    // Nothing sounding, played or recorded: a moment without the stand-in device goes unheard.
+    const int voices = modalSelected() ? modal.activeVoices.load() : player.activeVoices.load();
+    return voices == 0 && !host.filePlayer.isPlaying() && !host.live.recording() && !host.playback.isPlaying();
+}
+
 void MainComponent::retryWantedAudio()
 {
     // The device asked for, again; if it still cannot be opened, back to the stand-in (as it is running now, not
@@ -1522,7 +1530,9 @@ void MainComponent::retryWantedAudio()
     if (audioWindow != nullptr && audioWindow->isVisible())
         return;
     ++audioRetries;
-    nextAudioRetry = juce::Time::getMillisecondCounterHiRes() + 2000.0;
+    // Eight tries two seconds apart; then one every half a minute, and only in silence (each try stops the stand-in
+    // a moment: it would be heard, recorded and streamed).
+    nextAudioRetry = juce::Time::getMillisecondCounterHiRes() + (audioRetries < kQuickAudioRetries ? 2000.0 : 30000.0);
     juce::XmlElement standIn("DEVICESETUP");
     const auto setup = deviceManager.getAudioDeviceSetup();
     standIn.setAttribute("deviceType", deviceManager.getCurrentAudioDeviceType());
@@ -1533,7 +1543,7 @@ void MainComponent::retryWantedAudio()
     if (error.isEmpty() && opensWanted())
         return; // the change message ends the fallback
     deviceManager.initialise(0, 2, &standIn, true, {}, &preferredAudio);
-    if (audioRetries >= 8)
+    if (audioRetries == kQuickAudioRetries)
         showMessage("Audio: " + wantedAudio->getStringAttribute("audioOutputDeviceName") + " is busy or missing"
                         + (error.isNotEmpty() ? " (" + error + ")" : juce::String()) + "; playing on " + fallbackName
                         + " meanwhile. It is taken back when it returns, or choose it again in Audio.",
@@ -1751,7 +1761,8 @@ void MainComponent::timerCallback()
         keyboard.grabKeyboardFocus();
         focusGiven = true;
     }
-    if (audioFallback && audioRetries < 8 && juce::Time::getMillisecondCounterHiRes() >= nextAudioRetry)
+    if (audioFallback && juce::Time::getMillisecondCounterHiRes() >= nextAudioRetry
+        && (audioRetries < kQuickAudioRetries || silentForRetry()))
         retryWantedAudio();
 
     drained.clear(); // take capture: move what reached the engine into the session record

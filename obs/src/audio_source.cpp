@@ -35,6 +35,7 @@ constexpr double kFadeSeconds = 0.01;    // fades in and out
 constexpr double kBeatSeconds = 0.25;    // the reader's heartbeat in the feed
 constexpr double kRateSeconds = 60.0;    // the application's rate: measured over about this long
 constexpr double kRateWarmSeconds = 5.0; // and followed from then on
+constexpr double kEnvelopeSeconds = 0.5; // of each such window, the least late block
 constexpr int kDefaultLatencyMs = 20, kMinLatencyMs = 10, kMaxLatencyMs = 100;
 
 enum class State : int { noApplication, noAudio, starting, running };
@@ -51,7 +52,7 @@ struct Source {
     // Status, written by the worker, read by the properties.
     std::atomic<int> state { (int) State::noApplication };
     std::atomic<std::uint32_t> feedRate { 0 }, obsRate { 0 }, block { 0 }, resyncs { 0 };
-    std::atomic<double> targetMs { 0.0 }, waitingMs { 0.0 }, driftPpm { 0.0 }, keyToObsMs { 0.0 }, volumeDb { 0.0 };
+    std::atomic<double> targetMs { 0.0 }, waitingMs { 0.0 }, driftPpm { 0.0 }, keyToObsMs { 0.0 };
     std::atomic<float> limiterDb { 0.0f };
     std::atomic<std::uint64_t> runningSince { 0 };
 };
@@ -81,6 +82,7 @@ void run(Source* s)
     // first block.
     std::uint64_t rateFirstNs = 0, rateFirstFrames = 0;
     double meanT = 0.0, meanF = 0.0, varT = 0.0, covTF = 0.0, lastT = 0.0;
+    double envelopeStart = 0.0, envelopeBest = 1e300, envelopeT = 0.0, envelopeF = 0.0; // this window's least late block
     std::uint64_t lastClockNs = 0;
     std::uint64_t limiterSince = 0;
     int latency = -1, mix = -1, inBlock = 1;
@@ -145,13 +147,13 @@ void run(Source* s)
                            s->state.load() == (int) State::running ? (float) keyToObs : 0.0f);
             lastBeat = now;
         }
-        // The properties follow the status: at once on a change of what it says, and every few seconds for the measures.
+        // The properties follow the status when its state changes (connected, stopped, a resync...); the measures
+        // with the refresh button (rebuilding the dialog every few seconds would move it under the mouse).
         {
             char sig[160];
-            std::snprintf(sig, sizeof(sig), "%d %u %u %u %u %d %d %d", s->state.load(), s->feedRate.load(), s->obsRate.load(),
-                          s->block.load(), s->resyncs.load(), s->mix.load(), (int) s->followVolume.load(), s->limiterDb.load() < -0.05f);
-            const double since = (double) (now - lastRefresh) * 1e-9;
-            if ((signature != sig && since > 0.5) || (s->state.load() == (int) State::running && since > 5.0)) {
+            std::snprintf(sig, sizeof(sig), "%d %u %u %u %u %d", s->state.load(), s->feedRate.load(), s->obsRate.load(),
+                          s->block.load(), s->resyncs.load(), s->limiterDb.load() < -0.05f);
+            if (signature != sig && (double) (now - lastRefresh) * 1e-9 > 1.0) {
                 signature = sig;
                 lastRefresh = now;
                 obs_source_update_properties(s->source);
@@ -209,6 +211,8 @@ void run(Source* s)
             s->targetMs = 1000.0 * resampler.targetSeconds();
             if (resync)
                 s->resyncs.fetch_add(1);
+            else
+                s->resyncs = 0; // a new audio session of the application's: its own count (its stops are not ours)
             if (!connected || !resync)
                 blog(LOG_INFO, "[pianoforge] reading the application's audio: %u Hz, blocks of %u, into OBS at %.0f Hz, latency %.1f ms",
                      format.sampleRate, format.blockSize, obsRate, 1000.0 * resampler.targetSeconds());
@@ -258,23 +262,35 @@ void run(Source* s)
                     longestGap = std::max((double) (clockNs - lastClockNs) * 1e-9, longestGap - 0.001 * (longestGap - inBlock / feedRate));
                 lastClockNs = clockNs;
                 // The application's rate: the line through its blocks (after kRateWarmSeconds, the ratio follows it).
+                // A block is written late, never early (a busy machine, a timer's tick): of each kEnvelopeSeconds, only
+                // the least late one, on the line itself or nearly (the lower envelope, as clocks are synchronised).
                 if (rateFirstNs == 0 || clockNs < rateFirstNs || clockFrames < rateFirstFrames) {
                     rateFirstNs = clockNs;
                     rateFirstFrames = clockFrames;
-                    meanT = meanF = varT = covTF = lastT = 0.0;
+                    meanT = meanF = varT = covTF = lastT = envelopeStart = 0.0;
+                    envelopeBest = 1e300;
                 } else {
                     const double t = (double) (clockNs - rateFirstNs) * 1e-9, f = (double) (clockFrames - rateFirstFrames);
-                    // Weighted alike over the time elapsed until that reaches kRateSeconds, then exponentially.
-                    const double a = t > 0.0 ? std::max(1.0 - std::exp(-(t - lastT) / kRateSeconds), (t - lastT) / t) : 1.0;
-                    const double dt = t - meanT, df = f - meanF;
-                    meanT += a * dt;
-                    meanF += a * df;
-                    varT = (1.0 - a) * (varT + a * dt * dt);
-                    covTF = (1.0 - a) * (covTF + a * dt * df);
-                    lastT = t;
-                    if (t > kRateWarmSeconds && varT > 0.0)
-                        resampler.setProducerRate(covTF / varT);
-
+                    if (const double late = t - f / feedRate; late < envelopeBest) {
+                        envelopeBest = late;
+                        envelopeT = t;
+                        envelopeF = f;
+                    }
+                    if (t - envelopeStart >= kEnvelopeSeconds) {
+                        // Weighted alike over the time elapsed until that reaches kRateSeconds, then exponentially.
+                        const double te = envelopeT, fe = envelopeF;
+                        const double a = te > 0.0 ? std::max(1.0 - std::exp(-(te - lastT) / kRateSeconds), (te - lastT) / te) : 1.0;
+                        const double dt = te - meanT, df = fe - meanF;
+                        meanT += a * dt;
+                        meanF += a * df;
+                        varT = (1.0 - a) * (varT + a * dt * dt);
+                        covTF = (1.0 - a) * (covTF + a * dt * df);
+                        lastT = te;
+                        envelopeStart = t;
+                        envelopeBest = 1e300;
+                        if (te > kRateWarmSeconds && varT > 0.0)
+                            resampler.setProducerRate(covTF / varT);
+                    }
                 }
             }
             overdue = since > 1.5 * longestGap + 0.003;
@@ -339,7 +355,6 @@ void run(Source* s)
         s->keyToObsMs = keyToObs;
         s->waitingMs = 1000.0 * resampler.waiting() / feedRate;
         s->driftPpm = resampler.ratioPpm();
-        s->volumeDb = 20.0 * std::log10(std::max(1e-6, (double) feed.volume()));
         if (const float r = limiter.takeReduction(); r < -0.05f) {
             limiterLow = std::min(limiterLow, (double) r);
             limiterSince = now;
@@ -362,36 +377,22 @@ std::string statusText(const Source* s)
         return text("Status.NoAudio");
     const double rate = s->feedRate.load(), block = s->block.load();
     std::string out;
-    std::snprintf(line, sizeof(line), text("Status.Connected"), rate / 1000.0, block, rate > 0 ? 1000.0 * block / rate : 0.0,
-                  s->obsRate.load() / 1000.0);
+    std::snprintf(line, sizeof(line), text("Status.Connected"), rate / 1000.0, s->obsRate.load() / 1000.0, block,
+                  rate > 0 ? 1000.0 * block / rate : 0.0);
     out += line;
-    const char* mixes[] = { "Mix.Heard", "Mix.Speakers", "Mix.Dry" };
-    char volume[160];
-    if (s->followVolume.load())
-        std::snprintf(volume, sizeof(volume), text("Status.VolumeFollowed"), s->volumeDb.load());
-    else
-        std::snprintf(volume, sizeof(volume), "%s", text("Status.VolumeIndependent"));
-    std::snprintf(line, sizeof(line), text("Status.Mix"), text(mixes[std::clamp(s->mix.load(), 0, 2)]), volume, s->gainDb.load());
-    out += "\n" + std::string(line);
-    std::snprintf(line, sizeof(line), text("Status.Latency"), s->targetMs.load(), s->waitingMs.load());
-    out += "\n" + std::string(line);
-    if (state == State::running) {
-        std::snprintf(line, sizeof(line), text("Status.KeyToObs"), s->keyToObsMs.load());
-        out += "\n" + std::string(line);
+    if (state == State::running && s->runningSince.load() != 0) {
+        const double minutes = (double) (os_gettime_ns() - s->runningSince.load()) * 1e-9 / 60.0;
+        std::snprintf(line, sizeof(line), text("Status.Running"), std::floor(minutes), std::fmod(minutes * 60.0, 60.0));
+        out += " " + std::string(line);
+    } else {
+        out += " " + std::string(text("Status.Starting"));
     }
-    std::snprintf(line, sizeof(line), text("Status.Drift"), s->driftPpm.load());
-    out += "\n" + std::string(line);
-    std::snprintf(line, sizeof(line), text("Status.Resyncs"), s->resyncs.load());
+    std::snprintf(line, sizeof(line), text("Status.Measures"), s->targetMs.load(), s->waitingMs.load(),
+                  state == State::running ? s->keyToObsMs.load() : 0.0, s->driftPpm.load(), s->resyncs.load());
     out += "\n" + std::string(line);
     if (s->limiterDb.load() < -0.05f) {
         std::snprintf(line, sizeof(line), text("Status.Limiter"), (double) s->limiterDb.load());
         out += "\n" + std::string(line);
-    }
-    out += "\n" + std::string(text(state == State::starting ? "Status.Starting" : "Status.Running"));
-    if (state == State::running && s->runningSince.load() != 0) {
-        const double minutes = (double) (os_gettime_ns() - s->runningSince.load()) * 1e-9 / 60.0;
-        std::snprintf(line, sizeof(line), text("Status.For"), std::floor(minutes), std::fmod(minutes * 60.0, 60.0));
-        out += line;
     }
     return out;
 }
@@ -458,9 +459,6 @@ bool resynchronise(obs_properties_t* props, obs_property_t* property, void* data
 obs_properties_t* sourceProperties(void* data)
 {
     obs_properties_t* props = obs_properties_create();
-    obs_property_t* status = obs_properties_add_text(props, "status", statusText(static_cast<Source*>(data)).c_str(), OBS_TEXT_INFO);
-    obs_property_text_set_info_word_wrap(status, true);
-    obs_properties_add_button2(props, "refresh", text("Refresh"), refreshStatus, data);
     obs_property_t* mix = obs_properties_add_list(props, "mix", text("Mix"), OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
     obs_property_list_add_int(mix, text("Mix.Speakers"), (long long) pf::FeedMix::speakers);
     obs_property_list_add_int(mix, text("Mix.Heard"), (long long) pf::FeedMix::heard);
@@ -477,7 +475,12 @@ obs_properties_t* sourceProperties(void* data)
     obs_properties_add_button2(props, "resync", text("Resync"), resynchronise, data);
     obs_property_t* chapters = obs_properties_add_bool(props, "chapters", text("Chapters"));
     obs_property_set_long_description(chapters, text("Chapters.Description"));
-    obs_properties_add_text(props, "help", text("Help"), OBS_TEXT_INFO);
+    obs_property_t* help = obs_properties_add_text(props, "help", text("Help"), OBS_TEXT_INFO);
+    obs_property_text_set_info_word_wrap(help, true);
+    // The status last: its lines come and go without moving the controls.
+    obs_property_t* status = obs_properties_add_text(props, "status", statusText(static_cast<Source*>(data)).c_str(), OBS_TEXT_INFO);
+    obs_property_text_set_info_word_wrap(status, true);
+    obs_properties_add_button2(props, "refresh", text("Refresh"), refreshStatus, data);
     return props;
 }
 
