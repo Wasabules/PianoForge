@@ -145,6 +145,26 @@ public:
         }
     }
 
+    /// Keeps the first n modes (the others removed; their lanes silent).
+    void truncate(int n) noexcept
+    {
+        n = std::clamp(n, 0, count);
+        const auto used = roundUp((std::size_t) count);
+        for (auto* v : { &ur, &ui, &pr, &pi, &er, &ei, &lr, &li, &rr, &ri })
+            std::fill(v->begin() + n, v->begin() + (std::ptrdiff_t) used, 0.0f);
+        count = n;
+    }
+
+    /// Mode k as heard now: its exact pole, and a_c u on each channel (what add() takes to carry it on elsewhere).
+    void current(int k, std::complex<float>& pole, std::complex<float>& left, std::complex<float>& right) const noexcept
+    {
+        const auto i = (std::size_t) k;
+        const std::complex<float> u { ur[i], ui[i] };
+        pole = { er[i], ei[i] };
+        left = std::complex<float> { lr[i], li[i] } * u;
+        right = std::complex<float> { rr[i], ri[i] } * u;
+    }
+
     /// Accumulates numSamples into left and right (adds, does not overwrite).
     void process(float* left, float* right, int numSamples) noexcept
     {

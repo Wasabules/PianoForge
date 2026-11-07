@@ -964,6 +964,33 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
   - *Ce que le test a appris.* Un hôte ne doit pas envoyer plus d'échantillons qu'il n'en a annoncé (VST3 l'interdit) : un premier test qui le faisait corrompait le tas dans la couche VST3 elle-même. Le plugin découpe tout de même les blocs trop longs. Les paramètres d'un plugin hébergé ne connaissent que leur valeur normalisée et leur texte.
   - *Limites.* VST3 seulement (CLAP plus tard). Windows seulement à l'essai (le code est portable). Processeur AVX2 requis par le moteur. Le plugin n'est pas signé.
 
+**Une corde par note : refrappe et polyphonie (7 novembre 2026).** Le principe 2 du §2.3 (« pas de voix, mais 88 notes toujours présentes ; une note rejouée frappe une corde qui vibre encore ; jamais de vol de voix ») n'était pas tenu. Le moteur créait une voix par frappe, effaçait la précédente en 0,8 s, gardait 3 voix par note au plus et 64 en tout.
+  - *Mesuré d'abord.* Une séance du banc (`tools/bench/sessions/restrike.toml`, 11 prises rendues par Noire en 1 min 45) :
+    - notes répétées pédale enfoncée, à 50, 100 et 200 ms, en crescendo, en decrescendo, dans le grave, le médium et l'aigu ;
+    - refrappe touche tenue, et staccato ;
+    - glissandos pédale enfoncée, chromatique (88 notes) et sur les touches blanches (52 notes).
+
+    Chez Noire, huit frappes de A3 toutes les 100 ms montent à +8,7 dB, à peu près la superposition (+9 dB pour huit frappes égales). Le moteur plafonnait à +4 dB et restait 5 à 11 dB sous Noire. Le glissando chromatique volait 24 voix : une fois les touches relâchées, pédale tenue, il manquait 5,5 dB sous 250 Hz et 4,1 dB entre 250 et 1 000 Hz.
+  - *Le modèle.*
+    - *Une voix par note* : `voices[note]`, 128 places, posées sur le tas (128 voix ne tiennent plus sur une pile). Plus aucun vol de voix.
+    - *Le marteau frappe une corde en mouvement.* Ce que la corde joue à cet instant (chaque mode, à son niveau, enveloppe d'étouffoir comprise) continue de sonner, placé après les modes de la nouvelle frappe. Pendant le contact du marteau (3 ms), ces modes perdent la part absorbée par le feutre (`restrikeAbsorption`), par un amortissement de leurs pôles : rien ne saute dans la forme d'onde.
+    - *À la fin du contact*, chaque ancien mode rejoint le mode nouveau du même partiel dont le pôle est le plus proche (fréquence et amortissement). Avec la même couche, c'est le même mode : sans absorption, les frappes s'additionnent exactement. Les partiels absents de la nouvelle couche gardent leurs propres modes, et le résidu d'attaque de la frappe précédente va jusqu'à son terme (4 résidus par note).
+  - *Deux essais écartés par la mesure.*
+    - Répartir la somme d'un partiel sur les nouveaux modes selon leurs amplitudes initiales versait le son rémanent (les modes lents, l'essentiel de ce qui reste) dans les modes rapides de la nouvelle frappe, qui l'éteignaient. La montée restait trop faible pour A3 (+6 dB contre +8,7) et devenait trop forte pour C2 (+11,7 contre +7,1).
+    - La superposition exacte (pôle le plus proche, sans absorption) suit Noire pendant les quatre premières frappes : +4,0, +6,4, +7,8 et +8,8 dB, contre +4,2, +6,5, +8,1 et +8,7. Mais elle continue de monter, et la tenue de pédale qui suit est 5 à 7 dB trop forte : Noire ne superpose pas entièrement, elle éteint ses anciennes voix.
+  - *L'absorption, calée sur Noire.* Le balayage de 0 à 92 % sur les neuf prises répétées donne 50 %, où l'écart moyen par prise est le plus faible. Toutes prises confondues, l'enveloppe (fenêtres de 50 ms où Noire dépasse −80 dBFS) a un écart médian de −0,2 dB, la moitié dans 1,9 dB et 90 % dans 7,7 dB, contre −4,6, 4,7 et 11,6 dB avant. Par prise, l'écart médian va de −1,6 à +1,7 dB.
+    - Ce qui reste : pendant des répétitions rapides, notre montée est de 2 à 3,5 dB sous celle de Noire (A3 toutes les 100 ms : +5,2 contre +8,7 dB). Noire garde ses voix à plein niveau puis les éteint ; une seule absorption physique ne peut pas reproduire à la fois la montée et la tenue qui suit.
+    - Le réglage est dans Engine settings (« Re-strike absorption »), dans le plugin et dans la page web. Le lecteur de référence garde son fondu de refrappe, renommé en conséquence.
+  - *Polyphonie.* Glissando chromatique pédale enfoncée : 88 voix, aucune volée. Une fois les touches relâchées, pédale tenue, on est à −0,7 dB de Noire sous 250 Hz (au lieu de −5,5), −0,5 dB de 250 à 1 000 Hz et +0,6 dB de 1 à 4 kHz. Au-dessus de 4 kHz, −2,7 dB, comme pour le glissando sur les touches blanches qui ne volait rien : c'est un écart général des aigus, pas la polyphonie. Coût : 88 notes pédale enfoncée, 20,1 % du temps réel (64 : 17,5 %).
+  - *Tests* (`modal_engine_test`, 44 vérifications) :
+    - à l'échantillon de la refrappe, la sortie est exactement ce que la corde allait jouer plus le premier échantillon de la nouvelle frappe, avec une seule voix pour la note ;
+    - sans absorption, huit frappes donnent la somme des frappes isolées (+0,00 dB) ;
+    - avec 50 %, ce qui reste de la première frappe après le contact vaut 0,7071 d'elle-même (√0,5), sans marche ;
+    - un glissando de 88 notes pédale enfoncée donne la somme des notes jouées seules (−131 dB), sans voix volée.
+
+    Les tests du plugin, de l'application et de la page web passent aussi.
+  - *`modal_render`* affiche le maximum de voix actives et les voix volées, et accepte `--absorb`. L'option `--restrike` a disparu avec le fondu.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

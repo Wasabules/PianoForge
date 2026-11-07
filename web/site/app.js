@@ -463,6 +463,7 @@ function settings() {
     options: OPTIONS.map((_, i) => $('option' + i).checked),
     sympathetic: Number($('sympathetic').value),
     unison: Number($('unison').value),
+    absorption: Number($('absorption').value),
     a4: Number($('a4').value) || 440,
     curveMax: Math.max(20, Math.min(127, Number($('curveMax').value) || 127)),
   };
@@ -475,12 +476,14 @@ function apply() {
   $('roomDistanceOut').textContent = `${s.room.distance.toFixed(1)} m`;
   $('sympatheticOut').textContent = `${s.sympathetic} dB`;
   $('unisonOut').textContent = `${s.unison} %`;
+  $('absorptionOut').textContent = `${s.absorption} %`;
   store.set('settings', { ...s, roomPreset: $('roomPreset').value, roomPosition: $('roomPosition').value, roomModel: ROOM_MODEL });
   send({ type: 'volume', db: s.volume });
   send({ type: 'room', ...s.room });
   s.options.forEach((on, option) => send({ type: 'option', option, on }));
   send({ type: 'sympathetic', db: s.sympathetic });
   send({ type: 'unison', spread: s.unison / 100 });
+  send({ type: 'absorption', share: s.absorption / 100 });
   send({ type: 'tuning', a4: s.a4 });
   send({ type: 'curve', inputMin: 1, inputMax: s.curveMax, points: [0, 0.25, 0.5, 0.75, 1] });
 }
@@ -528,6 +531,7 @@ function buildSettings() {
     saved.options.forEach((on, i) => { $('option' + i).checked = on; });
     $('sympathetic').value = saved.sympathetic;
     $('unison').value = saved.unison ?? 100;
+    $('absorption').value = saved.absorption ?? 50;
     $('a4').value = saved.a4;
     $('curveMax').value = saved.curveMax;
   }
@@ -598,7 +602,7 @@ function buildSettings() {
     $('pedalLearn').textContent = 'Learn range';
     apply();
   });
-  for (const id of ['volume', 'roomOn', 'roomLevel', 'sympathetic', 'unison', 'a4', 'curveMax'])
+  for (const id of ['volume', 'roomOn', 'roomLevel', 'sympathetic', 'unison', 'absorption', 'a4', 'curveMax'])
     $(id).addEventListener('input', apply);
   $('options').addEventListener('change', apply);
   $('octave').textContent = octave;

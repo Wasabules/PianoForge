@@ -153,7 +153,8 @@ Editor::Editor(Processor& p) : juce::AudioProcessorEditor(p), processor(p)
     setupRow(sympatheticLevel, param::sympatheticLevel, "Sympathetic", "The sympathetic resonance against what was measured on the reference");
     setupRow(unison, param::unison, "Unison", "How far apart the strings of each note are tuned: 100 % as measured, 0 % no beating, "
                                               "200 to 300 % an old upright's");
-    setupRow(restrike, param::restrike, "Re-strike", "How fast a note struck again fades out the one it replaces");
+    setupRow(absorption, param::absorption, "Re-strike", "A note struck again strikes its string while it rings, and the strikes "
+                                                         "add up; the hammer absorbs this share of the vibration (0 %: they add exactly)");
     for (size_t i = 0; i < options.size(); ++i)
         setupToggle(options[i], kOptionIds[i], kOptionTips[i]);
     setupToggle(limiterOn, param::limiter, "Nothing over -1 dBFS: a big chord with the room could otherwise clip");
@@ -470,7 +471,7 @@ void Editor::resized()
     {
         auto in = soundCard.reduced(12, 8);
         in.removeFromTop(22);
-        for (auto* r : { &volume, &sympatheticLevel, &unison, &restrike })
+        for (auto* r : { &volume, &sympatheticLevel, &unison, &absorption })
             layoutRow(*r, in);
         in.removeFromTop(6);
         for (auto& t : options)

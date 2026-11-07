@@ -311,16 +311,121 @@ int main()
         check(e.activeModes.load() == 2, "body off: the shared resonance is silenced");
     }
 
-    // 5. Re-strike and all-sound-off.
+    // 5. One string per note. A re-strike strikes the string while it rings: at that sample, the output is what the
+    //    string was going to play plus the new strike's first sample (no step); the note keeps one voice; repeated
+    //    strikes build up as on the reference (+7 to +9 dB after 8, measured on Noire). Then all sound off.
     {
+        auto strike = [&](std::vector<pf::Event> events, int frames, float absorption = 0.0f) {
+            pf::ModalEngine e;
+            e.bodyEnabled = false; // the strings alone
+            e.restrikeAbsorption = absorption;
+            e.install(profile);
+            e.prepare(kRate, 64);
+            std::vector<float> a, b;
+            render(e, std::move(events), frames, a, b);
+            return std::make_pair(a, e.activeVoices.load());
+        };
+        const auto alone = strike({ { 0, 0x90, 69, 100 } }, 4801).first;      // the first strike, not struck again
+        const auto fresh = strike({ { 0, 0x90, 69, 100 } }, 1).first;         // a strike's first sample
+        const auto [again, voices] = strike({ { 0, 0x90, 69, 100 }, { 4800, 0x90, 69, 100 } }, 4801);
+        const double step = std::abs((double) again[4800] - ((double) alone[4800] + fresh[0]));
+        std::printf("      re-struck at 0.1 s: %.9f against %.9f + %.9f (difference %.1e)\n", again[4800], alone[4800], fresh[0], step);
+        check(step < 1e-6 && voices == 1, "re-strike: the string goes on and the new strike adds to it, one voice for the note");
+        // Repeated strikes: what a string does is the sum of each strike alone (linear); the engine carries each
+        // partial's sum into the new strike's modes rather than every mode on its own, which a beating partial
+        // shows a little.
+        std::vector<pf::Event> repeated;
+        for (int k = 0; k < 8; ++k)
+            repeated.push_back({ (std::uint32_t) (k * 4800), 0x90, 69, 100 });
+        const auto built = strike(repeated, 8 * 4800 + 4800).first;
+        const auto single = strike({ { 0, 0x90, 69, 100 } }, 9 * 4800).first;
+        std::vector<float> sumOf((std::size_t) (9 * 4800), 0.0f);
+        for (int k = 0; k < 8; ++k)
+            for (int i = k * 4800; i < 9 * 4800; ++i)
+                sumOf[(std::size_t) i] += single[(std::size_t) (i - k * 4800)];
+        const double gainDb = 20.0 * std::log10(rms(built, 7 * 4800 + 960, 9 * 4800) / rms(single, 960, 2 * 4800));
+        const double againstSum = 20.0 * std::log10(rms(built, 7 * 4800 + 960, 9 * 4800) / rms(sumOf, 7 * 4800 + 960, 9 * 4800));
+        std::printf("      8 strikes 0.1 s apart: %+.1f dB after the last against after the first; %+.2f dB against the sum of the strikes alone\n",
+                    gainDb, againstSum);
+        check(gainDb > 3.0 && std::abs(againstSum) < 0.05, "without absorption, repeated strikes add exactly (a linear string)");
+
+        // The hammer absorbs half the vibration's energy over its contact: the waveform still goes on at the strike's
+        // sample, and once the contact is over, what is left of the first strike is sqrt(1/2) of it.
+        const auto absorbed = strike({ { 0, 0x90, 69, 100 }, { 4800, 0x90, 69, 100 } }, 9600, 0.5f).first;
+        const auto longAlone = strike({ { 0, 0x90, 69, 100 } }, 9600).first;
+        const auto freshLong = strike({ { 0, 0x90, 69, 100 } }, 4800).first;
+        const double stepAbsorbed = std::abs((double) absorbed[4800] - ((double) longAlone[4800] + freshLong[0]));
+        double left = 0.0, before = 0.0;
+        for (int i = 4800 + 300; i < 9600; ++i) {
+            const double old = absorbed[(std::size_t) i] - freshLong[(std::size_t) (i - 4800)];
+            left += old * old;
+            before += (double) longAlone[(std::size_t) i] * longAlone[(std::size_t) i];
+        }
+        const double keptShare = std::sqrt(left / before);
+        std::printf("      absorption 0.5: step %.1e at the strike, the first strike at %.4f of itself after the contact (sqrt 0.5 = 0.7071)\n",
+                    stepAbsorbed, keptShare);
+        check(stepAbsorbed < 1e-6 && std::abs(keptShare - std::sqrt(0.5)) < 0.01,
+              "the hammer absorbs its share of the vibration over the contact, without a step");
+
         pf::ModalEngine e;
         e.install(profile);
         e.prepare(kRate, 64);
         render(e, { { 0, 0x90, 69, 100 }, { 4800, 0x90, 69, 100 } }, 9600, l, r);
-        check(e.activeVoices.load() == 2, "re-strike: the previous voice keeps ringing while it fades");
         e.allSoundOff();
         render(e, {}, 14400, l, r); // 15 ms time constant: -60 dB after 0.1 s, freed below -100 dB
         check(e.activeVoices.load() == 0 && rms(l, 9600, 14400) < 1e-6, "all sound off: silence within 0.2 s");
+    }
+
+    // 5b. Every note keeps its voice: a glissando of the 88 notes with the pedal down gives the sum of each note
+    //     played alone (nothing taken from one note for another).
+    {
+        auto many = std::make_shared<pf::ModalProfile>();
+        many->residualRate = kRate;
+        many->noteIndex.fill(-1);
+        for (int midi = 21; midi <= 108; ++midi) {
+            pf::ModalProfile::Note n;
+            n.midi = midi;
+            n.f0 = 440.0 * std::pow(2.0, (midi - 69) / 12.0);
+            pf::ModalProfile::Layer layer;
+            layer.velocity = 80;
+            layer.modes.push_back({ n.f0, 0.5, { 0.01f, 0.0f }, { 0.01f, 0.0f } });
+            layer.partials.push_back({ 1, 0, 1, 0.005f });
+            layer.level = 0.005f;
+            n.layers.push_back(layer);
+            many->noteIndex[(std::size_t) midi] = (int) many->notes.size();
+            many->notes.push_back(std::move(n));
+        }
+        many->maxModesPerLayer = 1;
+        const int frames = (int) (3.0 * kRate);
+        auto play = [&](const std::vector<pf::Event>& events, std::vector<float>& out, int& voices) {
+            pf::ModalEngine e;
+            e.install(many);
+            e.prepare(kRate, 64);
+            std::vector<float> right;
+            render(e, events, frames, out, right);
+            voices = e.activeVoices.load();
+            return e.stolenVoices.load();
+        };
+        std::vector<pf::Event> gliss { { 0, 0xB0, 64, 127 } };
+        for (int midi = 21; midi <= 108; ++midi)
+            gliss.push_back({ (std::uint32_t) ((midi - 21) * 480), 0x90, (std::uint8_t) midi, 80 });
+        std::vector<float> all, one;
+        int voices = 0, unused = 0;
+        const auto stolen = play(gliss, all, voices);
+        std::vector<double> sum((std::size_t) frames, 0.0);
+        for (int midi = 21; midi <= 108; ++midi) {
+            play({ { 0, 0xB0, 64, 127 }, { (std::uint32_t) ((midi - 21) * 480), 0x90, (std::uint8_t) midi, 80 } }, one, unused);
+            for (int i = 0; i < frames; ++i)
+                sum[(std::size_t) i] += one[(std::size_t) i];
+        }
+        double worst = 0.0, peak = 0.0;
+        for (int i = 0; i < frames; ++i) {
+            worst = std::max(worst, std::abs(all[(std::size_t) i] - sum[(std::size_t) i]));
+            peak = std::max(peak, std::abs(sum[(std::size_t) i]));
+        }
+        std::printf("      88-note glissando, pedal down: %d voices, %u stolen, %.1f dB from the sum of the notes alone\n", voices,
+                    stolen, 20.0 * std::log10(worst / peak + 1e-12));
+        check(voices == 88 && stolen == 0 && worst < 1e-5 * peak, "88 notes with the pedal down: every note keeps its voice");
     }
 
     // 6. A missing note is ignored; a profile swap while playing silences the old voices.
@@ -569,7 +674,7 @@ int main()
     // 13. Settings: another engine given this one's settings sounds the same, sample for sample.
     {
         pf::ModalEngine a;
-        a.restrikeFadeSeconds = 0.3f;
+        a.unisonSpread = 1.5f;
         a.pedalCatch = false;
         a.referenceA4 = 442.0f;
         a.pitchClassCents[9] = -6.0f;

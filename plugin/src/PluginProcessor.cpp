@@ -45,7 +45,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout parameterLayout()
     addBool(param::releaseNoise, "Release noise", true);
     addFloat(param::sympatheticLevel, "Sympathetic level", { -24.0f, 12.0f, 0.5f }, 0.0f, "dB", db);
     addFloat(param::unison, "Unison tuning", { 0.0f, 300.0f, 1.0f }, 100.0f, "%", percent);
-    addFloat(param::restrike, "Re-strike fade", skewed(0.015f, 5.0f, 0.005f, 0.5f), 0.8f, "s", seconds);
+    addFloat(param::absorption, "Re-strike absorption", { 0.0f, 95.0f, 1.0f }, 100.0f * pf::kDefaultRestrikeAbsorption, "%", percent);
     addBool(param::room, "Room", true);
     const auto& hall = app::kRoomPresets[(size_t) app::kDefaultRoomPreset];
     addFloat(param::roomSize, "Room volume", { 0.0f, 1.0f, 0.005f }, hall.size, "m3", [](float v, int) {
@@ -118,7 +118,7 @@ Processor::Processor()
     releaseNoise = raw(param::releaseNoise);
     sympatheticLevel = raw(param::sympatheticLevel);
     unison = raw(param::unison);
-    restrike = raw(param::restrike);
+    absorption = raw(param::absorption);
     room = raw(param::room);
     roomSize = raw(param::roomSize);
     roomDecay = raw(param::roomDecay);
@@ -294,7 +294,7 @@ void Processor::applyParameters() noexcept
     e.releaseNoiseEnabled = releaseNoise.on();
     e.sympatheticGain = juce::Decibels::decibelsToGain(sympatheticLevel.get());
     e.unisonSpread = unison.get() / 100.0f;
-    e.restrikeFadeSeconds = restrike.get();
+    e.restrikeAbsorption = absorption.get() / 100.0f;
     pf::Room::Settings r;
     r.enabled = room.on();
     r.size = roomSize.get();

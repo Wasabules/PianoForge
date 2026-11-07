@@ -186,6 +186,13 @@ void pf_set_unison(float spread)
         g_engine->unisonSpread = std::clamp(spread, 0.0f, 4.0f);
 }
 
+/// A re-strike: the share of the string's vibration energy the hammer absorbs (0: the strikes add exactly).
+void pf_set_restrike_absorption(float share)
+{
+    if (g_engine != nullptr)
+        g_engine->restrikeAbsorption = std::clamp(share, 0.0f, 0.95f);
+}
+
 /// The reference A4, equal temperament.
 void pf_set_tuning(float a4)
 {

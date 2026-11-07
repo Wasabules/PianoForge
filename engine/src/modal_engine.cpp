@@ -223,9 +223,14 @@ void ModalEngine::allocate()
 {
     // Twice the largest layer: the unison model may add a mode for each one it moves (moveUnison).
     const int capacity = owned != nullptr ? 2 * owned->maxModesPerLayer : 0;
-    const int partials = owned != nullptr ? owned->maxPartialsPerLayer : 0;
+    // (A partial has at least one mode: a profile that does not say how many partials it has at most is covered.)
+    const int partials = owned != nullptr ? std::max(owned->maxPartialsPerLayer, owned->maxModesPerLayer) : 0;
     for (auto& v : voices) {
         v.active = false;
+        v.tails.fill({}); // (they point into the profile)
+        v.mergeAt = -1;
+        v.modeNumber.clear();
+        v.modeNumber.reserve((std::size_t) capacity);
         if (v.bank.capacity() < capacity)
             v.bank.reserve(capacity);
         v.bank.clear();
@@ -241,6 +246,7 @@ void ModalEngine::allocate()
         v.groupFactor.fill(1.0f);
         v.groupDamping = false;
     }
+    carriedModes.reserve((std::size_t) capacity);
     body.reserve(owned != nullptr ? (int) owned->bodyFreq.size() : 0);
     if (owned != nullptr)
         for (std::size_t k = 0; k < owned->bodyFreq.size(); ++k)
@@ -309,7 +315,7 @@ double ModalEngine::tuningRatio(int note) const noexcept
 ModalEngine::Settings ModalEngine::settings() const noexcept
 {
     Settings s;
-    s.restrikeFadeSeconds = restrikeFadeSeconds.load();
+    s.restrikeAbsorption = restrikeAbsorption.load();
     s.body = bodyEnabled.load();
     s.residual = residualEnabled.load();
     s.sympathetic = sympatheticEnabled.load();
@@ -326,7 +332,7 @@ ModalEngine::Settings ModalEngine::settings() const noexcept
 
 void ModalEngine::applySettings(const Settings& s) noexcept
 {
-    restrikeFadeSeconds = s.restrikeFadeSeconds;
+    restrikeAbsorption = std::clamp(s.restrikeAbsorption, 0.0f, 0.99f);
     bodyEnabled = s.body;
     residualEnabled = s.residual;
     sympatheticEnabled = s.sympathetic;
@@ -551,44 +557,44 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     }
     overall = std::clamp(overall, 0.0f, kMaxGain);
 
-    // Re-strike: the previous voices of the note keep ringing and fade out (see the reference player).
-    const double fadeS = std::max((double) restrikeFadeSeconds.load(std::memory_order_relaxed), kFastFadeS);
-    const auto restrike = (float) std::exp(-std::log(100.0) / (fadeS * sampleRate));
-    const auto fast = (float) std::exp(-1.0 / (kFastFadeS * sampleRate));
-    Voice* oldest = nullptr;
-    int sameNote = 0;
-    for (auto& v : voices)
-        if (v.active && v.note == note) {
-            ++sameNote;
-            v.keyDown = false;
-            v.released = true;
-            v.restruck = true;
-            v.decay = std::min(v.decay, restrike);
-            if (oldest == nullptr || v.age < oldest->age)
-                oldest = &v;
+    // The note's string. Struck again while it rings: what it plays now (its output envelope folded in) is kept,
+    // to be carried into the new strike once its modes are in place; the previous strike's residual plays on.
+    auto& v = voices[(std::size_t) std::clamp(note, 0, kMaxVoices - 1)];
+    carriedModes.clear();
+    const bool carry = v.active;
+    float carriedOnset = 0.0f;
+    if (carry) {
+        if (v.mergeAt >= 0)
+            mergeEarlier(v); // struck again within the last contact: that one is over
+        const float held = v.gain * v.curveGain;
+        for (int k = 0; k < v.bank.size() && k < (int) v.modeNumber.size(); ++k) {
+            Carried mode;
+            mode.number = v.modeNumber[(std::size_t) k];
+            v.bank.current(k, mode.pole, mode.left, mode.right);
+            mode.left *= held;
+            mode.right *= held;
+            if (carriedModes.size() < carriedModes.capacity())
+                carriedModes.push_back(mode);
         }
-    if (sameNote >= kMaxVoicesPerNote && oldest != nullptr)
-        oldest->decay = std::min(oldest->decay, fast);
-
-    Voice* target = nullptr;
-    for (auto& v : voices)
-        if (!v.active) {
-            target = &v;
-            break;
+        for (auto& t : v.tails) // the earlier residuals go on, under the new strike's envelope
+            t.gain *= held;
+        if (v.layer != nullptr && v.residualGain > 0.0f && v.residualPos < (double) v.layer->residualFrames) {
+            auto* slot = &v.tails[0]; // a free one, else the one nearest its end
+            for (auto& t : v.tails)
+                if (t.gain <= 0.0f || (slot->gain > 0.0f && t.pos / std::max(1, t.layer->residualFrames)
+                                                                > slot->pos / std::max(1, slot->layer->residualFrames)))
+                    slot = &t;
+            *slot = { v.layer, v.residualPos, v.residualStep, v.residualGain * held };
         }
-    if (target == nullptr) { // steal: the quietest released voice, otherwise the oldest one
-        stolenVoices.fetch_add(1, std::memory_order_relaxed);
-        for (auto& v : voices)
-            if (v.released && (target == nullptr || v.gain * v.curveGain < target->gain * target->curveGain))
-                target = &v;
-        if (target == nullptr)
-            for (auto& v : voices)
-                if (target == nullptr || v.age < target->age)
-                    target = &v;
+        carriedOnset = v.driveOnset; // the string's drive of the free strings has built up already
+    } else {
+        for (auto& t : v.tails)
+            t.gain = 0.0f;
     }
 
-    auto& v = *target;
     v.bank.clear();
+    v.modeNumber.clear();
+    v.mergeAt = -1;
     v.ramps.clear();
     v.fades.clear();
     v.slots.clear();
@@ -662,17 +668,50 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
                 }
             v.bank.add(modePole((m.freq + shift) * tuning, m.decay, sampleRate), l * scaled, r * scaled);
         }
+        while ((int) v.modeNumber.size() < v.bank.size()) // the partial of each mode just added
+            v.modeNumber.push_back(part.number);
         if (ramp)
             v.ramps.push_back({ first, v.bank.size() - first, part.firstMode,
                                 (float) std::pow((double) g / overall, 1.0 / (double) rampLength) });
         if (v.bank.size() == first || v.slots.size() == v.slots.capacity())
             continue;
-        v.slots.push_back({ first, v.bank.size() - first, p.dampers.groupOf(part.number), false });
+        v.slots.push_back({ first, v.bank.size() - first, part.number, p.dampers.groupOf(part.number), false });
         // Past its fade time, the partial dies out (after the level ramp, whose end puts the exact poles back).
         if (part.fadeSeconds > 0.0f && v.fades.size() < v.fades.capacity())
             v.fades.push_back({ std::max((std::int64_t) std::llround(part.fadeSeconds * sampleRate), residualEnd + rampLength),
                                 (int) v.slots.size() - 1 });
     }
+    // Re-strike: each mode of the string's vibration added to the new mode of the same partial nearest to it (pole:
+    // frequency and decay; with the same layer, the very same mode: the strikes add exactly, as on a string). Each
+    // old mode going whole into one new mode, the waveform carries on exactly, and a slow mode (the after-sound,
+    // most of what is left) stays slow. A partial the new layer lacks keeps its own modes and poles (outside any
+    // slot: the dampers' curve applies to it, not the group curves).
+    // The earlier vibration under the hammer: its modes after the new strike's, those of partials the new strike
+    // lacks first (they stay), then the others (they join it at the contact's end); all of them losing the
+    // absorbed energy over the contact, smoothly (no step in the waveform).
+    if (!carriedModes.empty()) {
+        auto hasSlot = [&](int number) {
+            for (const auto& slot : v.slots)
+                if (slot.number == number)
+                    return true;
+            return false;
+        };
+        v.keepFirst = v.bank.size();
+        for (int pass = 0; pass < 2; ++pass) {
+            if (pass == 1)
+                v.mergeFirst = v.bank.size();
+            for (const auto& mode : carriedModes)
+                if (hasSlot(mode.number) == (pass == 1) && v.bank.size() < v.bank.capacity()) {
+                    v.bank.add(std::complex<double>(mode.pole.real(), mode.pole.imag()), mode.left, mode.right);
+                    v.modeNumber.push_back(mode.number);
+                }
+        }
+        const auto contact = std::max<std::int64_t>(1, (std::int64_t) std::llround(kContactSeconds * sampleRate));
+        const double kept = 1.0 - std::clamp((double) restrikeAbsorption.load(std::memory_order_relaxed), 0.0, 0.99);
+        v.bank.scalePoles(v.keepFirst, v.bank.size() - v.keepFirst, (float) std::pow(kept, 0.5 / (double) contact));
+        v.mergeAt = contact;
+    }
+
     std::sort(v.fades.begin(), v.fades.end(), [](const PartialFade& a, const PartialFade& b) { return a.at < b.at; });
     v.nextFade = 0;
     v.ramp = v.ramps.empty() ? Ramp::none : Ramp::waiting;
@@ -697,7 +736,6 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     v.released = false;
     v.damperCurve = false;
     v.fadingOut = false;
-    v.restruck = false;
     v.note = note;
     v.velocity = velocity;
     v.layer = &near;
@@ -710,7 +748,7 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     v.damperSpeed = 0.0f;
     v.driveGain = driveGain[(std::size_t) note]
                 * (float) std::pow((double) velocity / (double) p.stringReferenceVelocity, (double) driveExponent[(std::size_t) note]);
-    v.driveOnset = 0.0f;
+    v.driveOnset = carriedOnset;
     v.driveFade = 1.0f;
     v.sinceOn = 0;
     v.age = ++ageCounter;
@@ -731,7 +769,7 @@ void ModalEngine::updateAllDampers(const ModalProfile& p) noexcept
     // in energy rather than in amplitude (the nearby notes share one measured knock).
     int landing = 0;
     for (const auto& v : voices)
-        landing += v.active && !damperRaised(v) && !v.restruck && !v.damperCurve && pedalLift < 1.0f ? 1 : 0;
+        landing += v.active && !damperRaised(v) && !v.damperCurve && pedalLift < 1.0f ? 1 : 0;
     knockScale = landing > 1 ? 1.0f / std::sqrt((float) landing) : 1.0f;
     for (auto& v : voices)
         if (v.active && !v.keyDown)
@@ -741,8 +779,8 @@ void ModalEngine::updateAllDampers(const ModalProfile& p) noexcept
 
 void ModalEngine::updateDamping(const ModalProfile& p, Voice& v) noexcept
 {
-    if (!v.active || v.restruck || p.dampers.empty())
-        return; // re-struck: fading out anyway; no damper data: the string keeps ringing
+    if (!v.active || p.dampers.empty())
+        return; // no damper data: the string keeps ringing
     float speed = damperRaised(v) ? 0.0f : 1.0f - pedalLift;
     if (v.damperCurve && !pedalCatch.load(std::memory_order_relaxed))
         speed = std::max(speed, v.damperSpeed); // the reference: a release, once started, runs to its end
@@ -956,6 +994,8 @@ void ModalEngine::renderBank(Voice& v, float* left, float* right, int n) noexcep
     int done = 0;
     while (done < n) {
         const std::int64_t at = v.sinceOn + done;
+        if (v.mergeAt >= 0 && at >= v.mergeAt)
+            mergeEarlier(v);
         if (v.ramp == Ramp::waiting && at >= v.rampStart) {
             for (const auto& ramp : v.ramps)
                 v.bank.scalePoles(ramp.first, ramp.count, ramp.factor);
@@ -973,6 +1013,8 @@ void ModalEngine::renderBank(Voice& v, float* left, float* right, int n) noexcep
             v.bank.setPoleFactor(slot.first, slot.count, fadeFactor * v.groupFactor[(std::size_t) slot.group]);
         }
         std::int64_t chunk = n - done;
+        if (v.mergeAt >= 0)
+            chunk = std::min(chunk, v.mergeAt - at);
         if (v.ramp == Ramp::waiting)
             chunk = std::min(chunk, v.rampStart - at);
         else if (v.ramp == Ramp::running)
@@ -982,6 +1024,38 @@ void ModalEngine::renderBank(Voice& v, float* left, float* right, int n) noexcep
         v.bank.process(left + done, right + done, (int) chunk);
         done += (int) chunk;
     }
+}
+
+void ModalEngine::mergeEarlier(Voice& v) noexcept
+{
+    // The hammer's contact is over: the earlier vibration's modes of partials the new strike has join its mode of
+    // the same partial nearest to them (exact pole against exact pole: with the same layer, the very same mode), and
+    // leave the bank; the waveform carries on exactly. The others ring on, at their own poles again.
+    v.bank.setPoleFactor(v.keepFirst, v.mergeFirst - v.keepFirst, 1.0f);
+    for (int k = v.mergeFirst; k < v.bank.size() && k < (int) v.modeNumber.size(); ++k) {
+        std::complex<float> pole, l, r;
+        v.bank.current(k, pole, l, r);
+        const int number = v.modeNumber[(std::size_t) k];
+        for (const auto& slot : v.slots) {
+            if (slot.number != number)
+                continue;
+            int nearest = slot.first;
+            float best = 1e30f;
+            for (int j = slot.first; j < slot.first + slot.count; ++j) {
+                std::complex<float> other, a, b;
+                v.bank.current(j, other, a, b);
+                if (const float d = std::abs(other - pole); d < best) {
+                    best = d;
+                    nearest = j;
+                }
+            }
+            v.bank.excite(nearest, l, r);
+            break;
+        }
+    }
+    v.bank.truncate(v.mergeFirst);
+    v.modeNumber.resize((std::size_t) std::min<int>(v.mergeFirst, (int) v.modeNumber.size()));
+    v.mergeAt = -1;
 }
 
 void ModalEngine::dampGroups(const ModalProfile& p, Voice& v, int m) noexcept
@@ -1046,6 +1120,22 @@ bool ModalEngine::produce(const ModalProfile& p, Voice& v, int m) noexcept
         }
         v.residualPos += m * step;
         residualLeft = v.residualPos < (double) layer.residualFrames + 2;
+    }
+    for (auto& t : v.tails) { // the earlier strikes' residuals, to their end
+        if (t.gain <= 0.0f)
+            continue;
+        const float* x = t.layer->residual.data();
+        for (int k = 0; k < m; ++k) {
+            float a, b;
+            readCubic(x, t.layer->residualFrames, t.pos + k * t.step, a, b);
+            l[k] += t.gain * a;
+            r[k] += t.gain * b;
+        }
+        t.pos += m * t.step;
+        if (t.pos >= (double) t.layer->residualFrames + 2)
+            t.gain = 0.0f;
+        else
+            residualLeft = true;
     }
 
     // The drive of the free strings: the voice's sound (strings and attack residual, as calibrated), rising from

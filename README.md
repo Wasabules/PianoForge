@@ -64,6 +64,11 @@ can be saved under names of your own (Room window: Save..., Delete; Engine > Roo
 The modal engine models each note's coupled strings (Weinreich): the soft pedal (CC67, the N key) makes the hammer
 miss a string, and Engine settings > Unison tuning draws the strings together (0 %: no beating) or apart.
 
+One string per note: a note struck again strikes its string while it rings, and the strikes add up (repeated notes
+with the pedal down build up as on the reference); the hammer absorbs part of the vibration over its contact
+(Engine settings > Re-strike absorption, 50 % fitted on the reference). No voice is ever taken from another note:
+the 88 notes can ring at once.
+
 Record (Ctrl+R) writes the sound live as a 32-bit float WAV; when it stops, the formats ticked in File > Record
 formats are made from it in the background: WAV 24-bit, FLAC 24-bit, MP3 320 kbit/s (Windows' Media Foundation
 encoder), Opus 192 kbit/s; plus the MIDI, aligned to the sample. Recordings go to Documents/PianoForge/Recordings.
@@ -108,7 +113,7 @@ host the first time. The installer offers it too.
 
 - The sound is the application's: the modal engine, the room and the listening position (headphones included), the
   limiter, with the same settings as automatable parameters (volume, what the engine models, sympathetic level,
-  unison tuning, re-strike, room, distance, keep loudness, speakers or headphones, A4, temperament, limiter).
+  unison tuning, re-strike absorption, room, distance, keep loudness, speakers or headphones, A4, temperament, limiter).
   MIDI: notes, CC64 continuous sustain, CC66 sostenuto, CC67 soft pedal. A velocity curve of its own, drawn, or the
   application's (Keyboard > Velocity curve) copied in.
 - The modal profile is never inside the plugin: it plays the one of the application's corpus (its settings say

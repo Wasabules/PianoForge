@@ -46,15 +46,25 @@ namespace pf {
 /// - Tuning: the profile plays as recorded at referenceA4 = 440 Hz; another reference and a temperament (cents
 ///   against equal temperament per pitch class) scale every frequency of a note at its note-on (modes, residual),
 ///   and retune the free strings.
-/// - Re-strike: the previous voice of the note keeps ringing and fades to -40 dB within restrikeFadeSeconds, as in
-///   the reference player.
+/// - One string per note: a note struck again strikes its string while it still rings, and the strikes add up, as
+///   on a string. What the string plays at that instant (its modes, at their level) goes on, under the hammer: for
+///   the contact (kContactSeconds) its modes lose restrikeAbsorption of their energy (the felt pressed on the
+///   string), then each joins the new strike's mode of the same partial nearest to it (with the same layer, the
+///   very same mode). The waveform never steps; partials the new layer lacks keep their own modes, and the previous
+///   strike's attack residual plays on to its end. No voice is ever taken from another note: every note has its
+///   own (kMaxVoices, one per MIDI note).
 ///
 /// install() and prepare() run outside the audio thread and may allocate; process() does not allocate, lock or
 /// perform I/O.
+/// What a re-strike's hammer absorbs of the string's vibration energy by default (fitted on the reference's
+/// repeated notes with the pedal down: see the analysis document).
+inline constexpr float kDefaultRestrikeAbsorption = 0.5f;
+
 class ModalEngine final : public Engine {
 public:
-    static constexpr int kMaxVoices = 64;
-    static constexpr int kMaxVoicesPerNote = 3;
+    static constexpr int kMaxVoices = 128; // one per MIDI note: the voice of note n is voices[n]
+    static constexpr int kTails = 4;       // attack residuals of earlier strikes still playing, per note
+    static constexpr double kContactSeconds = 0.003; // a re-strike's hammer contact, over which it absorbs
     static constexpr double kLevelRampSeconds = 0.05; // after the residual: overall gain -> each partial's level
     static constexpr double kPartialFadeSeconds = 1.0; // a partial faded out (profile fade time): extra T60
 
@@ -74,7 +84,8 @@ public:
 
     // Settings, read on every block or note-on.
     std::atomic<float> outputGain { 1.0f };
-    std::atomic<float> restrikeFadeSeconds { 0.8f };
+    /// A re-strike: the share of the string's vibration energy the hammer absorbs (0: the strikes add exactly).
+    std::atomic<float> restrikeAbsorption { kDefaultRestrikeAbsorption };
     std::atomic<bool> bodyEnabled { true }, residualEnabled { true };
     std::atomic<bool> sympatheticEnabled { true };
     std::atomic<bool> heldKeysResonate { true }; // a piano does; the reference library does not
@@ -94,7 +105,7 @@ public:
     /// Every setting above but the output gain, as one value: for another engine (the offline render of a take) to
     /// sound exactly as this one does.
     struct Settings {
-        float restrikeFadeSeconds = 0.8f;
+        float restrikeAbsorption = kDefaultRestrikeAbsorption;
         bool body = true, residual = true, sympathetic = true, heldKeys = true;
         float sympatheticGain = 1.0f;
         bool pedalCatch = true, releaseNoise = true;
@@ -114,7 +125,7 @@ public:
     std::atomic<int> pedalValue { 0 };              // the last sustain pedal value received (CC64, 0 to 127)
     std::atomic<float> pedalPosition { 0.0f }; // damper lift, 0 to 1
     std::atomic<float> outputPeak { 0.0f };
-    std::atomic<std::uint32_t> stolenVoices { 0 }, noteOnsReceived { 0 };
+    std::atomic<std::uint32_t> stolenVoices { 0 }, noteOnsReceived { 0 }; // (stolen: none, one string per note)
 
 private:
     /// A partial whose level differs from the overall gain: its modes [first, first + count) in the bank (the
@@ -124,10 +135,22 @@ private:
         float factor = 1.0f;
     };
     enum class Ramp : std::uint8_t { none, waiting, running };
-    /// A partial's modes in the bank, [first, first + count), its damper group, and whether its fade has started.
+    /// A partial's modes in the bank, [first, first + count), its number, its damper group, and whether its fade
+    /// has started.
     struct PartialSlot {
-        int first = 0, count = 0, group = 0;
+        int first = 0, count = 0, number = 0, group = 0;
         bool faded = false;
+    };
+    /// The attack residual of an earlier strike of the note, playing on to its end.
+    struct Tail {
+        const ModalProfile::Layer* layer = nullptr;
+        double pos = 0.0, step = 1.0; // in residual frames
+        float gain = 0.0f;            // 0: free
+    };
+    /// What a string plays when it is struck again: one of its modes (its partial, exact pole, a u per channel).
+    struct Carried {
+        int number = 0;
+        std::complex<float> pole, left, right;
     };
     /// From sample `at` (since the note-on), the partial in slot `slot` gets the extra damping of a fade.
     struct PartialFade {
@@ -136,9 +159,8 @@ private:
     };
 
     struct Voice {
-        // released: key up with the damper curve started, or re-struck (first in line for stealing).
+        // released: key up with the damper curve started.
         bool active = false, keyDown = false, released = false, damperCurve = false, fadingOut = false;
-        bool restruck = false; // fades out (restrikeFadeSeconds), whatever the dampers do
         int note = -1, velocity = 0;
         const ModalProfile::Layer* layer = nullptr;
         ModeBank bank;
@@ -156,7 +178,14 @@ private:
         double residualPos = 0.0;      // in residual frames
         double residualStep = 1.0;     // residual frames per output sample (rates and tuning)
         float residualGain = 1.0f;
-        float gain = 1.0f, decay = 1.0f; // exponential envelope (re-strike, fast fades)
+        std::array<Tail, kTails> tails {}; // earlier strikes' residuals
+        std::vector<int> modeNumber;       // the partial of every mode in the bank (reserved with it)
+        // A re-strike under way: until mergeAt (samples since the note-on), the earlier vibration's modes, those of
+        // partials the new strike lacks [keepFirst, mergeFirst) then the others [mergeFirst, end), lose energy to
+        // the hammer; then the others join the new strike's modes.
+        std::int64_t mergeAt = -1;
+        int keepFirst = 0, mergeFirst = 0;
+        float gain = 1.0f, decay = 1.0f; // exponential envelope (fast fades)
         std::int64_t sinceOn = 0;
         int curvePoints = 0;
         double curvePos = 0.0;   // in curve points
@@ -178,6 +207,7 @@ private:
     void render(const ModalProfile& p, float* const* outputs, int numChannels, int start, int n) noexcept;
     bool produce(const ModalProfile& p, Voice& v, int n) noexcept;
     void renderBank(Voice& v, float* left, float* right, int n) noexcept;
+    void mergeEarlier(Voice& v) noexcept; // a re-strike's hammer contact over
     void renderStrings(int n) noexcept;
 
     double sampleRate = 48000.0;
@@ -187,7 +217,8 @@ private:
     // drive's decay (exp(-1 / (decay fs))).
     std::array<float, 128> onsetFactor {}, driveFadeFactor {};
     std::array<float, 128> driveGain {}, driveExponent {}; // per note: the drive's gain and velocity exponent
-    std::array<Voice, kMaxVoices> voices;
+    std::vector<Voice> voices = std::vector<Voice>(kMaxVoices); // on the heap: 128 voices are too big for a stack
+    std::vector<Carried> carriedModes; // a re-strike's (allocated with the voices)
     ModeBank body;
     float bodyGain = 1.0f, bodyDecay = 1.0f;
     bool bodyActive = false;

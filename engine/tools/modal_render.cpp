@@ -7,7 +7,6 @@
 //       a sequence: one event per line, "<sample> <status> <data1> <data2>" (a take's MIDI, at the given rate);
 //       --no-sympathetic, --no-held-keys, --no-catch, --no-release-noise (anywhere on the line) switch those engine
 //       settings off;
-//       --restrike <s>: the re-strike fade (seconds to -40 dB)
 //       --soft <0..1>: the soft pedal held through a render; --unison <spread>: the unison's detunings (1: measured)
 //   modal_render <profile> bench [voices] [rate] [block]
 //       strikes <voices> notes spread over the keyboard and times process() against the real-time budget
@@ -50,9 +49,12 @@ void writeWav(const char* path, const std::vector<float>& l, const std::vector<f
     }
 }
 
+int mostVoices = 0; // the most voices active at once in the last run()
+
 void run(pf::ModalEngine& engine, std::vector<pf::Event> events, int frames, int block, std::vector<float>& l,
          std::vector<float>& r, double* seconds = nullptr, double* worst = nullptr)
 {
+    mostVoices = 0;
     l.assign((std::size_t) frames, 0.0f);
     r.assign((std::size_t) frames, 0.0f);
     std::size_t next = 0;
@@ -72,6 +74,7 @@ void run(pf::ModalEngine& engine, std::vector<pf::Event> events, int frames, int
         const double dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         total += dt;
         peak = std::max(peak, dt);
+        mostVoices = std::max(mostVoices, engine.activeVoices.load());
     }
     if (seconds != nullptr)
         *seconds = total;
@@ -84,11 +87,11 @@ void run(pf::ModalEngine& engine, std::vector<pf::Event> events, int frames, int
 int main(int argc, char** argv)
 {
     bool body = true, residual = true, sympathetic = true, heldKeys = true, pedalCatch = true, releaseNoise = true; // options
-    double restrike = -1.0, soft = 0.0, unison = 1.0;
+    double soft = 0.0, unison = 1.0, absorb = -1.0;
     int kept = 1;
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--restrike") == 0 && i + 1 < argc)
-            restrike = std::atof(argv[++i]);
+        if (std::strcmp(argv[i], "--absorb") == 0 && i + 1 < argc)
+            absorb = std::atof(argv[++i]);
         else if (std::strcmp(argv[i], "--soft") == 0 && i + 1 < argc)
             soft = std::atof(argv[++i]);
         else if (std::strcmp(argv[i], "--unison") == 0 && i + 1 < argc)
@@ -113,7 +116,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "usage: modal_render <profile> render <out.wav> <note> <velocity> <hold s> [tail s] [rate]\n"
                              "                    [--no-body] [--no-residual] [--soft <0..1>] [--unison <spread>]\n"
                              "       modal_render <profile> events <out.wav> <events.txt> <seconds> [rate]\n"
-                             "                    [--no-sympathetic] [--no-held-keys] [--no-catch] [--no-release-noise] [--restrike <s>]\n"
+                             "                    [--no-sympathetic] [--no-held-keys] [--no-catch] [--no-release-noise]\n"
                              "       modal_render <profile> bench [voices] [rate] [block]\n");
         return 2;
     }
@@ -131,9 +134,9 @@ int main(int argc, char** argv)
     engine.heldKeysResonate = heldKeys;
     engine.pedalCatch = pedalCatch;
     engine.releaseNoiseEnabled = releaseNoise;
-    if (restrike > 0.0)
-        engine.restrikeFadeSeconds = (float) restrike;
     engine.unisonSpread = (float) unison;
+    if (absorb >= 0.0)
+        engine.restrikeAbsorption = (float) absorb;
     const std::string mode = argv[2];
 
     if (mode == "events" && argc >= 6) {
@@ -157,7 +160,8 @@ int main(int argc, char** argv)
         std::vector<float> l, r;
         run(engine, events, frames, block, l, r);
         writeWav(argv[3], l, r, rate);
-        std::printf("%s: %zu events, %.1f s\n", argv[3], events.size(), (double) frames / rate);
+        std::printf("%s: %zu events, %.1f s, at most %d voices, %u stolen\n", argv[3], events.size(), (double) frames / rate,
+                    mostVoices, engine.stolenVoices.load());
         return 0;
     }
 

@@ -102,6 +102,7 @@ class PianoForgeProcessor extends AudioWorkletProcessor {
       case 'option': pf.pf_set_option(c.option, c.on ? 1 : 0); break;
       case 'sympathetic': pf.pf_set_sympathetic_db(c.db); break;
       case 'unison': pf.pf_set_unison(c.spread); break;
+      case 'absorption': pf.pf_set_restrike_absorption(c.share); break;
       case 'tuning': pf.pf_set_tuning(c.a4); break;
       case 'room': pf.pf_set_room(c.on ? 1 : 0, c.levelDb, c.size, c.decay, c.brightness, c.distance, c.keepLoudness ? 1 : 0, c.width,
                                   c.headphones ? 1 : 0); break;

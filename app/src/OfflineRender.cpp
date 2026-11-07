@@ -159,7 +159,6 @@ int runOfflineRender(const juce::StringArray& arguments)
     }
     const auto start = juce::Time::getMillisecondCounterHiRes();
     pf::ModalEngine::Settings settings; // the engine's defaults
-    settings.restrikeFadeSeconds = restrike;
     const auto out = modal ? renderSequenceModal(sequence, profile, fs, settings) : renderSequence(sequence, bank, fs, restrike, false);
     const double seconds = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
     if (const auto written = writeWav(out, fs, outFile); written.failed()) {

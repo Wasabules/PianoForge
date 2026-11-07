@@ -73,7 +73,21 @@ EnginePanel::EnginePanel(pf::ModalEngine& m, ReferencePlayer& p, juce::Propertie
     unison.onDragEnd = [this] { save(); };
     modal.unisonSpread = (float) (unison.getValue() / 100.0);
 
-    restrikeLabel.setText("Re-strike: the previous note fades to -40 dB in", juce::dontSendNotification);
+    // A re-strike: what the hammer absorbs of the string's vibration over its contact (fitted on the reference).
+    absorptionLabel.setText("Re-strike absorption", juce::dontSendNotification);
+    absorption.setRange(0.0, 95.0, 1.0);
+    absorption.setTextValueSuffix(" %");
+    absorption.setTextBoxStyle(juce::Slider::TextBoxRight, false, 64, 20);
+    absorption.setDoubleClickReturnValue(true, 100.0 * pf::kDefaultRestrikeAbsorption);
+    absorption.setTooltip("A note struck again strikes its string while it rings, and the strikes add up; the hammer, pressed on "
+                          "the string, absorbs this share of the vibration's energy (0 %: they add exactly). Fitted on the "
+                          "reference's repeated notes: 50 %.");
+    absorption.setValue(settings.getDoubleValue("restrikeAbsorption", pf::kDefaultRestrikeAbsorption) * 100.0, juce::dontSendNotification);
+    absorption.onValueChange = [this] { modal.restrikeAbsorption = (float) (absorption.getValue() / 100.0); };
+    absorption.onDragEnd = [this] { save(); };
+    modal.restrikeAbsorption = (float) (absorption.getValue() / 100.0);
+
+    restrikeLabel.setText("The previous note fades to -40 dB in", juce::dontSendNotification);
     restrike.setRange(0.015, 5.0, 0.005);
     restrike.setSkewFactorFromMidPoint(0.8);
     restrike.setTextValueSuffix(" s");
@@ -81,9 +95,10 @@ EnginePanel::EnginePanel(pf::ModalEngine& m, ReferencePlayer& p, juce::Propertie
     restrike.setTextBoxStyle(juce::Slider::TextBoxRight, false, 64, 20);
     restrike.setDoubleClickReturnValue(true, 0.8);
     restrike.setValue(settings.getDoubleValue("restrikeFade", 0.8), juce::dontSendNotification);
-    restrike.onValueChange = [this] { player.restrikeFadeSeconds = modal.restrikeFadeSeconds = (float) restrike.getValue(); };
+    restrike.setTooltip("The reference player only: the modal engine strikes the string again while it rings, as a piano does");
+    restrike.onValueChange = [this] { player.restrikeFadeSeconds = (float) restrike.getValue(); };
     restrike.onDragEnd = [this] { save(); };
-    player.restrikeFadeSeconds = modal.restrikeFadeSeconds = (float) restrike.getValue();
+    player.restrikeFadeSeconds = (float) restrike.getValue();
 
     a4Label.setText("Reference A4", juce::dontSendNotification);
     referenceA4.setRange(415.0, 466.0, 0.1);
@@ -112,11 +127,11 @@ EnginePanel::EnginePanel(pf::ModalEngine& m, ReferencePlayer& p, juce::Propertie
     };
     applyTuning();
 
-    for (auto* c : std::initializer_list<juce::Component*> { &sympatheticLabel, &sympatheticLevel, &unisonLabel, &unison, &restrikeLabel, &restrike,
+    for (auto* c : std::initializer_list<juce::Component*> { &sympatheticLabel, &sympatheticLevel, &unisonLabel, &unison, &absorptionLabel, &absorption, &restrikeLabel, &restrike,
                                                              &a4Label, &referenceA4, &temperamentLabel, &temperament, &root,
                                                              &resetTuning })
         addAndMakeVisible(*c);
-    setSize(640, 620);
+    setSize(640, 650);
 }
 
 void EnginePanel::reload()
@@ -129,8 +144,10 @@ void EnginePanel::reload()
     modal.sympatheticGain = juce::Decibels::decibelsToGain((float) sympatheticLevel.getValue());
     unison.setValue(settings.getDoubleValue("unisonSpread", 1.0) * 100.0, juce::dontSendNotification);
     modal.unisonSpread = (float) (unison.getValue() / 100.0);
+    absorption.setValue(settings.getDoubleValue("restrikeAbsorption", pf::kDefaultRestrikeAbsorption) * 100.0, juce::dontSendNotification);
+    modal.restrikeAbsorption = (float) (absorption.getValue() / 100.0);
     restrike.setValue(settings.getDoubleValue("restrikeFade", 0.8), juce::dontSendNotification);
-    player.restrikeFadeSeconds = modal.restrikeFadeSeconds = (float) restrike.getValue();
+    player.restrikeFadeSeconds = (float) restrike.getValue();
     referenceA4.setValue(settings.getDoubleValue("referenceA4", 440.0), juce::dontSendNotification);
     temperament.setSelectedId(juce::jlimit(1, (int) kTemperaments.size(), settings.getIntValue("temperament", 1)), juce::dontSendNotification);
     root.setSelectedId(juce::jlimit(1, 12, settings.getIntValue("temperamentRoot", 1)), juce::dontSendNotification);
@@ -169,6 +186,7 @@ void EnginePanel::save()
         settings.setValue(kOptions[i].key, toggles[i].getToggleState());
     settings.setValue("sympatheticDb", sympatheticLevel.getValue());
     settings.setValue("unisonSpread", unison.getValue() / 100.0);
+    settings.setValue("restrikeAbsorption", absorption.getValue() / 100.0);
     settings.setValue("restrikeFade", restrike.getValue());
     settings.setValue("referenceA4", referenceA4.getValue());
     settings.setValue("temperament", temperament.getSelectedId());
@@ -180,7 +198,7 @@ void EnginePanel::paint(juce::Graphics& g)
 {
     g.fillAll(theme::background);
     theme::drawCard(g, modalArea, "Modal engine: what it models");
-    theme::drawCard(g, voicesArea, "Voices");
+    theme::drawCard(g, voicesArea, "Reference player: re-strike");
     theme::drawCard(g, tuningArea, "Tuning (modal engine)");
     theme::drawCard(g, referenceArea, "Reference player");
 }
@@ -195,19 +213,23 @@ void EnginePanel::resized()
         inner.removeFromTop(18);
         return inner;
     };
-    auto inner = place(modalArea, 18 + 6 * 40 + 34 + 30);
+    auto inner = place(modalArea, 18 + 6 * 40 + 34 + 30 + 30);
     for (int i = 0; i < (int) Option::wholeTake; ++i) {
         auto row = inner.removeFromTop(40);
         toggles[(size_t) i].setBounds(row.removeFromTop(22));
         notes[(size_t) i].setBounds(row.withTrimmedLeft(26));
     }
     auto row = inner.removeFromTop(28);
-    sympatheticLabel.setBounds(row.removeFromLeft(150).withTrimmedLeft(26));
+    sympatheticLabel.setBounds(row.removeFromLeft(196).withTrimmedLeft(26));
     sympatheticLevel.setBounds(row.removeFromLeft(300));
     inner.removeFromTop(2);
     row = inner.removeFromTop(28);
-    unisonLabel.setBounds(row.removeFromLeft(150).withTrimmedLeft(26));
+    unisonLabel.setBounds(row.removeFromLeft(196).withTrimmedLeft(26));
     unison.setBounds(row.removeFromLeft(300));
+    inner.removeFromTop(2);
+    row = inner.removeFromTop(28);
+    absorptionLabel.setBounds(row.removeFromLeft(196).withTrimmedLeft(26));
+    absorption.setBounds(row.removeFromLeft(300));
 
     inner = place(voicesArea, 18 + 36);
     row = inner.removeFromTop(28);

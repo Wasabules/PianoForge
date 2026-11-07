@@ -26,7 +26,7 @@ inline constexpr const char* pedalCatch = "pedalCatch";
 inline constexpr const char* releaseNoise = "releaseNoise";
 inline constexpr const char* sympatheticLevel = "sympatheticLevel";
 inline constexpr const char* unison = "unison";
-inline constexpr const char* restrike = "restrike";
+inline constexpr const char* absorption = "absorption";
 inline constexpr const char* room = "room";
 inline constexpr const char* roomSize = "roomSize";
 inline constexpr const char* roomDecay = "roomDecay";
@@ -137,7 +137,7 @@ private:
         float get() const noexcept { return p->load(std::memory_order_relaxed); }
         bool on() const noexcept { return get() >= 0.5f; }
     };
-    Raw volume, body, residual, sympathetic, heldKeys, pedalCatch, releaseNoise, sympatheticLevel, unison, restrike, room,
+    Raw volume, body, residual, sympathetic, heldKeys, pedalCatch, releaseNoise, sympatheticLevel, unison, absorption, room,
         roomSize, roomDecay, roomBrightness, roomWidth, roomLevel, distance, keepLoudness, heardOn, a4, temperament, root, limiter;
     float appliedA4 = -1.0f;
     int appliedTemperament = -1, appliedRoot = -1;

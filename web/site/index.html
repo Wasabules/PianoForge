@@ -110,6 +110,12 @@
             <p class="note">How far apart the strings of each note are tuned: 100 % as measured, 0 % in perfect unison (no beating),
               200 to 300 % an old upright's. The notes struck from then on.</p>
           </div>
+          <div class="row">
+            <label for="absorption">Re-strike absorption</label>
+            <div class="control"><input id="absorption" type="range" min="0" max="95" step="1" value="50"><output id="absorptionOut">50 %</output></div>
+            <p class="note">A note struck again strikes its string while it rings, and the strikes add up; the hammer absorbs this
+              share of the vibration (0 %: they add exactly; 50 %: fitted on the reference's repeated notes).</p>
+          </div>
         </section>
         <section class="pane" data-pane="room" role="tabpanel" hidden>
           <h3>The room around the piano</h3>

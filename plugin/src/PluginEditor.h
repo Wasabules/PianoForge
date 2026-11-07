@@ -68,7 +68,7 @@ private:
     juce::Label title, profileLine, roomSummary, footer;
     juce::TextButton chooseProfile { "Choose profile..." }, applicationProfile { "Application's profile" };
 
-    Row volume, sympatheticLevel, unison, restrike;
+    Row volume, sympatheticLevel, unison, absorption;
     std::array<Toggle, 6> options; // body, residual, sympathetic, held keys, pedal catch, release noise
     Toggle roomOn, keepLoudness, limiterOn;
     juce::ComboBox roomPreset, position;

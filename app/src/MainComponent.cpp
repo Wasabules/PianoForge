@@ -861,6 +861,7 @@ const juce::StringArray& MainComponent::instrumentKeys()
     static const juce::StringArray keys { "engine", "volume", "velocityCurve", "pedalCurve",
                                           "modalBody", "modalResidual", "modalSympathetic", "modalHeldKeys", "modalPedalCatch",
                                           "modalReleaseNoise", "playWholeTake", "sympatheticDb", "unisonSpread", "restrikeFade",
+                                          "restrikeAbsorption",
                                           "referenceA4", "temperament", "temperamentRoot",
                                           "roomModel", "roomOn", "roomPreset", "roomPresetName", "roomPosition", "roomKeepLoudness",
                                           "roomLevel", "roomSize", "roomDecay", "roomBrightness", "roomWidth", "roomDistance" };

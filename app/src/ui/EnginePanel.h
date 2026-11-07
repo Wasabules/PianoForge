@@ -42,8 +42,8 @@ private:
     juce::PropertiesFile& settings;
     std::array<juce::ToggleButton, (size_t) Option::count> toggles;
     std::array<juce::Label, (size_t) Option::count> notes;
-    juce::Slider sympatheticLevel, restrike, referenceA4, unison;
-    juce::Label sympatheticLabel, restrikeLabel, a4Label, temperamentLabel, unisonLabel;
+    juce::Slider sympatheticLevel, restrike, referenceA4, unison, absorption;
+    juce::Label sympatheticLabel, restrikeLabel, a4Label, temperamentLabel, unisonLabel, absorptionLabel;
     juce::ComboBox temperament, root;
     juce::TextButton resetTuning { "440 Hz, equal" };
     juce::Rectangle<int> modalArea, voicesArea, tuningArea, referenceArea;
