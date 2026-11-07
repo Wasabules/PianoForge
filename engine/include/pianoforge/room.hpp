@@ -40,11 +40,22 @@ namespace pf {
 ///   loop would damp the highs at every pass). The input is high-passed (60 Hz) and diffused by four all-passes per
 ///   channel before the network. Its energy is estimated from the energy stored and its decay.
 /// - levelDb trims the reflections against what the physics gives (0 dB: as computed).
+/// - Headphones (binaural): the listener's head is a sphere (radius kHeadRadius). The engine's two sides are two
+///   sources at the piano's angle left and right of the front (37 degrees at the keyboard, 5 at 8 m). Each reaches
+///   the nearer ear through the head's shadow toward it, and the farther one around the head: later by Woodworth's
+///   delay, (a / c)(theta + sin theta) (0.32 ms at the keyboard, 0.66 ms from the side), and through its shadow.
+///   The shadow is Brown and Duda's first-order model, its gains taken against a source in front, since headphones
+///   are equalized for one: a mono sound passes at its level. Each early reflection reaches each ear likewise, from
+///   where its image source is. The late tail is made as coherent between the ears as a diffuse field is at that
+///   spacing, 1 / (1 + (f / 590 Hz)^2): nearly whole under 200 Hz, little over 2 kHz, each ear keeping its energy.
+///   With the room off, the engine's sound alone is heard so, from the keyboard. On speakers, none of this: the
+///   room hears the sound through the air already.
 ///
 /// Settings from any thread (atomics, read at each block). prepare() allocates for the largest room at the given
 /// rate; process() allocates nothing and runs sample by sample: the result does not depend on the block size. A
-/// change of size, distance or decay fades the reflections out and back in over 10 ms (the lines are then read at their
-/// new lengths: no click, the tail goes on); the gains glide over 20 ms. Switched off, the reflections fade out and
+/// change of size, distance, decay or of speakers and headphones fades the reflections out and back in over 10 ms
+/// (the lines are then read at their new lengths: no click, the tail goes on); the gains, and the direct sound
+/// between speakers and headphones, glide over 20 ms. Switched off, the reflections fade out and
 /// the direct sound comes back to the engine's, then the room is cleared and the input passes through bit for bit.
 /// At the keyboard (1 m), the direct sound is the input, bit for bit. Asleep: once the input has been silent long
 /// enough for everything to have left the lines, and a whole block of reverberation stays under -120 dB, the room is
@@ -59,6 +70,7 @@ public:
     static constexpr float kMaxDistance = 30.0f;
     static constexpr float kDirectivity = 2.0f;       // Q of the piano toward the listener
     static constexpr float kSourceWidth = 1.5f;       // m
+    static constexpr float kHeadRadius = 0.0875f;     // m: the listener's head, on headphones
 
     struct Settings {
         bool enabled = false;
@@ -69,6 +81,7 @@ public:
         float distance = 1.0f;     // m from the piano, kReferenceDistance to kMaxDistance (the room may be shorter)
         bool keepLoudness = true;  // the total energy kept at what it is from the keyboard
         float width = 1.0f;        // the reverberation's: 0 mono, 1 full width
+        bool headphones = false;   // heard on headphones: binaural, through a spherical head (even with the room off)
     };
 
     /// What a setting gives: the room, where the listener is, and the energies (dB against the engine's sound).
@@ -82,12 +95,19 @@ public:
         double firstReflectionMs = 0.0;
         double airDbAt10k = 0.0;       // what the air takes from the direct sound at 10 kHz (beyond 1 m)
         double directWidth = 1.0;      // the direct sound's stereo width (1 at the keyboard)
+        double sideAngle = 0.0;        // degrees: where each side of the piano is, left and right of the front
+        double interauralMs = 0.0;     // on headphones, a side's delay from one ear to the other
     };
     static Acoustics acoustics(const Settings& s) noexcept;
+    /// Headphones: the delay between the ears for a source at this azimuth from the front, radians (Woodworth), s.
+    static double interauralDelay(double azimuth) noexcept;
+    /// Headphones: the gain of the highs at an ear for a source at this angle from the ear's axis, radians, against
+    /// a source in front (Brown and Duda's head shadow: about 2 toward the ear, 0.13 behind it, 1 in front).
+    static double headShadow(double earAngle) noexcept;
     /// ISO 9613-1 air absorption at 20 degrees C, 50 % relative humidity, 101.325 kPa, dB per metre.
     static double airAbsorptionDbPerMetre(double frequency) noexcept;
 
-    std::atomic<bool> enabled { false }, keepLoudness { true };
+    std::atomic<bool> enabled { false }, keepLoudness { true }, headphones { false };
     std::atomic<float> levelDb { 0.0f }, size { 0.85f }, decaySeconds { 2.2f }, brightness { 0.5f },
         distance { 1.0f }, width { 1.0f };
 
@@ -111,18 +131,26 @@ private:
         void allocate(std::size_t minimum);
         float at(std::uint32_t pos, std::uint32_t delay) const noexcept { return data[(pos - delay) & mask]; }
     };
-    struct Config { // what changes with the size, the distance and the decay (applied while the reflections are faded out)
+    struct Config { // what changes with the size, the distance, the decay and the headphones (applied while the reflections are faded out)
         float size = -1.0f, distance = -1.0f, decay = -1.0f;
+        bool headphones = false; // the taps reach the ears (each with its gain of the highs), not two microphones
         float heard = 1.0f; // the distance the listener is at (the room may be shorter than asked)
         float earlyShare = 1.0f; // the early reflections' energy arriving in the first 80 ms
         std::array<std::uint32_t, kLines> lineDelay {};
         std::array<std::uint32_t, kDiffusers> diffuserDelay {};
         std::array<std::uint32_t, kTaps> tapDelayL {}, tapDelayR {};
         std::array<float, kTaps> tapGainL {}, tapGainR {};
+        std::array<float, kTaps> tapHighL {}, tapHighR {}; // on headphones: the highs' gain at each ear
         std::uint32_t predelay = 0;
     };
 
-    void configure(Config& c, float size, float distance, float decay) const noexcept;
+    void configure(Config& c, float size, float distance, float decay, bool headphones) const noexcept;
+    void clearRoom() noexcept;  // the reflections' state (not the ears', nor the input's energies)
+    void clearEars() noexcept;  // the ears' state
+    /// Headphones: the direct sound (gain and air as set) at the two ears.
+    void earsDirect(float inL, float inR, float& outL, float& outR) noexcept;
+    /// Headphones with the room off: the engine's sound at the ears, nothing else.
+    void processEarsOnly(float* left, float* right, int n, bool silent) noexcept;
     void updateTargets() noexcept; // decay, brightness, level, distance -> the gains and filters to glide to
     void readSettings() noexcept;
 
@@ -163,6 +191,19 @@ private:
     // Modulation: a phasor per line, and its rotation per sample.
     std::array<float, kLines> lfoC {}, lfoS {}, rotC {}, rotS {};
     float depth = 0.0f;         // samples
+
+    // Headphones: the mix toward the ears (0 speakers, 1 headphones), the shadow's gains of the highs at the nearer and
+    // the farther ear and the delay between them (samples), targets and current values. The head's crossover (its
+    // lows and highs), the late tail's coherence filters, the direct sound's air and crossover states, the farther
+    // ear's path of each side, and the reflections' line in the lows.
+    float earsTarget = 0.0f, ears = 0.0f;
+    float ipsiTarget = 1.0f, ipsi = 1.0f, contraTarget = 1.0f, contra = 1.0f, itdTarget = 0.0f, itd = 0.0f;
+    float earCoef = 0.0f, coherenceCoef = 0.0f;
+    float earAirY[2] {}, earAirZ[2] {}, earLow[2] {};
+    float coherenceMid = 0.0f, coherenceSide = 0.0f;
+    Delay farPath[2], monoLow;
+    float monoLowY = 0.0f;
+    bool earsActive = false;
 };
 
 } // namespace pf

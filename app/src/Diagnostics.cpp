@@ -404,6 +404,7 @@ int runUiSnapshots(const juce::StringArray& arguments)
             own.setValue("roomPresetName", "Living room, 3 m");
             own.setValue("roomDistance", 3.0);
             own.setValue("roomPosition", 2);
+            own.setValue("roomHeadphones", true); // and heard on headphones
             pf::Room room;
             RoomPanel withPreset(room, own);
             save(withPreset, "room-user-preset");

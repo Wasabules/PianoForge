@@ -457,7 +457,8 @@ function settings() {
   return {
     volume: Number($('volume').value),
     room: { size: preset.size, decay: preset.decay, brightness: preset.brightness, width: preset.width, on: $('roomOn').checked,
-            levelDb: Number($('roomLevel').value), distance: Number($('roomDistance').value), keepLoudness: $('roomKeep').checked },
+            levelDb: Number($('roomLevel').value), distance: Number($('roomDistance').value), keepLoudness: $('roomKeep').checked,
+            headphones: $('roomHeard').value === 'headphones' },
     pedal: { min: Number($('pedalMin').value), max: Number($('pedalMax').value), shape: $('pedalShape').value },
     options: OPTIONS.map((_, i) => $('option' + i).checked),
     sympathetic: Number($('sympathetic').value),
@@ -514,6 +515,7 @@ function buildSettings() {
   $('roomPosition').value = String(saved?.roomPosition ?? 0);
   $('roomDistance').value = saved?.room?.distance ?? (ROOM_POSITIONS[Number($('roomPosition').value)]?.distance ?? 1);
   $('roomKeep').checked = saved?.room?.keepLoudness ?? true;
+  $('roomHeard').value = saved?.room?.headphones ? 'headphones' : 'speakers';
   if (saved?.pedal) {
     $('pedalMin').value = saved.pedal.min;
     $('pedalMax').value = saved.pedal.max;
@@ -553,6 +555,7 @@ function buildSettings() {
     apply();
   });
   $('roomKeep').addEventListener('change', apply);
+  $('roomHeard').addEventListener('change', apply);
   $('roomSave').addEventListener('click', () => {
     const current = roomChoice();
     const name = (prompt('A name for this room and this listening position (an existing name is replaced):',

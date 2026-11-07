@@ -8,7 +8,7 @@ lab's own sequence player, to the sample in the audio worklet; open or drop a .m
 - `site/`: the page (`index.html`, `app.js`, `style.css`) and the audio worklet (`worklet.js`), which instantiates
   `pianoforge.wasm` on the browser's audio thread.
 - `check.mjs`: runs the module under Node as the worklet does: imports, the real profile, the same sound as the
-  native engine (level per window), the cost.
+  native engine (level per window), the cost (dry, with the room, on headphones).
 
 The profile is never uploaded: the page asks for `modal-profile.bin` (written by `forge export`), keeps it in the
 browser (IndexedDB) and hands it to the worklet. Calibrated on a commercial library, it must not be published: the

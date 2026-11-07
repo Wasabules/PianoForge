@@ -78,6 +78,11 @@ A room around the piano, heard from a listening position (the engine's sound is 
 follows Barron's revised theory): the Room button in the toolbar, its settings in Engine > Room settings (Ctrl+M).
 No latency on the direct sound. Heard, recorded, streamed and in take renders alike.
 
+On headphones (Room window: Heard on, or Ctrl+H), the piano is in front of you rather than inside your head: each
+side of it reaches both ears, the farther one later and duller (a spherical head: Woodworth's delay, Brown and Duda's
+shadow, equalized for a source in front so that a mono sound keeps its level), the room's reflections each from
+where they come, and the tail as coherent between the ears as a diffuse field. Room on or off.
+
 In a browser (WebAssembly, the modal engine and the room, Web MIDI): see `web/README.md`.
 
 Offline render of a MIDI file, through the reference player or the modal engine:

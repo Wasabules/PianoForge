@@ -14,7 +14,7 @@ enum MenuId {
     // Player
     kPlayPause = 80, kStopPlayer, kBack, kForward, kLoop, kCloseMidi, kSpeed = 100,
     // Engine
-    kEngineReference = 20, kEngineModal, kEngineOption = 30, kEngineSettings = 50, kRoomToggle, kRoomSettings,
+    kEngineReference = 20, kEngineModal, kEngineOption = 30, kEngineSettings = 50, kRoomToggle, kRoomSettings, kHeadphones,
     // Audio
     kAudioSettings = 60, kPerformance, kResetDropouts,
     // Keyboard
@@ -368,6 +368,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         }
         menu.addSubMenu("Room presets", rooms);
         menu.addItem(item(kRoomSettings, "Room settings...", "Ctrl+M"));
+        menu.addItem(item(kHeadphones, "Heard on headphones (binaural)", "Ctrl+H", roomPanel->onHeadphones()));
         break;
     }
     case 3: {
@@ -480,6 +481,7 @@ void MainComponent::menuItemSelected(int id, int)
     case kEngineSettings: showWindow(engineWindow, "Engine settings", *enginePanel); break;
     case kRoomToggle: roomPanel->setOn(!roomPanel->isOn()); break;
     case kRoomSettings: showWindow(roomWindow, "Room", *roomPanel); break;
+    case kHeadphones: toggleHeadphones(); break;
     case kAudioSettings: showWindow(audioWindow, "Audio, MIDI and streaming", *audioPanel); break;
     case kPerformance: showWindow(performanceWindow, "Performance", performancePanel); break;
     case kResetDropouts: performancePanel.onReset(); break;
@@ -516,7 +518,7 @@ void MainComponent::showShortcuts()
               "MIDI file player\n  Ctrl+O: open a MIDI file (or drop it on the window)\n  Ctrl+Space: play / pause\n"
               "  Ctrl+Home: stop, back to the start\n  Ctrl+Left / Ctrl+Right: 5 s back / forward\n  Ctrl+L: loop\n\n"
               "Application\n  Ctrl+R: record / stop\n  Ctrl+S: save the last take\n  Ctrl+1 / Ctrl+2: reference / modal engine\n"
-              "  Ctrl+E: engine settings\n  Ctrl+M: room settings\n  Ctrl+,: audio, MIDI and streaming\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
+              "  Ctrl+T: takes and recordings\n  Ctrl+E: engine settings\n  Ctrl+M: room settings\n  Ctrl+H: heard on headphones / speakers\n  Ctrl+,: audio, MIDI and streaming\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
               "The mouse plays too: lower on a key is louder.");
 }
 
@@ -531,12 +533,21 @@ void MainComponent::showAbout()
 
 // ---- Actions ----
 
+void MainComponent::toggleHeadphones()
+{
+    roomPanel->setHeadphones(!roomPanel->onHeadphones());
+    showMessage(roomPanel->onHeadphones() ? juce::String("Heard on headphones: the piano in front of you (binaural)")
+                                          : juce::String("Heard on speakers"),
+                theme::good);
+}
+
 void MainComponent::refreshRoomButton()
 {
     roomButton.setToggleState(roomPanel->isOn(), juce::dontSendNotification);
     roomButton.setTooltip("The room around the piano: " + roomPanel->presetName()
                           + (roomPanel->isOn() ? juce::String(" (click: off)") : juce::String(" (off; click: on)"))
-                          + ". Ctrl+M: its settings");
+                          + (roomPanel->onHeadphones() ? juce::String(", heard on headphones") : juce::String())
+                          + ". Ctrl+M: its settings, Ctrl+H: headphones or speakers");
 }
 
 void MainComponent::selectEngine(bool useModal)
@@ -594,6 +605,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
         case 'E': showWindow(engineWindow, "Engine settings", *enginePanel); return true;
         case 'M': showWindow(roomWindow, "Room", *roomPanel); return true;
         case 'T': openTakes(); return true;
+        case 'H': toggleHeadphones(); return true;
         case 'P': showWindow(performanceWindow, "Performance", performancePanel); return true;
         case ',': showWindow(audioWindow, "Audio, MIDI and streaming", *audioPanel); return true;
         case '1': selectEngine(false); return true;
@@ -813,7 +825,7 @@ namespace {
 bool machineSetting(const juce::String& key)
 {
     return key == "audio" || key.startsWith("audioDevice.") || key == "corpus" || key == "midiFolder" || key == "mirrorDevice"
-        || key == "engineRateMode";
+        || key == "engineRateMode" || key == "roomHeadphones"; // what this computer plays through
 }
 } // namespace
 

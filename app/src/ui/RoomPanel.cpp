@@ -122,6 +122,20 @@ RoomPanel::RoomPanel(pf::Room& r, juce::PropertiesFile& s) : room(r), settings(s
     savePreset.onClick = [this] { askSavePreset(); };
     deletePreset.setTooltip("Delete the preset of your own selected");
     deletePreset.onClick = [this] { askDeletePreset(); };
+    heardOnLabel.setText("Heard on", juce::dontSendNotification);
+    heardOn.addItem("Speakers", kSpeakersId);
+    heardOn.addItem("Headphones (binaural)", kHeadphonesId);
+    heardOn.setTooltip("Headphones: the piano in front of you rather than inside your head. Each side of it reaches both ears, "
+                       "the farther one later and duller (a spherical head); so do the room's reflections. Room on or off. "
+                       "Ctrl+H");
+    heardOn.onChange = [this] {
+        if (loading)
+            return;
+        apply();
+        save();
+        if (onChange)
+            onChange();
+    };
     positionLabel.setText("Position", juce::dontSendNotification);
     for (int i = 0; i < (int) positions().size(); ++i)
         position.addItem(juce::String(positions()[(size_t) i].name) + " (" + juce::String(juce::roundToInt(positions()[(size_t) i].distance)) + " m)", i + 1);
@@ -187,17 +201,19 @@ RoomPanel::RoomPanel(pf::Room& r, juce::PropertiesFile& s) : room(r), settings(s
     summary.setJustificationType(juce::Justification::topLeft);
     note.setText("The engine's sound is the piano heard from the keyboard. Further away, the direct sound falls as 1/r, "
                  "loses its highs to the air and narrows; the room's energy follows Barron's revised theory (Sabine), "
-                 "for a piano of directivity 2. Nothing delays the direct sound.",
+                 "for a piano of directivity 2. Nothing delays the direct sound. On headphones, a spherical head "
+                 "(Woodworth, Brown and Duda) and a tail as coherent between the ears as a diffuse field.",
                  juce::dontSendNotification);
     note.setColour(juce::Label::textColourId, theme::dim);
     note.setFont(theme::font(12.0f));
     note.setJustificationType(juce::Justification::topLeft);
     for (auto* c : std::initializer_list<juce::Component*> { &onButton, &presetLabel, &preset, &savePreset, &deletePreset,
-                                                             &positionLabel, &position, &keepLoudness, &summary, &note })
+                                                             &positionLabel, &position, &keepLoudness, &heardOnLabel, &heardOn,
+                                                             &summary, &note })
         addAndMakeVisible(*c);
 
     reload();
-    setSize(600, 540);
+    setSize(600, 576);
 }
 
 void RoomPanel::reload()
@@ -239,6 +255,7 @@ void RoomPanel::reload()
     sliders[distance].setValue(current ? settings.getDoubleValue("roomDistance", defaultDistance) : defaultDistance, juce::dontSendNotification);
     position.setSelectedId(savedPosition, juce::dontSendNotification);
     keepLoudness.setToggleState(current ? settings.getBoolValue("roomKeepLoudness", true) : true, juce::dontSendNotification);
+    heardOn.setSelectedId(settings.getBoolValue("roomHeadphones", false) ? kHeadphonesId : kSpeakersId, juce::dontSendNotification);
     if (selected >= kUserBase) // a preset of the user's: its own room and position
         loadUserPreset(selected - kUserBase);
     loading = false;
@@ -251,6 +268,11 @@ void RoomPanel::reload()
 void RoomPanel::setOn(bool on)
 {
     onButton.setToggleState(on, juce::sendNotification);
+}
+
+void RoomPanel::setHeadphones(bool headphones)
+{
+    heardOn.setSelectedId(headphones ? kHeadphonesId : kSpeakersId, juce::sendNotificationSync);
 }
 
 juce::String RoomPanel::presetName() const
@@ -465,6 +487,7 @@ void RoomPanel::apply()
     s.width = (float) (sliders[width].getValue() / 100.0);
     s.distance = (float) sliders[distance].getValue();
     s.keepLoudness = keepLoudness.getToggleState();
+    s.headphones = onHeadphones();
     room.applySettings(s);
     for (int c = 0; c < count; ++c)
         sliders[(size_t) c].setEnabled(s.enabled);
@@ -495,11 +518,22 @@ void RoomPanel::describe()
     text << "direct sound " << juce::String(a.directDb + a.loudnessDb, 1) << " dB";
     if (a.airDbAt10k >= 0.05)
         text << ", -" << juce::String(a.airDbAt10k, 1) << " dB at 10 kHz (air)";
-    text << ", width " << juce::String(juce::roundToInt(100.0 * a.directWidth)) << " %";
+    if (!s.headphones) // on headphones, the angle below instead
+        text << ", width " << juce::String(juce::roundToInt(100.0 * a.directWidth)) << " %";
     if (s.keepLoudness && std::abs(a.loudnessDb) >= 0.05)
         text << " (keep loudness: +" << juce::String(a.loudnessDb, 1) << " dB on everything)";
     text << ".";
-    summary.setText(s.enabled ? text : juce::String("Room off: the engine's sound, heard from the keyboard."), juce::dontSendNotification);
+    // On headphones, where each side of the piano is (from the keyboard with the room off).
+    auto keyboard = s;
+    keyboard.distance = pf::Room::kReferenceDistance;
+    const auto ears = pf::Room::acoustics(s.enabled ? s : keyboard);
+    const juce::String phones = "\nOn headphones: each side of the piano " + juce::String(juce::roundToInt(ears.sideAngle))
+                              + juce::String::fromUTF8("\xc2\xb0") + " from the front, "
+                              + juce::String(ears.interauralMs, 2) + " ms from one ear to the other; the reflections from where they come.";
+    juce::String off = "Room off: the engine's sound, heard from the keyboard.";
+    if (s.headphones)
+        off << phones.replace("; the reflections from where they come.", ".");
+    summary.setText(s.enabled ? text + (s.headphones ? phones : juce::String()) : off, juce::dontSendNotification);
 }
 
 void RoomPanel::save()
@@ -510,6 +544,7 @@ void RoomPanel::save()
     settings.setValue("roomPresetName", preset.getSelectedId() >= kUserBase ? preset.getText() : juce::String());
     settings.setValue("roomPosition", position.getSelectedId());
     settings.setValue("roomKeepLoudness", keepLoudness.getToggleState());
+    settings.setValue("roomHeadphones", onHeadphones());
     for (int c = 0; c < count; ++c)
         settings.setValue(kControls[c].key, sliders[(size_t) c].getValue() / kControls[c].scale);
     settings.saveIfNeeded();
@@ -558,8 +593,12 @@ void RoomPanel::resized()
     row = inner.removeFromTop(32);
     labels[distance].setBounds(row.removeFromLeft(110));
     sliders[distance].setBounds(row.reduced(0, 2));
+    inner.removeFromTop(4);
+    row = inner.removeFromTop(28);
+    heardOnLabel.setBounds(row.removeFromLeft(110));
+    heardOn.setBounds(row.removeFromLeft(240).reduced(0, 2));
     inner.removeFromTop(6);
-    summary.setBounds(inner.removeFromTop(80));
+    summary.setBounds(inner.removeFromTop(96));
     note.setBounds(inner);
 }
 

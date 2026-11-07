@@ -924,17 +924,19 @@ int runSelfTest(const juce::StringArray& arguments)
                                              "\"roomBrightness\":0.45,\"roomWidth\":1.0,\"roomDistance\":12.0,\"keepLoudness\":false}]");
         settings.setValue("roomPreset", 200);
         settings.setValue("roomPresetName", "Hall, 12 m");
+        settings.setValue("roomHeadphones", true);
         enginePanel.reload();
         roomPanel.reload();
         const bool engineOk = std::abs(engine.unisonSpread.load() - 2.5f) < 1e-6f && !engine.bodyEnabled.load()
                            && std::abs(engine.referenceA4.load() - 442.0f) < 1e-3f;
         const bool roomOk = std::abs(room.distance.load() - 12.0f) < 1e-3f && std::abs(room.decaySeconds.load() - 3.0f) < 1e-3f
-                         && !room.keepLoudness.load() && roomPanel.presetName().startsWith("Hall, 12 m");
+                         && !room.keepLoudness.load() && roomPanel.presetName().startsWith("Hall, 12 m") && room.headphones.load()
+                         && roomPanel.onHeadphones();
         r.check(before && engineOk && roomOk,
                 "settings read back: unison " + juce::String(engine.unisonSpread.load(), 2) + ", body " + (engine.bodyEnabled.load() ? "on" : "off")
                     + ", A4 " + juce::String(engine.referenceA4.load(), 1) + " Hz; room \"" + roomPanel.presetName() + "\", decay "
                     + juce::String(room.decaySeconds.load(), 1) + " s, keep loudness " + (room.keepLoudness.load() ? "on" : "off")
-                    + " (expected 2.50, off, 442.0; Hall, 12 m, 3.0 s, off)");
+                    + ", " + (room.headphones.load() ? "headphones" : "speakers") + " (expected 2.50, off, 442.0; Hall, 12 m, 3.0 s, off, headphones)");
         file.deleteFile();
     }
 

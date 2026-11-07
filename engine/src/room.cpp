@@ -27,6 +27,10 @@ constexpr double kDiffuserMs[Room::kDiffusers] = { 4.77, 3.59, 12.73, 9.31 };
 constexpr double kMinVolume = 60.0, kMaxVolume = 40000.0; // m3, at sizes 0 and 1
 constexpr double kPi = 3.141592653589793;
 constexpr float kDiffuserGain[Room::kDiffusers] = { 0.70f, 0.70f, 0.60f, 0.60f };
+// Headphones: a diffuse field's coherence between two points 2a apart, sin(kd) / (kd), is 0.5 at kd = 1.895; the
+// late tail's, 1 / (1 + (f / f0)^2), is made 0.5 there.
+constexpr double kCoherenceHz = 1.895 * kSoundSpeed / (kTwoPi * 2.0 * Room::kHeadRadius);
+constexpr float kSqrt2Minus1 = 0.41421356f;
 
 /// Flush-to-zero and denormals-are-zero for the scope (a decaying tail ends up denormal otherwise).
 struct NoDenormals {
@@ -202,6 +206,36 @@ double directWidthAt(double r) noexcept
     return std::atan(0.5 * Room::kSourceWidth / r) / std::atan(0.5 * Room::kSourceWidth / Room::kReferenceDistance);
 }
 
+/// Where each side of the piano is seen from `r`, left and right of the front, radians.
+double sideAngleAt(double r) noexcept
+{
+    return std::atan(0.5 * Room::kSourceWidth / r);
+}
+
+/// Brown and Duda's head shadow (1998): the highs' gain at an ear for a source at `angle` from the ear's axis,
+/// alpha = (1 + a_min / 2) + (1 - a_min / 2) cos(angle / angle_min x 180 degrees), a_min 0.1, angle_min 150 degrees;
+/// H(s) = (alpha s + b) / (s + b), b = 2c / a.
+double shadowAlpha(double angle) noexcept
+{
+    return 1.05 + 0.95 * std::cos(angle * 1.2);
+}
+
+/// The same model's delay at an ear (against the head's centre) for a source at `angle` from the ear's axis: the
+/// path to the ear in a straight line on the near side, around the head on the far side.
+double earDelay(double angle) noexcept
+{
+    const double k = Room::kHeadRadius / kSoundSpeed;
+    return angle <= 0.5 * kPi ? -k * std::cos(angle) : k * (angle - 0.5 * kPi);
+}
+
+/// Toward `to` (gliding by `rate` a sample), then exactly there.
+inline void glideTo(float& v, float to, float rate) noexcept
+{
+    v += (to - v) * rate;
+    if (std::abs(to - v) < 1e-6f)
+        v = to;
+}
+
 } // namespace
 
 double Room::airAbsorptionDbPerMetre(double f) noexcept
@@ -216,6 +250,16 @@ double Room::airAbsorptionDbPerMetre(double f) noexcept
     return 8.686 * f2
          * (1.84e-11 * std::pow(t / t0, 0.5)
             + std::pow(t / t0, -2.5) * (0.01275 * std::exp(-2239.1 / t) / (frO + f2 / frO) + 0.1068 * std::exp(-3352.0 / t) / (frN + f2 / frN)));
+}
+
+double Room::interauralDelay(double azimuth) noexcept
+{
+    return earDelay(0.5 * kPi + std::abs(azimuth)) - earDelay(0.5 * kPi - std::abs(azimuth));
+}
+
+double Room::headShadow(double earAngle) noexcept
+{
+    return shadowAlpha(earAngle) / shadowAlpha(0.5 * kPi);
 }
 
 Room::Acoustics Room::acoustics(const Settings& s) noexcept
@@ -245,6 +289,8 @@ Room::Acoustics Room::acoustics(const Settings& s) noexcept
     a.firstReflectionMs = 1000.0 * first;
     a.airDbAt10k = airAbsorptionDbPerMetre(10000.0) * std::max(0.0, g.distance - kReferenceDistance);
     a.directWidth = directWidthAt(g.distance);
+    a.sideAngle = sideAngleAt(g.distance) * 180.0 / kPi;
+    a.interauralMs = 1000.0 * interauralDelay(sideAngleAt(g.distance));
     return a;
 }
 
@@ -268,6 +314,7 @@ Room::Settings Room::settings() const noexcept
     s.distance = distance.load();
     s.keepLoudness = keepLoudness.load();
     s.width = width.load();
+    s.headphones = headphones.load();
     return s;
 }
 
@@ -280,14 +327,16 @@ void Room::applySettings(const Settings& s) noexcept
     distance = s.distance;
     keepLoudness = s.keepLoudness;
     width = s.width;
+    headphones = s.headphones;
     enabled = s.enabled;
 }
 
-void Room::configure(Config& c, float newSize, float newDistance, float newDecay) const noexcept
+void Room::configure(Config& c, float newSize, float newDistance, float newDecay, bool newHeadphones) const noexcept
 {
     c.size = newSize;
     c.distance = newDistance;
     c.decay = newDecay;
+    c.headphones = newHeadphones;
     const double scale = 0.3 + 0.7 * newSize; // the network and the diffusion
     const auto minimum = (std::uint32_t) std::ceil(depth) + 3;
     std::uint32_t previous = 0;
@@ -306,28 +355,57 @@ void Room::configure(Config& c, float newSize, float newDistance, float newDecay
     c.heard = (float) g.distance;
     int count = 0;
     double energy[2] = { 0.0, 0.0 }, first = 1e9;
-    double gains[2][kTaps] {}, delays[2][kTaps] {};
-    forEachImage(g, [&](const double* image, int reflections) {
-        if (count >= kTaps)
-            return;
-        for (int m = 0; m < 2; ++m) {
-            const double r = distanceBetween(image, g.mic[m]), r0 = distanceBetween(g.src, g.mic[m]);
-            gains[m][count] = std::pow(reflection, reflections) * r0 / r;
-            delays[m][count] = (r - r0) / kSoundSpeed;
-            energy[m] += gains[m][count] * gains[m][count];
-            first = std::min(first, delays[m][count]);
-        }
-        ++count;
-    });
+    double gains[2][kTaps] {}, delays[2][kTaps] {}, highs[2][kTaps] {};
+    if (!newHeadphones) {
+        forEachImage(g, [&](const double* image, int reflections) {
+            if (count >= kTaps)
+                return;
+            for (int m = 0; m < 2; ++m) {
+                const double r = distanceBetween(image, g.mic[m]), r0 = distanceBetween(g.src, g.mic[m]);
+                gains[m][count] = std::pow(reflection, reflections) * r0 / r;
+                delays[m][count] = (r - r0) / kSoundSpeed;
+                energy[m] += gains[m][count] * gains[m][count];
+                first = std::min(first, delays[m][count]);
+            }
+            ++count;
+        });
+    } else {
+        // At the ears: from the head's centre, each image's direction against each ear's axis (the listener faces
+        // the piano, down the room: the left ear toward -y), its delay at that ear (after the direct sound at the
+        // nearer ear of each side, the first to arrive) and the shadow's gain of the highs there.
+        double head[3];
+        for (int a = 0; a < 3; ++a)
+            head[a] = 0.5 * (g.mic[0][a] + g.mic[1][a]);
+        const double r0 = distanceBetween(g.src, head);
+        const double nearest = earDelay(0.5 * kPi - sideAngleAt(g.distance));
+        forEachImage(g, [&](const double* image, int reflections) {
+            if (count >= kTaps)
+                return;
+            const double r = distanceBetween(image, head);
+            const double gain = std::pow(reflection, reflections) * r0 / r;
+            for (int m = 0; m < 2; ++m) {
+                const double angle = std::acos(std::clamp((image[1] - head[1]) / r * (m == 0 ? -1.0 : 1.0), -1.0, 1.0));
+                gains[m][count] = gain;
+                highs[m][count] = headShadow(angle);
+                delays[m][count] = (r - r0) / kSoundSpeed + earDelay(angle) - nearest;
+                energy[m] += gain * gain * 0.5 * (1.0 + highs[m][count] * highs[m][count]); // the lows' and the highs'
+                first = std::min(first, delays[m][count]);
+            }
+            ++count;
+        });
+        energy[0] = energy[1] = 0.5 * (energy[0] + energy[1]); // one normalization: the differences between the ears kept
+    }
     double before = 0.0; // the share of their energy that arrives in Barron's early window (80 ms)
     for (int j = 0; j < count; ++j)
         for (int m = 0; m < 2; ++m)
-            if (delays[m][j] < 0.08)
-                before += 0.5 * gains[m][j] * gains[m][j] / energy[m];
+            if (delays[m][j] < 0.08) // on headphones, each tap's energy with its highs' gain, as normalized
+                before += 0.5 * gains[m][j] * gains[m][j] * (newHeadphones ? 0.5 * (1.0 + highs[m][j] * highs[m][j]) : 1.0) / energy[m];
     c.earlyShare = (float) before;
     for (int j = 0; j < kTaps; ++j) { // the early energy normalized, per microphone
         c.tapGainL[(std::size_t) j] = j < count ? (float) (gains[0][j] / std::sqrt(energy[0])) : 0.0f;
         c.tapGainR[(std::size_t) j] = j < count ? (float) (gains[1][j] / std::sqrt(energy[1])) : 0.0f;
+        c.tapHighL[(std::size_t) j] = newHeadphones ? (float) highs[0][j] : 1.0f;
+        c.tapHighR[(std::size_t) j] = newHeadphones ? (float) highs[1][j] : 1.0f;
         c.tapDelayL[(std::size_t) j] = std::max<std::uint32_t>(1, (std::uint32_t) std::lround(delays[0][j] * fs));
         c.tapDelayR[(std::size_t) j] = std::max<std::uint32_t>(1, (std::uint32_t) std::lround(delays[1][j] * fs));
     }
@@ -344,6 +422,9 @@ void Room::prepare(double sampleRate)
     imageCoef = (float) (1.0 - std::exp(-1.0 / (kImageS * fs)));
     hpCoef = (float) (1.0 / (1.0 + kTwoPi * kHighPassHz / fs));
     lpCoef = (float) (1.0 - std::exp(-kTwoPi * kReflectionLowPassHz / fs));
+    // The head's crossover: Brown and Duda's pole, b = 2c / a, over the gain in front (the shelves are taken against it).
+    earCoef = (float) (1.0 - std::exp(-std::min(kSoundSpeed / (kPi * kHeadRadius * shadowAlpha(0.5 * kPi)), 0.4 * fs) * kTwoPi / fs));
+    coherenceCoef = (float) (1.0 - std::exp(-kTwoPi * kCoherenceHz / fs));
     for (int i = 0; i < kLines; ++i) {
         const double w = kTwoPi * (0.25 + 0.05 * i) / fs;
         rotC[(std::size_t) i] = (float) std::cos(w);
@@ -351,21 +432,24 @@ void Room::prepare(double sampleRate)
     }
     // The largest room: every ring sized for it (a second-order image is at most twice the room's diagonal away).
     Config largest;
-    configure(largest, 1.0f, kMaxDistance, 30.0f);
+    configure(largest, 1.0f, kMaxDistance, 30.0f, false);
     for (int i = 0; i < kLines; ++i)
         lines[(std::size_t) i].allocate(largest.lineDelay[(std::size_t) i] + (std::size_t) std::ceil(depth) + 4);
     const auto big = geometryFor(1.0, kMaxDistance);
     const double diagonal = std::sqrt(big.dim[0] * big.dim[0] + big.dim[1] * big.dim[1] + big.dim[2] * big.dim[2]);
     for (auto& d : pre)
         d.allocate((std::size_t) std::ceil(kMaxPredelayMs / 1000.0 * fs) + 2);
-    mono.allocate((std::size_t) std::ceil(2.0 * diagonal / kSoundSpeed * fs) + 4);
+    mono.allocate((std::size_t) std::ceil((2.0 * diagonal / kSoundSpeed + 0.001) * fs) + 4); // + the ears' delays
+    monoLow.allocate(mono.data.size());
+    for (auto& d : farPath)
+        d.allocate((std::size_t) std::ceil(0.001 * fs) + 4); // the delay around the head, 0.66 ms at most
     for (auto& channel : diffusers)
         for (int j = 0; j < kDiffusers; ++j)
             channel[(std::size_t) j].allocate(largest.diffuserDelay[(std::size_t) j] + 2);
     reset();
     // Start on the current settings, without gliding to them.
     configure(cfg, std::clamp(size.load(), 0.0f, 1.0f), std::clamp(distance.load(), kReferenceDistance, kMaxDistance),
-              std::clamp(decaySeconds.load(), 0.1f, 30.0f));
+              std::clamp(decaySeconds.load(), 0.1f, 30.0f), headphones.load());
     hasPending = false;
     fade = 1.0f;
     readSettings();
@@ -378,13 +462,35 @@ void Room::prepare(double sampleRate)
     directWidth = directWidthTarget;
     air = airTarget;
     absNow = absTarget;
+    ears = earsTarget;
+    ipsi = ipsiTarget;
+    contra = contraTarget;
+    itd = itdTarget;
 }
 
 void Room::reset() noexcept
 {
+    clearRoom();
+    clearEars();
+    midEnergy = sideEnergy = 0.0f;
+}
+
+void Room::clearEars() noexcept
+{
+    for (auto& d : farPath)
+        std::fill(d.data.begin(), d.data.end(), 0.0f);
+    earAirY[0] = earAirY[1] = earAirZ[0] = earAirZ[1] = earLow[0] = earLow[1] = 0.0f;
+    coherenceMid = coherenceSide = 0.0f;
+    earsActive = false;
+}
+
+void Room::clearRoom() noexcept
+{
     for (auto& d : pre)
         std::fill(d.data.begin(), d.data.end(), 0.0f);
     std::fill(mono.data.begin(), mono.data.end(), 0.0f);
+    std::fill(monoLow.data.begin(), monoLow.data.end(), 0.0f);
+    monoLowY = 0.0f;
     for (auto& l : lines)
         std::fill(l.data.begin(), l.data.end(), 0.0f);
     for (auto& channel : diffusers)
@@ -394,7 +500,6 @@ void Room::reset() noexcept
     shelfY.fill(0.0f);
     apY.fill(0.0f);
     hpX[0] = hpX[1] = hpY[0] = hpY[1] = lpY[0] = lpY[1] = airY[0] = airY[1] = airZ[0] = airZ[1] = 0.0f;
-    midEnergy = sideEnergy = 0.0f;
     for (int i = 0; i < kLines; ++i) { // phases spread around the circle
         lfoC[(std::size_t) i] = (float) std::cos(kTwoPi * i / kLines);
         lfoS[(std::size_t) i] = (float) std::sin(kTwoPi * i / kLines);
@@ -414,9 +519,11 @@ void Room::readSettings() noexcept
     const float newSize = std::clamp(size.load(std::memory_order_relaxed), 0.0f, 1.0f);
     const float newDistance = std::clamp(distance.load(std::memory_order_relaxed), kReferenceDistance, kMaxDistance);
     const float decay = std::clamp(decaySeconds.load(std::memory_order_relaxed), 0.1f, 30.0f);
+    const bool phones = headphones.load(std::memory_order_relaxed);
+    earsTarget = phones ? 1.0f : 0.0f;
     const Config& wanted = hasPending ? pending : cfg;
-    if (newSize != wanted.size || newDistance != wanted.distance || decay != wanted.decay) {
-        configure(pending, newSize, newDistance, decay);
+    if (newSize != wanted.size || newDistance != wanted.distance || decay != wanted.decay || phones != wanted.headphones) {
+        configure(pending, newSize, newDistance, decay, phones);
         hasPending = true;
     }
     const float bright = std::clamp(brightness.load(std::memory_order_relaxed), 0.0f, 1.0f);
@@ -515,6 +622,79 @@ void Room::updateTargets() noexcept
         directWidthTarget = 1.0f;
         airTarget = 0.0f;
     }
+    // Headphones: each side of the piano at its angle from the front (from the keyboard, with the room off).
+    const double side = sideAngleAt(on && r > kReferenceDistance ? r : (double) kReferenceDistance);
+    ipsiTarget = (float) headShadow(0.5 * kPi - side);
+    contraTarget = (float) headShadow(0.5 * kPi + side);
+    itdTarget = (float) (interauralDelay(side) * fs);
+}
+
+void Room::earsDirect(float inL, float inR, float& outL, float& outR) noexcept
+{
+    // Each side reaches the nearer ear through the shadow toward it, and the farther one through its shadow and the
+    // delay around the head. A first-order crossover splits the lows (as they are: the head is small against their
+    // wavelength) from the highs (each ear's gain): exactly Brown and Duda's shelf, taken against a source in front.
+    // In the lows, both sides reach each ear alike: kb keeps each ear's energy there (a mono input passes at its level,
+    // two uncorrelated sides each give half of theirs to each ear).
+    const float kb = std::min(0.70710678f, std::sqrt((midEnergy + sideEnergy + 1e-12f) / (4.0f * midEnergy + 1e-12f)));
+    const float in[2] = { inL, inR };
+    float nearEar[2];
+    for (int c = 0; c < 2; ++c) {
+        earAirY[c] += (1.0f - air) * (in[c] - earAirY[c]);
+        earAirZ[c] += (1.0f - air) * (earAirY[c] - earAirZ[c]);
+        const float x = direct * kb * earAirZ[c];
+        earLow[c] += earCoef * (x - earLow[c]);
+        const float high = x - earLow[c];
+        nearEar[c] = earLow[c] + ipsi * high;
+        farPath[c].data[pos & farPath[c].mask] = earLow[c] + contra * high;
+    }
+    const float whole = std::floor(itd), frac = itd - whole;
+    const auto d = (std::uint32_t) whole;
+    const float farL = (1.0f - frac) * farPath[1].at(pos, d) + frac * farPath[1].at(pos, d + 1);
+    const float farR = (1.0f - frac) * farPath[0].at(pos, d) + frac * farPath[0].at(pos, d + 1);
+    outL = nearEar[0] + farL;
+    outR = nearEar[1] + farR;
+    earsActive = true;
+}
+
+void Room::processEarsOnly(float* left, float* right, int n, bool silent) noexcept
+{
+    if (silent && silentSamples > (std::uint64_t) farPath[0].data.size() + 4096u) {
+        if (earsActive)
+            clearEars(); // long silent: nothing left in the head's filters
+        ears = earsTarget;   // nothing to fade
+        ipsi = ipsiTarget;
+        contra = contraTarget;
+        itd = itdTarget;
+        return;
+    }
+    [[maybe_unused]] NoDenormals noDenormals;
+    for (int k = 0; k < n; ++k) {
+        glideTo(ears, earsTarget, glide);
+        glideTo(ipsi, ipsiTarget, glide);
+        glideTo(contra, contraTarget, glide);
+        glideTo(itd, itdTarget, glide);
+        const float inL = left[k], inR = right[k];
+        const float midIn = 0.5f * (inL + inR), sideIn = 0.5f * (inL - inR);
+        midEnergy += imageCoef * (midIn * midIn - midEnergy);
+        sideEnergy += imageCoef * (sideIn * sideIn - sideEnergy);
+        float hl = 0.0f, hr = 0.0f;
+        earsDirect(inL, inR, hl, hr);
+        left[k] = inL + ears * (hl - inL);
+        right[k] = inR + ears * (hr - inR);
+        ++pos;
+    }
+    for (int c = 0; c < 2; ++c) {
+        for (float* state : { &earAirY[c], &earAirZ[c], &earLow[c] })
+            if (std::abs(*state) < 1e-20f)
+                *state = 0.0f;
+    }
+    if (midEnergy < 1e-30f)
+        midEnergy = 0.0f;
+    if (sideEnergy < 1e-30f)
+        sideEnergy = 0.0f;
+    if (ears == 0.0f && earsTarget == 0.0f)
+        clearEars(); // back to speakers: bypassed from the next block
 }
 
 double Room::tailSeconds(const Settings& s) noexcept
@@ -527,12 +707,16 @@ void Room::process(float* left, float* right, int n) noexcept
     if (fs <= 0.0 || n <= 0 || lines[0].data.empty())
         return;
     readSettings();
-    if (!on && cleared)
-        return; // off: the input passes through, bit for bit
+    if (!on && cleared && ears == 0.0f && earsTarget == 0.0f)
+        return; // off, on speakers: the input passes through, bit for bit
     bool silent = true;
     for (int k = 0; k < n && silent; ++k)
         silent = left[k] == 0.0f && right[k] == 0.0f;
     silentSamples = silent ? silentSamples + (std::uint64_t) n : 0;
+    if (!on && cleared) {
+        processEarsOnly(left, right, n, silent); // off, on headphones: the engine's sound at the ears
+        return;
+    }
     if (sleeping) {
         if (silent)
             return; // asleep: nothing rings, nothing comes in
@@ -544,15 +728,14 @@ void Room::process(float* left, float* right, int n) noexcept
     const Vectors& v = kVectors;
     for (int k = 0; k < n; ++k) {
         // Glides, and the fade of a change of size or pre-delay.
-        auto approach = [this](float& v, float to) noexcept { // gliding, then exactly there
-            v += (to - v) * glide;
-            if (std::abs(to - v) < 1e-6f)
-                v = to;
-        };
-        approach(wet, wetTarget);
-        approach(direct, directTarget);
-        approach(directWidth, directWidthTarget);
-        approach(air, airTarget);
+        glideTo(wet, wetTarget, glide);
+        glideTo(direct, directTarget, glide);
+        glideTo(directWidth, directWidthTarget, glide);
+        glideTo(air, airTarget, glide);
+        glideTo(ears, earsTarget, glide);
+        glideTo(ipsi, ipsiTarget, glide);
+        glideTo(contra, contraTarget, glide);
+        glideTo(itd, itdTarget, glide);
         widthNow += (widthTarget - widthNow) * glide;
         early += (earlyTarget - early) * glide;
         late += (lateTarget - late) * glide;
@@ -596,13 +779,26 @@ void Room::process(float* left, float* right, int n) noexcept
             x[c] = hpY[c];
             pre[c].data[pos & pre[c].mask] = x[c];
         }
-        mono.data[pos & mono.mask] = monoKeep * 0.5f * (x[0] + x[1]);
+        const float monoIn = monoKeep * 0.5f * (x[0] + x[1]);
+        mono.data[pos & mono.mask] = monoIn;
+        monoLowY += earCoef * (monoIn - monoLowY); // its lows, for the ears (kept up on speakers: ready at a switch)
+        monoLow.data[pos & monoLow.mask] = monoLowY;
 
-        // Early reflections (each tap at its delay after the direct sound).
+        // Early reflections (each tap at its delay after the direct sound). On headphones, at each ear: the lows as
+        // they are, the highs with the shadow's gain for where the image is.
         float er[2] = { 0.0f, 0.0f };
-        for (int j = 0; j < kTaps; ++j) {
-            er[0] += cfg.tapGainL[(std::size_t) j] * mono.at(pos, cfg.tapDelayL[(std::size_t) j]);
-            er[1] += cfg.tapGainR[(std::size_t) j] * mono.at(pos, cfg.tapDelayR[(std::size_t) j]);
+        if (!cfg.headphones) {
+            for (int j = 0; j < kTaps; ++j) {
+                er[0] += cfg.tapGainL[(std::size_t) j] * mono.at(pos, cfg.tapDelayL[(std::size_t) j]);
+                er[1] += cfg.tapGainR[(std::size_t) j] * mono.at(pos, cfg.tapDelayR[(std::size_t) j]);
+            }
+        } else {
+            for (int j = 0; j < kTaps; ++j) {
+                const auto jj = (std::size_t) j;
+                const float lowL = monoLow.at(pos, cfg.tapDelayL[jj]), lowR = monoLow.at(pos, cfg.tapDelayR[jj]);
+                er[0] += cfg.tapGainL[jj] * (lowL + cfg.tapHighL[jj] * (mono.at(pos, cfg.tapDelayL[jj]) - lowL));
+                er[1] += cfg.tapGainR[jj] * (lowR + cfg.tapHighR[jj] * (mono.at(pos, cfg.tapDelayR[jj]) - lowR));
+            }
         }
         for (int c = 0; c < 2; ++c)
             lpY[c] += lpCoef * (er[c] - lpY[c]);
@@ -652,7 +848,18 @@ void Room::process(float* left, float* right, int n) noexcept
         }
 
         // The reflections: early and late, the width, on / off.
-        const float wl = early * lpY[0] + late * lateL, wr = early * lpY[1] + late * lateR;
+        float wl = early * lpY[0] + late * lateL, wr = early * lpY[1] + late * lateR;
+        if (ears > 0.0f) {
+            // On headphones, the late tail as two ears 2a apart hear a diffuse field: its mid takes, in the lows, the
+            // energy its side gives up (mid (1 + (sqrt 2 - 1) LP), side HP: each ear's energy kept at every frequency,
+            // the coherence 1 / (1 + (f / f0)^2)).
+            const float lm = 0.5f * (lateL + lateR), ls = 0.5f * (lateL - lateR);
+            coherenceMid += coherenceCoef * (lm - coherenceMid);
+            coherenceSide += coherenceCoef * (ls - coherenceSide);
+            const float dm = ears * kSqrt2Minus1 * coherenceMid, ds = -ears * coherenceSide;
+            wl += late * (dm + ds);
+            wr += late * (dm - ds);
+        }
         const float mid = 0.5f * (wl + wr), side = 0.5f * (wl - wr) * widthNow;
         const float g = wet * fade;
         const float outL = g * (mid + side), outR = g * (mid - side);
@@ -675,6 +882,12 @@ void Room::process(float* left, float* right, int n) noexcept
             airY[0] = airZ[0] = inL; // the low-passes follow: no step when they start
             airY[1] = airZ[1] = inR;
         }
+        if (ears > 0.0f || earsTarget > 0.0f) { // on headphones: at the ears (between the two while switching)
+            float hl = 0.0f, hr = 0.0f;
+            earsDirect(inL, inR, hl, hr);
+            dl += ears * (hl - dl);
+            dr += ears * (hr - dr);
+        }
         left[k] = dl + outL;
         right[k] = dr + outR;
 
@@ -687,8 +900,14 @@ void Room::process(float* left, float* right, int n) noexcept
                 lfoS[ii] *= m;
             }
     }
+    if (ears == 0.0f && earsTarget == 0.0f && earsActive)
+        clearEars(); // back to speakers
     if (!on && wet < 1e-6f && direct == 1.0f && directWidth == 1.0f && air == 0.0f) {
-        reset(); // faded out, the direct sound back to the input: cleared, and bypassed from the next block
+        // Faded out, the direct sound back to the input: cleared, and from the next block bypassed (on speakers) or
+        // the engine's sound at the ears (on headphones, whose state goes on).
+        clearRoom();
+        if (!earsActive)
+            midEnergy = sideEnergy = 0.0f;
         return;
     }
     // States that decay once the input is silent, set to zero before they go denormal (WebAssembly has no
@@ -702,7 +921,16 @@ void Room::process(float* left, float* right, int n) noexcept
             airY[c] = 0.0f;
         if (std::abs(airZ[c]) < 1e-20f)
             airZ[c] = 0.0f;
+        for (float* state : { &earAirY[c], &earAirZ[c], &earLow[c] })
+            if (std::abs(*state) < 1e-20f)
+                *state = 0.0f;
     }
+    if (std::abs(monoLowY) < 1e-20f)
+        monoLowY = 0.0f;
+    if (std::abs(coherenceMid) < 1e-20f)
+        coherenceMid = 0.0f;
+    if (std::abs(coherenceSide) < 1e-20f)
+        coherenceSide = 0.0f;
     if (midEnergy < 1e-30f)
         midEnergy = 0.0f;
     if (sideEnergy < 1e-30f)

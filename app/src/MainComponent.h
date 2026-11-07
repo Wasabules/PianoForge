@@ -140,6 +140,7 @@ private:
     std::unique_ptr<ToolWindow> engineWindow, audioWindow, performanceWindow, roomWindow, takesWindow;
     std::unique_ptr<TakesPanel> takesPanel;
     void openTakes();
+    void toggleHeadphones();
     /// Renders `sequence` (seconds) with the engine heard, its settings, the room and the limiter as they are now, to
     /// `wavFile`, in the background; then `done(ok)` on the message thread.
     void renderInBackground(juce::MidiMessageSequence sequence, double rate, juce::File wavFile, juce::String summary,

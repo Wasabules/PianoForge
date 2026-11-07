@@ -196,6 +196,36 @@ double energy(const Signal& x, double from = 0.0, double to = 1e9)
     return e;
 }
 
+/// The normalized correlation of a and b over [from, to) seconds, in [lo, hi] Hz (zero lag).
+double coherence(const Signal& a, const Signal& b, double from, double to, double lo, double hi)
+{
+    const auto x = band(a, lo, hi), y = band(b, lo, hi);
+    double xy = 0.0, xx = 0.0, yy = 0.0;
+    for (std::size_t i = (std::size_t) (from * kRate); i < std::min(x.size(), (std::size_t) (to * kRate)); ++i)
+        xy += x[i] * y[i], xx += x[i] * x[i], yy += y[i] * y[i];
+    return xy / std::sqrt(xx * yy + 1e-300);
+}
+
+/// The lag (samples, parabolic) at which b best matches a, within +-maxLag, both band-passed to [lo, hi] Hz.
+double lagOf(const Signal& a, const Signal& b, int maxLag, double lo, double hi)
+{
+    const auto x = band(a, lo, hi), y = band(b, lo, hi);
+    std::vector<double> c((std::size_t) (2 * maxLag + 1));
+    for (int lag = -maxLag; lag <= maxLag; ++lag) {
+        double sum = 0.0;
+        for (std::size_t i = (std::size_t) maxLag; i + (std::size_t) maxLag < x.size(); ++i)
+            sum += x[i] * y[(std::size_t) ((long long) i + lag)];
+        c[(std::size_t) (lag + maxLag)] = sum;
+    }
+    const auto best = (std::size_t) (std::max_element(c.begin(), c.end()) - c.begin());
+    double shift = 0.0;
+    if (best > 0 && best + 1 < c.size()) {
+        const double l = c[best - 1], m = c[best], r = c[best + 1];
+        shift = 0.5 * (l - r) / (l - 2 * m + r);
+    }
+    return (double) best - maxLag + shift;
+}
+
 } // namespace
 
 int main()
@@ -634,6 +664,174 @@ int main()
             }
             std::printf("      distance changed while playing: largest step %.4f around the change, %.4f before it\n", around, before);
             check(around <= before * 1.05f, "a change of distance: no click");
+        }
+    }
+
+    // 13. Headphones (binaural, a spherical head). Room off: the engine's sound at the ears, from the keyboard (each
+    //     side of the piano 36.9 degrees from the front).
+    {
+        const double side = std::atan(0.75);
+        const double itd = pf::Room::interauralDelay(side);
+        std::printf("      Woodworth: %.3f ms from the side (90 degrees), %.3f ms at the keyboard (36.9 degrees)\n",
+                    1000.0 * pf::Room::interauralDelay(kPi / 2), 1000.0 * itd);
+        check(std::abs(pf::Room::interauralDelay(kPi / 2) - 0.0875 / 343.0 * (kPi / 2 + 1.0)) < 1e-9
+                  && std::abs(1000.0 * pf::Room::interauralDelay(kPi / 2) - 0.656) < 0.002,
+              "the delay between the ears: 0.656 ms from the side (head radius 8.75 cm)");
+        check(std::abs(pf::Room::headShadow(kPi / 2) - 1.0) < 1e-12 && pf::Room::headShadow(0.0) > 2.5
+                  && pf::Room::headShadow(5 * kPi / 6) < 0.15,
+              "the head's shadow: 1 in front, more toward the ear, least 150 degrees from it");
+
+        auto phones = [](bool roomOn) {
+            pf::Room::Settings s = hall();
+            s.enabled = roomOn;
+            s.headphones = true;
+            return s;
+        };
+        std::mt19937 rng(11);
+        std::normal_distribution<float> noise(0.0f, 0.1f);
+        const auto n = (std::size_t) kRate;
+        auto render = [&](const pf::Room::Settings& settings, Signal& l, Signal& r, int block = 128) {
+            pf::Room room;
+            room.applySettings(settings);
+            room.prepare(kRate);
+            run(room, l, r, block);
+        };
+
+        // One side only (the left): its delay to the far ear, and the difference of level between the ears.
+        {
+            Signal l(n), r(n, 0.0f);
+            for (auto& v : l)
+                v = noise(rng);
+            const Signal in = l;
+            render(phones(false), l, r);
+            // In the highs, the delay around the head (Woodworth); in the lows, the head's diffraction adds to it,
+            // toward Kuhn's 3 (a / c) sin(theta) (the shadow's minimum phase gives it, as Brown and Duda note).
+            const double lag = lagOf(l, r, 64, 3000.0, 10000.0) / kRate, lowLag = lagOf(l, r, 64, 0.0, 500.0) / kRate;
+            const double kuhn = 3.0 * 0.0875 / 343.0 * std::sin(side);
+            const double lows = 10 * std::log10(bandEnergy(l, 0, n, 50, 300) / bandEnergy(r, 0, n, 50, 300));
+            const double highs = 10 * std::log10(bandEnergy(l, 0, n, 4000, 8000) / bandEnergy(r, 0, n, 4000, 8000));
+            const double perEar = 10 * std::log10(0.5 * (bandEnergy(l, 0, n, 50, 300) + bandEnergy(r, 0, n, 50, 300))
+                                                  / (0.5 * bandEnergy(in, 0, n, 50, 300)));
+            std::printf("      one side: the far ear later by %.3f ms over 3 kHz (Woodworth %.3f), %.3f ms under 500 Hz (Kuhn %.3f); "
+                        "between the ears %.2f dB under 300 Hz, %.1f dB at 4-8 kHz; each ear %+.2f dB in the lows against the input's\n",
+                        1000 * lag, 1000 * itd, 1000 * lowLag, 1000 * kuhn, lows, highs, perEar);
+            check(std::abs(lag - itd) < 0.05e-3 && std::abs(lowLag - kuhn) < 0.06e-3,
+                  "one side: the far ear later by Woodworth's delay in the highs, Kuhn's in the lows");
+            check(std::abs(lows) < 1.0 && highs > 12.0 && highs < 20.0, "one side: the ears alike in the lows, the far one shadowed in the highs");
+            check(std::abs(perEar) < 0.3, "two uncorrelated sides: each ear keeps the input's energy in the lows");
+        }
+        // Mono: both ears alike, at the input's level.
+        {
+            Signal l(n), r(n);
+            for (std::size_t i = 0; i < n; ++i)
+                l[i] = r[i] = noise(rng);
+            const Signal in = l;
+            render(phones(false), l, r);
+            float worst = 0.0f;
+            for (std::size_t i = 0; i < n; ++i)
+                worst = std::max(worst, std::abs(l[i] - r[i]));
+            const double lows = 10 * std::log10(bandEnergy(l, 0, n, 50, 300) / bandEnergy(in, 0, n, 50, 300));
+            const double highs = 10 * std::log10(bandEnergy(l, 0, n, 2000, 8000) / bandEnergy(in, 0, n, 2000, 8000));
+            std::printf("      mono: ears differ by %.1g at most; %+.2f dB under 300 Hz, %+.2f dB at 2-8 kHz\n", worst, lows, highs);
+            check(worst == 0.0f, "mono: both ears alike (a source in front)");
+            check(std::abs(lows) < 0.3 && std::abs(highs) < 1.0, "mono: heard at its level (headphones equalized for a source in front)");
+        }
+        // Back to speakers: bypassed again, bit for bit.
+        {
+            pf::Room room;
+            room.applySettings(phones(false));
+            room.prepare(kRate);
+            Signal l(n), r(n);
+            for (std::size_t i = 0; i < n; ++i)
+                l[i] = noise(rng), r[i] = noise(rng);
+            const Signal inL = l, inR = r;
+            const std::size_t change = n / 4;
+            for (std::size_t at = 0; at < n; at += 128) {
+                if (at == change - change % 128)
+                    room.headphones = false;
+                room.process(l.data() + at, r.data() + at, 128);
+            }
+            std::size_t from = n; // the first sample from which the output is the input, bit for bit
+            while (from > 0 && l[from - 1] == inL[from - 1] && r[from - 1] == inR[from - 1])
+                --from;
+            std::printf("      back to speakers: the input passes through bit for bit %.0f ms after the switch\n",
+                        1000.0 * ((double) from - (double) (change - change % 128)) / kRate);
+            check(from < change + (std::size_t) (0.35 * kRate), "back to speakers: the input passes through bit for bit again");
+        }
+
+        // With the room (8 m in a hall): the tail as two ears hear a diffuse field.
+        auto at8 = [](bool headphones) {
+            auto s = hall();
+            s.distance = 8.0f;
+            s.headphones = headphones;
+            return s;
+        };
+        Signal sl, sr, hl, hr;
+        impulse(at8(false), 2.5, sl, sr);
+        impulse(at8(true), 2.5, hl, hr);
+        const double speakersLow = coherence(sl, sr, 0.3, 2.0, 50, 200), headphonesLow = coherence(hl, hr, 0.3, 2.0, 50, 200);
+        const double headphonesHigh = coherence(hl, hr, 0.3, 2.0, 2000, 6000);
+        std::printf("      the tail's coherence between the ears, 50-200 Hz: %.2f on speakers, %.2f on headphones; 2-6 kHz: %.2f\n",
+                    speakersLow, headphonesLow, headphonesHigh);
+        check(headphonesLow > 0.75 && std::abs(speakersLow) < 0.4 && std::abs(headphonesHigh) < 0.3,
+              "headphones: the tail coherent between the ears in the lows, not in the highs");
+        const double tail = 10 * std::log10((bandEnergy(hl, (size_t) (0.3 * kRate), hl.size(), 100, 4000) + bandEnergy(hr, (size_t) (0.3 * kRate), hr.size(), 100, 4000))
+                                            / (bandEnergy(sl, (size_t) (0.3 * kRate), sl.size(), 100, 4000) + bandEnergy(sr, (size_t) (0.3 * kRate), sr.size(), 100, 4000)));
+        const double early = 10 * std::log10((bandEnergy(hl, 48, (size_t) (0.08 * kRate), 250, 2000) + bandEnergy(hr, 48, (size_t) (0.08 * kRate), 250, 2000))
+                                             / (bandEnergy(sl, 48, (size_t) (0.08 * kRate), 250, 2000) + bandEnergy(sr, 48, (size_t) (0.08 * kRate), 250, 2000)));
+        std::printf("      headphones against speakers: the tail %+.2f dB (100 Hz - 4 kHz), the first 80 ms %+.2f dB (250 Hz - 2 kHz)\n", tail, early);
+        check(std::abs(tail) < 0.5 && std::abs(early) < 1.5, "headphones: the room's energy as on speakers");
+
+        // The result does not depend on the block size; a switch while playing makes no click.
+        {
+            Signal a(n), b(n), c(n), d(n);
+            for (std::size_t i = 0; i < n; ++i)
+                a[i] = c[i] = noise(rng), b[i] = d[i] = noise(rng);
+            render(at8(true), a, b, 64);
+            render(at8(true), c, d, 509);
+            check(a == c && b == d, "headphones: the result does not depend on the block size");
+        }
+        {
+            pf::Room room;
+            room.applySettings(at8(false));
+            room.prepare(kRate);
+            Signal x(n), y(n);
+            for (std::size_t i = 0; i < n; ++i)
+                x[i] = y[i] = (float) (0.3 * std::sin(2 * kPi * 440.0 * (double) i / kRate));
+            const std::size_t change = n / 2;
+            for (std::size_t at = 0; at < n; at += 128) {
+                if (at == change - change % 128)
+                    room.headphones = true;
+                room.process(x.data() + at, y.data() + at, 128);
+            }
+            float before = 0.0f, around = 0.0f;
+            for (std::size_t i = 1; i < n; ++i) {
+                const float step = std::max(std::abs(x[i] - x[i - 1]), std::abs(y[i] - y[i - 1]));
+                (i < change - 1000 ? before : around) = std::max(i < change - 1000 ? before : around, step);
+            }
+            std::printf("      switched to headphones while playing: largest step %.4f around the switch, %.4f before it\n", around, before);
+            check(around <= before * 1.1f, "a switch to headphones: no click");
+        }
+        // Cost, on headphones against speakers (the same run: what the machine is doing besides weighs on both).
+        {
+            auto cost = [&](bool headphones) {
+                double best = 1e9;
+                for (int pass = 0; pass < 3; ++pass) {
+                    pf::Room room;
+                    room.applySettings(at8(headphones));
+                    room.prepare(kRate);
+                    Signal x((std::size_t) (4 * kRate)), y(x.size());
+                    for (std::size_t i = 0; i < x.size(); ++i)
+                        x[i] = noise(rng), y[i] = noise(rng);
+                    const auto t0 = std::chrono::steady_clock::now();
+                    run(room, x, y, 128);
+                    best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+                }
+                return best;
+            };
+            const double speakers = cost(false), headphones = cost(true);
+            std::printf("      on headphones: %.2f %% of real time, %.2f times the cost on speakers\n", 100 * headphones / 4.0, headphones / speakers);
+            check(headphones < 1.4 * speakers, "on headphones, the room costs at most 1.4 times as much");
         }
     }
 
