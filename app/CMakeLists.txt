@@ -2,6 +2,8 @@
 juce_add_gui_app(PianoForgeApp
     PRODUCT_NAME "PianoForge"
     COMPANY_NAME "PianoForge"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon-512.png"     # from resources/logo.svg
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon-32.png"
     VERSION ${PROJECT_VERSION})
 
 target_sources(PianoForgeApp PRIVATE

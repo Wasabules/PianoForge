@@ -981,18 +981,39 @@ void MainComponent::noteAudioDevice()
     const auto type = deviceManager.getCurrentAudioDeviceType();
     const auto name = d != nullptr ? d->getName() : juce::String();
     auto* s = properties.getUserSettings();
-    if (audioFallback) {
-        if (opensWanted()) { // back on the device asked for
-            audioFallback = false;
-            showMessage("Audio: back on " + name, theme::good);
-        } else if (d == nullptr || (type == fallbackType && name == fallbackName)) {
-            return; // still the stand-in (its rate may have changed): the choice stays as it was
-        } else {
-            audioFallback = false; // another device chosen: it becomes the choice
+    // Only the Audio window chooses a device. Anything else that changes it is JUCE falling back on its own (the
+    // device failed, or left the list: a driver reset, a DAC asleep, a virtual cable restarted): the choice is kept,
+    // tried again, and taken back as soon as it can be.
+    const bool byUser = audioWindow != nullptr && audioWindow->isVisible();
+    if (!byUser && !opensWanted()) {
+        const bool wantedListed = [&] {
+            for (auto* t : deviceManager.getAvailableDeviceTypes())
+                if (wantedAudio != nullptr && t->getTypeName() == wantedAudio->getStringAttribute("deviceType"))
+                    return t->getDeviceNames(false).contains(wantedAudio->getStringAttribute("audioOutputDeviceName"));
+            return false;
+        }();
+        if (!audioFallback) {
+            audioFallback = true;
+            showMessage("Audio: " + (wantedAudio != nullptr ? wantedAudio->getStringAttribute("audioOutputDeviceName") : juce::String("the device"))
+                            + " stopped: playing on " + (name.isNotEmpty() ? name : juce::String("nothing")) + " meanwhile, trying it again",
+                        theme::busy);
+            audioRetries = 0;
+            nextAudioRetry = juce::Time::getMillisecondCounterHiRes() + 1500.0;
+        } else if (wantedListed && audioRetries >= 8) { // back in the list: tried again
+            audioRetries = 0;
+            nextAudioRetry = juce::Time::getMillisecondCounterHiRes() + 500.0;
         }
+        if (d != nullptr) {
+            fallbackType = type;
+            fallbackName = name;
+        }
+        return;
     }
+    if (audioFallback && opensWanted())
+        showMessage("Audio: back on " + name, theme::good);
+    audioFallback = false;
     // A switch of device type opens that type's first device (JUCE): the one last used with it instead.
-    if (type != lastDeviceType) {
+    if (byUser && type != lastDeviceType) {
         lastDeviceType = type;
         const auto remembered = s->getValue("audioDevice." + type);
         if (auto* t = deviceManager.getCurrentDeviceTypeObject();
@@ -1004,6 +1025,7 @@ void MainComponent::noteAudioDevice()
                 return; // its own change message records it
         }
     }
+    lastDeviceType = type;
     if (d != nullptr) {
         s->setValue("audioDevice." + type, name);
         if (const auto xml = deviceManager.createStateXml())
@@ -1013,17 +1035,26 @@ void MainComponent::noteAudioDevice()
 
 void MainComponent::retryWantedAudio()
 {
-    // The device asked for, again; if it still cannot be opened, back to the stand-in.
+    // The device asked for, again; if it still cannot be opened, back to the stand-in (as it is running now, not
+    // as JUCE last saved a choice). Not while the Audio window is open: the user is choosing.
+    if (audioWindow != nullptr && audioWindow->isVisible())
+        return;
     ++audioRetries;
     nextAudioRetry = juce::Time::getMillisecondCounterHiRes() + 2000.0;
-    const auto standIn = deviceManager.createStateXml();
+    juce::XmlElement standIn("DEVICESETUP");
+    const auto setup = deviceManager.getAudioDeviceSetup();
+    standIn.setAttribute("deviceType", deviceManager.getCurrentAudioDeviceType());
+    standIn.setAttribute("audioOutputDeviceName", setup.outputDeviceName);
+    standIn.setAttribute("audioDeviceRate", setup.sampleRate);
+    standIn.setAttribute("audioDeviceBufferSize", setup.bufferSize);
     const auto error = deviceManager.initialise(0, 2, wantedAudio.get(), false, {}, &preferredAudio);
     if (error.isEmpty() && opensWanted())
         return; // the change message ends the fallback
-    deviceManager.initialise(0, 2, standIn.get(), true, {}, &preferredAudio);
+    deviceManager.initialise(0, 2, &standIn, true, {}, &preferredAudio);
     if (audioRetries >= 8)
-        showMessage("Audio: " + wantedAudio->getStringAttribute("audioOutputDeviceName") + " is busy or missing (" + error
-                        + "); playing on " + fallbackName + " meanwhile. Choose it again in Audio once it is free.",
+        showMessage("Audio: " + wantedAudio->getStringAttribute("audioOutputDeviceName") + " is busy or missing"
+                        + (error.isNotEmpty() ? " (" + error + ")" : juce::String()) + "; playing on " + fallbackName
+                        + " meanwhile. It is taken back when it returns, or choose it again in Audio.",
                     theme::bad);
 }
 

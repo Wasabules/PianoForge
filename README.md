@@ -1,3 +1,5 @@
+<img src="app/resources/logo.svg" alt="PianoForge" width="96" align="right">
+
 # PianoForge
 
 A concert grand piano simulator played from a MIDI keyboard: a calibrated hybrid modal engine, with

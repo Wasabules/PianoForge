@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- PianoForge: a grand piano seen from above, its keyboard, and one string ringing (orange: the forge's spark,
+       and the resonance the engine models). Designed to read from 16 px (silhouette, keyboard, the orange line). -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22303d"/>
+      <stop offset="1" stop-color="#0e1318"/>
+    </linearGradient>
+    <linearGradient id="case" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7cc8f2"/>
+      <stop offset="0.55" stop-color="#4fa3d9"/>
+      <stop offset="1" stop-color="#2a6a9c"/>
+    </linearGradient>
+    <linearGradient id="soundboard" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#173246"/>
+      <stop offset="1" stop-color="#0f2232"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="inside">
+      <path d="M150 382 L150 136 C150 112 166 98 190 98 C220 98 236 120 246 150 C262 200 304 224 336 254 C364 280 372 318 372 382 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- The case: straight bass side on the left, the bentside curving to the tail -->
+  <path d="M128 400 L128 128 C128 88 156 64 192 64 C236 64 260 96 272 136 C288 190 330 210 362 240 C396 272 400 320 400 400 Z"
+        fill="url(#case)"/>
+  <!-- The soundboard inside the rim -->
+  <path d="M150 382 L150 136 C150 112 166 98 190 98 C220 98 236 120 246 150 C262 200 304 224 336 254 C364 280 372 318 372 382 Z"
+        fill="url(#soundboard)"/>
+
+  <!-- Strings, fanning from the keyboard to the tail -->
+  <g clip-path="url(#inside)" stroke="#9fd3f3" stroke-opacity="0.32" stroke-width="3" stroke-linecap="round">
+    <line x1="168" y1="382" x2="168" y2="104"/>
+    <line x1="190" y1="382" x2="194" y2="100"/>
+    <line x1="212" y1="382" x2="220" y2="112"/>
+    <line x1="256" y1="382" x2="262" y2="190"/>
+    <line x1="278" y1="382" x2="286" y2="214"/>
+    <line x1="300" y1="382" x2="310" y2="234"/>
+    <line x1="322" y1="382" x2="332" y2="254"/>
+    <line x1="344" y1="382" x2="352" y2="280"/>
+  </g>
+
+  <!-- The string that rings: a damped wave, from the hammer toward the tail -->
+  <g clip-path="url(#inside)" filter="url(#glow)">
+    <path d="M234 382 C234 370 222 362 222 350 C222 336 246 330 246 316 C246 302 226 298 226 286 C226 274 242 270 242 260
+             C242 250 230 246 230 238 C230 230 238 226 238 220 C238 214 233 210 233 205 C233 200 236 196 236 190"
+          fill="none" stroke="#ffa24a" stroke-width="7" stroke-linecap="round"/>
+  </g>
+  <!-- The spark where the hammer strikes -->
+  <path d="M234 352 L240 366 L254 372 L240 378 L234 392 L228 378 L214 372 L228 366 Z" fill="#ffd28a" filter="url(#glow)"/>
+
+  <!-- The keyboard -->
+  <rect x="120" y="398" width="288" height="56" rx="8" fill="#0b0f13"/>
+  <g fill="#f2f5f8">
+    <rect x="126" y="402" width="35" height="48" rx="4"/>
+    <rect x="165" y="402" width="35" height="48" rx="4"/>
+    <rect x="204" y="402" width="35" height="48" rx="4"/>
+    <rect x="243" y="402" width="35" height="48" rx="4"/>
+    <rect x="282" y="402" width="35" height="48" rx="4"/>
+    <rect x="321" y="402" width="35" height="48" rx="4"/>
+    <rect x="360" y="402" width="42" height="48" rx="4"/>
+  </g>
+  <g fill="#0b0f13">
+    <rect x="151" y="402" width="20" height="28" rx="3"/>
+    <rect x="190" y="402" width="20" height="28" rx="3"/>
+    <rect x="268" y="402" width="20" height="28" rx="3"/>
+    <rect x="307" y="402" width="20" height="28" rx="3"/>
+    <rect x="346" y="402" width="20" height="28" rx="3"/>
+  </g>
+</svg>
