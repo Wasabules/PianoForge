@@ -921,6 +921,18 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - *Déroulé.* Help > Check for updates, ou au démarrage, au plus une fois par jour, si on l'a coché. Une version plus récente est proposée : installer, ignorer cette version (elle ne sera plus proposée au démarrage, seulement sur demande) ou plus tard. Le téléchargement se fait en tâche de fond, avec sa progression dans la barre d'état. Ensuite l'installateur est lancé (silencieux, sans boîte de dialogue, sans redémarrage, en fermant ce qui utilise ses fichiers, puis il rouvre PianoForge), et l'application se ferme proprement, ce qui libère le pilote ASIO. Pendant un enregistrement, rien n'est installé : il faut d'abord l'arrêter.
     - *Tests* : autotest 8j (ordre des versions, préversions comprises ; manifeste lu depuis une adresse de fichier, installateur relatif téléchargé et vérifié ; mauvais SHA-256 et mauvaise taille refusés sans rien laisser ; format GitHub ; http refusé). `PianoForge.exe --check-update <adresse> rapport.txt` lit le manifeste réellement produit et vérifie l'installateur sans le lancer.
 
+**Résonance sympathique par note (7 novembre 2026).** Une forme d'excitation par registre laissait des écarts de 10 dB. Un essai par note sur une partie des notes généralisait mal aux autres (validation en laissant une note de côté : 90e centile 10,3 dB, contre 8,45 pour les registres). On a donc mesuré toutes les notes.
+  - *Mesure.* Le banc a rendu les paires pédale enfoncée / pédale relevée des 88 notes à v40 et v100 (176 paires, environ 75 s pour 300 prises). Pour chaque paire, la réponse du modèle a été calculée pour 25 formes d'excitation (montée de 0,05 à 0,5 s, décroissance nulle ou de 0,5 à 4 s) : 5 h 40 sur 11 cœurs.
+  - *Ajustement* (`forge sympathetic`, `fit_notes`). Pour chaque note jouée, on cherche la forme, le gain et l'exposant de vélocité qui s'accordent le mieux à ses deux prises. Ils s'ajoutent aux gains par bande et à l'exposant commun ; une régularisation retient l'exposant, qui ne repose que sur deux vélocités.
+    - Les gains vont de −5,2 à +6,5 dB (10e et 90e centiles ; extrêmes −13,4 et +16,5). Les exposants vont de −0,17 à 0,67, médiane 0,26.
+    - Les formes sont variées : 39 notes montent en 0,5 s, 18 en 0,05 s ; 41 n'ont pas de décroissance propre, 17 décroissent en 4 s.
+    - Le profil les porte dans la section SYMP : un registre par note, avec son gain et son exposant. L'export complet, cordes couplées comprises, prend 10 min 25 s.
+  - *Validation du moteur* (`symp_validate` : différence pédale enfoncée moins pédale relevée, rendue par le moteur, contre celle de Noire ; 176 prises, 5 fenêtres de 0 à 9 s) :
+    - toutes les cases : médiane −0,9 dB, la moitié à moins de 2,5 dB, 90 % à moins de 7,4 dB. Avec les registres, sur les mêmes prises : +0,4 dB, 4,3 et 10,7 ;
+    - cases audibles (Noire au-dessus de −90 dBFS, 707 cases) : moitié 2,3 dB, 90 % 5,5 dB (avec les registres : 3,9 et 9,0) ;
+    - par registre, moitié et 90 % : grave 2,3 et 5,5 dB (3,7 et 8,6 avant), médium 1,8 et 4,4 dB (4,0 et 9,7 avant), aigu 3,3 dB (5,3 avant). Le 90e centile de l'aigu (22 dB) vient de cases où notre résonance est déjà retombée au silence numérique après 4 s, quand celle de Noire est vers −115 dBFS : c'est inaudible, et c'était déjà le cas.
+  - *Limites.* Chaque note est ajustée sur ses propres prises : il n'y a plus d'interpolation entre notes, mais pas non plus de validation hors échantillon. Seules v40 et v100 sont mesurées : entre et au-delà, la vélocité suit l'exposant de la note. Les tests du moteur, l'autotest et la page web passent avec ce profil.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |
