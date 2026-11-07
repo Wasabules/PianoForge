@@ -17,13 +17,15 @@
       <label><input id="roomOn" type="checkbox" checked> Room</label>
       <select id="roomPreset" title="The room"></select>
       <select id="roomPosition" title="Where the piano is heard from (the engine's sound: from the keyboard)"></select>
-      <input id="roomLevel" type="range" min="-20" max="20" step="0.5" value="0" title="The room's reflections against the physics">
-      <output id="roomLevelOut">0 dB</output>
     </span>
     <span id="pedal" class="lamp" title="Sustain pedal (Space)">Pedal</span>
     <span id="sostenuto" class="lamp" title="Sostenuto pedal (B)">Sost.</span>
     <span id="soft" class="lamp" title="Soft pedal, una corda (N)">Soft</span>
     <span id="meter" class="meter"><span id="meterFill"></span></span>
+    <button id="openSettings" class="settingsButton" title="Settings: the engine, the room, the keyboard and the pedal, the tuning" aria-haspopup="dialog">
+      <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.5a.5.5 0 0 0-.6-.2l-2.5 1a7.3 7.3 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.5a.5.5 0 0 0 .1.6L4.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.5c.1.2.4.3.6.2l2.5-1c.5.4 1.1.7 1.7 1l.4 2.6c0 .2.3.4.5.4h4c.2 0 .5-.2.5-.4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.5a.5.5 0 0 0-.1-.6L19.4 13zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>
+      <span>Settings</span>
+    </button>
   </header>
 
   <main>
@@ -48,35 +50,6 @@
         <p id="audioLine" class="big">-</p>
         <p id="latencyLine" class="dim">-</p>
         <p id="midiLine" class="dim">MIDI: not connected</p>
-      </div>
-      <div class="card">
-        <h2>Settings</h2>
-        <details>
-          <summary>Engine and keyboard</summary>
-          <div id="options" class="options"></div>
-          <label class="field">Sympathetic level <input id="sympathetic" type="range" min="-24" max="12" step="0.5" value="0"><output id="sympatheticOut">0 dB</output></label>
-          <label class="field" title="How far apart the strings of each note are tuned: 100 % as measured, 0 % in perfect unison (no beating), 200 to 300 % an old upright's">Unison tuning <input id="unison" type="range" min="0" max="300" step="1" value="100"><output id="unisonOut">100 %</output></label>
-          <label class="field">A4 <input id="a4" type="number" min="415" max="466" step="0.1" value="440"> Hz</label>
-          <label class="field" title="The highest velocity the MIDI keyboard really sends (Korg B2: about 114)">MIDI keyboard top velocity <input id="curveMax" type="number" min="20" max="127" step="1" value="127"></label>
-        </details>
-        <details>
-          <summary>Room and listening position</summary>
-          <label class="field" title="From the piano to the listener (1 m: the engine's sound, heard from the keyboard)">Distance <input id="roomDistance" type="range" min="1" max="30" step="0.1" value="1"><output id="roomDistanceOut">1.0 m</output></label>
-          <label class="field" title="Moving away changes the balance between the piano and the room, not the volume"><input id="roomKeep" type="checkbox" checked> Keep loudness</label>
-          <p class="field">My presets (this room and this position):
-            <button id="roomSave" title="Keep them under a name of your own (an existing name is replaced)">Save...</button>
-            <button id="roomDelete" title="Delete the preset of your own selected in the room list" disabled>Delete</button></p>
-        </details>
-        <details>
-          <summary>Sustain pedal</summary>
-          <label class="field" title="What the pedal sends when up: under it, the engine gets 0">Pedal up sends at most <input id="pedalMin" type="number" min="0" max="126" step="1" value="0"></label>
-          <label class="field" title="What the pedal sends when down: over it, the engine gets 127">Pedal down sends at least <input id="pedalMax" type="number" min="1" max="127" step="1" value="127"></label>
-          <label class="field">Curve <select id="pedalShape">
-            <option value="1">Linear</option><option value="0.6">Half pedal sooner</option><option value="1.6">Half pedal later</option>
-          </select></label>
-          <p class="field"><button id="pedalLearn" title="Press the pedal slowly all the way down, let it up, then stop">Learn range</button>
-            <span id="pedalReadout" class="dim">Press the MIDI keyboard's sustain pedal.</span></p>
-        </details>
       </div>
     </section>
 
@@ -109,5 +82,103 @@
     <p class="hint">Computer keyboard from C<span id="octave">4</span>: A W S E D F T G Y H U J K O L P (QWERTY places; Q Z S E... on AZERTY) &nbsp; Z / X octave &nbsp; C / V velocity <output id="velocityOut">100</output> &nbsp; Space pedal &nbsp; B sostenuto &nbsp; N soft pedal. The mouse plays too: lower on a key is louder.</p>
     <div id="keyboard" class="keyboard" aria-label="88-key keyboard"></div>
   </main>
+
+  <dialog id="settings" class="modal" aria-labelledby="settingsTitle">
+    <div class="modalHead">
+      <h2 id="settingsTitle">Settings</h2>
+      <button id="closeSettings" class="close" title="Close (Esc)" aria-label="Close">&times;</button>
+    </div>
+    <div class="modalBody">
+      <nav class="tabs" role="tablist" aria-label="Settings">
+        <button class="tab" role="tab" data-tab="sound">Sound</button>
+        <button class="tab" role="tab" data-tab="room">Room</button>
+        <button class="tab" role="tab" data-tab="keyboard">Keyboard &amp; pedal</button>
+        <button class="tab" role="tab" data-tab="tuning">Tuning</button>
+      </nav>
+      <div class="panes">
+        <section class="pane" data-pane="sound" role="tabpanel">
+          <h3>The modal engine</h3>
+          <div id="options" class="options"></div>
+          <div class="row">
+            <label for="sympathetic">Sympathetic level</label>
+            <div class="control"><input id="sympathetic" type="range" min="-24" max="12" step="0.5" value="0"><output id="sympatheticOut">0 dB</output></div>
+            <p class="note">The free strings ringing with what is played, pedal down (0 dB: as measured).</p>
+          </div>
+          <div class="row">
+            <label for="unison">Unison tuning</label>
+            <div class="control"><input id="unison" type="range" min="0" max="300" step="1" value="100"><output id="unisonOut">100 %</output></div>
+            <p class="note">How far apart the strings of each note are tuned: 100 % as measured, 0 % in perfect unison (no beating),
+              200 to 300 % an old upright's. The notes struck from then on.</p>
+          </div>
+        </section>
+        <section class="pane" data-pane="room" role="tabpanel" hidden>
+          <h3>The room around the piano</h3>
+          <p class="note">The room, its preset and the listening position are in the bar above too.</p>
+          <div class="row">
+            <label for="roomLevel">Level</label>
+            <div class="control"><input id="roomLevel" type="range" min="-20" max="20" step="0.5" value="0"><output id="roomLevelOut">0 dB</output></div>
+            <p class="note">The room's reflections against what the physics gives (0 dB: as computed).</p>
+          </div>
+          <div class="row">
+            <label for="roomDistance">Distance</label>
+            <div class="control"><input id="roomDistance" type="range" min="1" max="30" step="0.1" value="1"><output id="roomDistanceOut">1.0 m</output></div>
+            <p class="note">From the piano to the listener. 1 m: the engine's sound, heard from the keyboard; further, the
+              direct sound falls, loses its highs to the air and narrows, and the room grows.</p>
+          </div>
+          <div class="row">
+            <label for="roomKeep">Keep loudness</label>
+            <div class="control"><input id="roomKeep" type="checkbox" checked></div>
+            <p class="note">Moving away changes the balance between the piano and the room, not the volume.</p>
+          </div>
+          <div class="row">
+            <label>My presets</label>
+            <div class="control"><button id="roomSave">Save...</button><button id="roomDelete" disabled>Delete</button></div>
+            <p class="note">This room and this listening position under a name of your own (an existing name is replaced),
+              listed under "My presets" in the room list. Delete removes the one selected there.</p>
+          </div>
+        </section>
+        <section class="pane" data-pane="keyboard" role="tabpanel" hidden>
+          <h3>Velocity</h3>
+          <div class="row">
+            <label for="curveMax">Top velocity</label>
+            <div class="control"><input id="curveMax" type="number" min="20" max="127" step="1" value="127"></div>
+            <p class="note">The highest velocity the MIDI keyboard really sends (Korg B2: about 114): it then reaches the loudest layers.</p>
+          </div>
+          <h3>Sustain pedal</h3>
+          <div class="row">
+            <label for="pedalMin">Pedal up sends at most</label>
+            <div class="control"><input id="pedalMin" type="number" min="0" max="126" step="1" value="0"></div>
+            <p class="note">Under it, the engine gets 0 (the dampers resting).</p>
+          </div>
+          <div class="row">
+            <label for="pedalMax">Pedal down sends at least</label>
+            <div class="control"><input id="pedalMax" type="number" min="1" max="127" step="1" value="127"></div>
+            <p class="note">Over it, the engine gets 127 (the dampers lifted).</p>
+          </div>
+          <div class="row">
+            <label for="pedalShape">Curve</label>
+            <div class="control"><select id="pedalShape">
+              <option value="1">Linear</option><option value="0.6">Half pedal sooner</option><option value="1.6">Half pedal later</option>
+            </select></div>
+            <p class="note">Where the half pedal falls in the pedal's travel.</p>
+          </div>
+          <div class="row">
+            <label>Range</label>
+            <div class="control"><button id="pedalLearn">Learn range</button></div>
+            <p class="note" id="pedalReadout">Press the pedal slowly all the way down, let it up, then stop. The MIDI keyboard's pedal
+              only (not Space, nor MIDI files).</p>
+          </div>
+        </section>
+        <section class="pane" data-pane="tuning" role="tabpanel" hidden>
+          <h3>Tuning</h3>
+          <div class="row">
+            <label for="a4">Reference A4</label>
+            <div class="control"><input id="a4" type="number" min="415" max="466" step="0.1" value="440"> Hz</div>
+            <p class="note">Equal temperament; every note follows.</p>
+          </div>
+        </section>
+      </div>
+    </div>
+  </dialog>
 </body>
 </html>

@@ -870,7 +870,7 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - Les crêtes entre échantillons ne sont pas recherchées : le plafond à −1 dBFS leur laisse de la marge.
     - Réglage et compte rendu dans Audio > Output (« Never needed so far » ou la réduction la plus forte), activé par défaut.
     - *Tests* (`limiter_test`, natif et sous Node) : transparent sous le plafond ; une rafale à +6 dBFS reste sous −1 dBFS (−7 dB de réduction) ; même gain sur les deux canaux ; retour exact à l'unité une seconde après ; même résultat pour des blocs de 64 ou 509 échantillons ; éteint, le son passe intact.
-  - *Page web à niveau.* Dans Settings :
+  - *Page web à niveau.* Les réglages sont dans une fenêtre (bouton ⚙ Settings à droite de la barre, fermée par Échap, la croix ou un clic à côté), à quatre onglets : Sound, Room, Keyboard & pedal, Tuning. Chaque réglage y a son explication ; la barre ne garde que l'accès rapide à la salle et à la position. Le clavier de l'ordinateur ne joue pas tant que la fenêtre est ouverte. Les onglets :
     - « Room and listening position » : la distance au mètre, liée à la liste des positions (Custom hors préréglage), Keep loudness, et ses propres préréglages (Save…, Delete), sous « My presets » dans la liste des salles ;
     - « Sustain pedal » : la plage envoyée par la pédale du clavier MIDI, la forme de la courbe (loi de puissance, l'atelier en dessine cinq points), l'apprentissage de la plage et la valeur en direct.
 

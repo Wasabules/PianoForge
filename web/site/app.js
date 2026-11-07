@@ -180,6 +180,7 @@ function typing(event) {
 }
 
 window.addEventListener('keydown', (event) => {
+  if ($('settings').open) return; // the settings dialog keeps its keys (Esc closes it); releases still pass
   if (event.ctrlKey && !event.altKey && !typing(event)) { // the MIDI file player
     if (event.code === 'Space') { event.preventDefault(); togglePlay(); }
     else if (event.code === 'Home') { event.preventDefault(); stopFile(); }
@@ -483,7 +484,23 @@ function apply() {
   send({ type: 'curve', inputMin: 1, inputMax: s.curveMax, points: [0, 0.25, 0.5, 0.75, 1] });
 }
 
+// The settings dialog: a tab per subject, the last one opened remembered.
+function buildSettingsDialog() {
+  const dialog = $('settings');
+  const show = (tab) => {
+    document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === tab)));
+    document.querySelectorAll('.pane').forEach((p) => { p.hidden = p.dataset.pane !== tab; });
+    store.set('settingsTab', tab);
+  };
+  document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => show(t.dataset.tab)));
+  show(store.get('settingsTab', 'sound'));
+  $('openSettings').addEventListener('click', () => dialog.showModal());
+  $('closeSettings').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); }); // the backdrop
+}
+
 function buildSettings() {
+  buildSettingsDialog();
   fillRooms('2');
   ROOM_POSITIONS.forEach((p, i) => $('roomPosition').add(new Option(p.name, String(i))));
   $('roomPosition').add(new Option('Custom', 'custom'));
