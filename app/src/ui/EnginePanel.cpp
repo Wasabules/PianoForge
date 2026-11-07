@@ -119,6 +119,24 @@ EnginePanel::EnginePanel(pf::ModalEngine& m, ReferencePlayer& p, juce::Propertie
     setSize(640, 620);
 }
 
+void EnginePanel::reload()
+{
+    for (size_t i = 0; i < toggles.size(); ++i) {
+        toggles[i].setToggleState(settings.getBoolValue(kOptions[i].key, kOptions[i].defaultOn), juce::dontSendNotification);
+        apply((Option) i);
+    }
+    sympatheticLevel.setValue(settings.getDoubleValue("sympatheticDb", 0.0), juce::dontSendNotification);
+    modal.sympatheticGain = juce::Decibels::decibelsToGain((float) sympatheticLevel.getValue());
+    unison.setValue(settings.getDoubleValue("unisonSpread", 1.0) * 100.0, juce::dontSendNotification);
+    modal.unisonSpread = (float) (unison.getValue() / 100.0);
+    restrike.setValue(settings.getDoubleValue("restrikeFade", 0.8), juce::dontSendNotification);
+    player.restrikeFadeSeconds = modal.restrikeFadeSeconds = (float) restrike.getValue();
+    referenceA4.setValue(settings.getDoubleValue("referenceA4", 440.0), juce::dontSendNotification);
+    temperament.setSelectedId(juce::jlimit(1, (int) kTemperaments.size(), settings.getIntValue("temperament", 1)), juce::dontSendNotification);
+    root.setSelectedId(juce::jlimit(1, 12, settings.getIntValue("temperamentRoot", 1)), juce::dontSendNotification);
+    applyTuning();
+}
+
 void EnginePanel::apply(Option o)
 {
     const bool on = isOn(o);

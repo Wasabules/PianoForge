@@ -28,6 +28,8 @@ public:
     juce::StringArray presetNames() const;
     int presetIndex() const;       // the selected one in presetNames(), -1: custom
     void selectPreset(int index);  // as if chosen in the list
+    /// Reads every setting back from the settings file and applies it (an instrument preset, an import).
+    void reload();
     std::function<void()> onChange; // the room switched on or off, another preset or position (the toolbar follows)
 
     void paint(juce::Graphics&) override;

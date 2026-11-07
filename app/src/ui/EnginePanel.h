@@ -26,6 +26,8 @@ public:
     void setOn(Option o, bool on) { toggles[(size_t) o].setToggleState(on, juce::sendNotification); }
     static juce::String name(Option o);
     float restrikeSeconds() const { return (float) restrike.getValue(); }
+    /// Reads every setting back from the settings file and applies it (a preset, an import).
+    void reload();
 
     void paint(juce::Graphics&) override;
     void resized() override;

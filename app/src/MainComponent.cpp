@@ -23,6 +23,8 @@ enum MenuId {
     kShortcuts = 90, kAbout,
     // Engine > Room presets (one per preset, built-in then the user's)
     kRoomPresetBase = 300,
+    // Presets: the instrument presets (apply, then delete), save, export, import
+    kInstrumentBase = 400, kInstrumentDeleteBase = 500, kInstrumentSave = 390, kExportSettings, kImportSettings,
     // File > Record formats (one per sound format)
     kRecordFormat = 200,
 };
@@ -281,7 +283,7 @@ MainComponent::~MainComponent()
 
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return { "File", "Player", "Engine", "Audio", "Keyboard", "Help" };
+    return { "File", "Player", "Engine", "Presets", "Audio", "Keyboard", "Help" };
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
@@ -364,13 +366,35 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         menu.addItem(item(kRoomSettings, "Room settings...", "Ctrl+M"));
         break;
     }
-    case 3:
+    case 3: {
+        const auto list = instrumentPresets();
+        const auto current = properties.getUserSettings()->getValue("instrumentPreset");
+        if (list.isEmpty())
+            menu.addItem(item(-1, "No preset of your own yet", {}, false, false));
+        for (int k = 0; k < list.size(); ++k) {
+            const auto name = list[k].getProperty("name", juce::String()).toString();
+            menu.addItem(item(kInstrumentBase + k, name, {}, name == current));
+        }
+        menu.addSeparator();
+        menu.addItem(item(kInstrumentSave, "Save the instrument as..."));
+        if (!list.isEmpty()) {
+            juce::PopupMenu remove;
+            for (int k = 0; k < list.size(); ++k)
+                remove.addItem(item(kInstrumentDeleteBase + k, list[k].getProperty("name", juce::String()).toString()));
+            menu.addSubMenu("Delete", remove);
+        }
+        menu.addSeparator();
+        menu.addItem(item(kExportSettings, "Export settings..."));
+        menu.addItem(item(kImportSettings, "Import settings..."));
+        break;
+    }
+    case 4:
         menu.addItem(item(kAudioSettings, "Audio, MIDI and streaming...", "Ctrl+,"));
         menu.addItem(item(kPerformance, "Performance...", "Ctrl+P"));
         menu.addSeparator();
         menu.addItem(item(kResetDropouts, "Reset the dropout counters"));
         break;
-    case 4:
+    case 5:
         menu.addItem(item(kVelocityCurve, "Velocity curve..."));
         menu.addItem(item(kPedalCurve, "Pedal curve..."));
         menu.addSeparator();
@@ -382,7 +406,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         menu.addItem(item(kVelocityDown, "Velocity -10", "C"));
         menu.addItem(item(kVelocityUp, "Velocity +10", "V"));
         break;
-    case 5:
+    case 6:
         menu.addItem(item(kShortcuts, "Keyboard shortcuts", "F1"));
         menu.addItem(item(kAbout, "About PianoForge"));
         break;
@@ -397,6 +421,26 @@ void MainComponent::menuItemSelected(int id, int)
     if (id >= kEngineOption && id < kEngineOption + (int) EnginePanel::Option::count) {
         const auto o = (EnginePanel::Option) (id - kEngineOption);
         enginePanel->setOn(o, !enginePanel->isOn(o));
+        return;
+    }
+    if (id >= kInstrumentBase && id < kInstrumentBase + 100) {
+        applyInstrument(id - kInstrumentBase);
+        return;
+    }
+    if (id >= kInstrumentDeleteBase && id < kInstrumentDeleteBase + 100) {
+        askDeleteInstrument(id - kInstrumentDeleteBase);
+        return;
+    }
+    if (id == kInstrumentSave) {
+        askSaveInstrument();
+        return;
+    }
+    if (id == kExportSettings) {
+        exportSettings();
+        return;
+    }
+    if (id == kImportSettings) {
+        importSettings();
         return;
     }
     if (id >= kRoomPresetBase && id < kRoomPresetBase + roomPanel->presetNames().size()) {
@@ -631,6 +675,204 @@ void MainComponent::openVelocityCurve()
     }
     curveWindow->setVisible(true);
     curveWindow->toFront(true);
+}
+
+// ---- Instrument presets and the settings' backup ----
+
+const juce::StringArray& MainComponent::instrumentKeys()
+{
+    // What an instrument preset holds: the engine, its settings, the tuning, the room and the listening position,
+    // the curves and the volume (not the audio device, the corpus, the folders, the recording formats).
+    static const juce::StringArray keys { "engine", "volume", "velocityCurve", "pedalCurve",
+                                          "modalBody", "modalResidual", "modalSympathetic", "modalHeldKeys", "modalPedalCatch",
+                                          "modalReleaseNoise", "playWholeTake", "sympatheticDb", "unisonSpread", "restrikeFade",
+                                          "referenceA4", "temperament", "temperamentRoot",
+                                          "roomModel", "roomOn", "roomPreset", "roomPresetName", "roomPosition", "roomKeepLoudness",
+                                          "roomLevel", "roomSize", "roomDecay", "roomBrightness", "roomWidth", "roomDistance" };
+    return keys;
+}
+
+juce::Array<juce::var> MainComponent::instrumentPresets()
+{
+    const auto parsed = juce::JSON::parse(properties.getUserSettings()->getValue("instrumentPresets", "[]"));
+    return parsed.isArray() ? *parsed.getArray() : juce::Array<juce::var> {};
+}
+
+void MainComponent::reloadSettings()
+{
+    auto* s = properties.getUserSettings();
+    curveSettings = parseCurve(s->getValue("velocityCurve"));
+    velocityCurve.set(curveSettings);
+    pedalSettings = parsePedalCurve(s->getValue("pedalCurve"));
+    pedalCurve.set(pedalSettings);
+    volume.setValue(s->getDoubleValue("volume", volume.getValue()), juce::sendNotificationSync);
+    enginePanel->reload();
+    roomPanel->reload();
+    if (s->getIntValue("engine", 2) == 2 ? !modalSelected() : modalSelected())
+        selectEngine(s->getIntValue("engine", 2) == 2);
+    refreshRoomButton();
+    for (auto* w : { curveWindow.get(), pedalWindow.get() })
+        if (w != nullptr)
+            w->repaint();
+}
+
+void MainComponent::askSaveInstrument()
+{
+    auto* window = new juce::AlertWindow("Save the instrument",
+                                         "A name for the whole setup: the engine and its settings, the tuning, the room and the "
+                                         "listening position, the curves, the volume (an existing name is replaced):",
+                                         juce::MessageBoxIconType::NoIcon, this);
+    window->addTextEditor("name", properties.getUserSettings()->getValue("instrumentPreset"), "Name");
+    window->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    window->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    window->enterModalState(true, juce::ModalCallbackFunction::create([this, window](int result) {
+        const auto name = window->getTextEditorContents("name").trim();
+        if (result != 1 || name.isEmpty())
+            return;
+        saveSettings(); // the panels save as they change; the main settings, now
+        auto* s = properties.getUserSettings();
+        auto* values = new juce::DynamicObject();
+        for (const auto& key : instrumentKeys())
+            if (s->containsKey(key))
+                values->setProperty(key, s->getValue(key));
+        auto* preset = new juce::DynamicObject();
+        preset->setProperty("name", name);
+        preset->setProperty("values", juce::var(values));
+        auto list = instrumentPresets();
+        int index = -1;
+        for (int k = 0; k < list.size(); ++k)
+            if (list[k].getProperty("name", juce::String()).toString() == name)
+                index = k;
+        if (index >= 0)
+            list.set(index, juce::var(preset));
+        else
+            list.add(juce::var(preset));
+        s->setValue("instrumentPresets", juce::JSON::toString(juce::var(list), true));
+        s->setValue("instrumentPreset", name);
+        s->saveIfNeeded();
+        showMessage("Instrument saved as \"" + name + "\" (Presets menu)", theme::good);
+    }), true);
+}
+
+void MainComponent::applyInstrument(int index)
+{
+    const auto list = instrumentPresets();
+    if (index < 0 || index >= list.size())
+        return;
+    auto* s = properties.getUserSettings();
+    const auto values = list[index].getProperty("values", juce::var());
+    if (auto* object = values.getDynamicObject())
+        for (const auto& property : object->getProperties())
+            if (instrumentKeys().contains(property.name.toString()))
+                s->setValue(property.name.toString(), property.value.toString());
+    const auto name = list[index].getProperty("name", juce::String()).toString();
+    s->setValue("instrumentPreset", name);
+    s->saveIfNeeded();
+    reloadSettings();
+    showMessage("Instrument: " + name, theme::good);
+}
+
+void MainComponent::askDeleteInstrument(int index)
+{
+    const auto list = instrumentPresets();
+    if (index < 0 || index >= list.size())
+        return;
+    const auto name = list[index].getProperty("name", juce::String()).toString();
+    juce::AlertWindow::showAsync(juce::MessageBoxOptions {}
+                                     .withIconType(juce::MessageBoxIconType::QuestionIcon)
+                                     .withTitle("Delete an instrument preset")
+                                     .withMessage("Delete the preset \"" + name + "\"? The instrument as it sounds now stays.")
+                                     .withButton("Delete", 1)
+                                     .withButton("Cancel", 0)
+                                     .withAssociatedComponent(this),
+                                 [safe = juce::Component::SafePointer<MainComponent>(this), name](int result) {
+                                     if (result == 0 || safe == nullptr)
+                                         return;
+                                     auto list = safe->instrumentPresets();
+                                     for (int k = 0; k < list.size(); ++k)
+                                         if (list[k].getProperty("name", juce::String()).toString() == name) {
+                                             list.remove(k);
+                                             break;
+                                         }
+                                     auto* s = safe->properties.getUserSettings();
+                                     s->setValue("instrumentPresets", juce::JSON::toString(juce::var(list), true));
+                                     if (s->getValue("instrumentPreset") == name)
+                                         s->setValue("instrumentPreset", juce::String());
+                                     s->saveIfNeeded();
+                                 });
+}
+
+namespace {
+/// Settings that belong to this computer, left out of an export and of an import.
+bool machineSetting(const juce::String& key)
+{
+    return key == "audio" || key.startsWith("audioDevice.") || key == "corpus" || key == "midiFolder" || key == "mirrorDevice"
+        || key == "engineRateMode";
+}
+} // namespace
+
+void MainComponent::exportSettings()
+{
+    saveSettings();
+    settingsChooser = std::make_unique<juce::FileChooser>(
+        "Export the settings", juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("PianoForge settings.pfsettings"),
+        "*.pfsettings");
+    settingsChooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                                     | juce::FileBrowserComponent::warnAboutOverwriting,
+                                 [this](const juce::FileChooser& chooser) {
+                                     auto file = chooser.getResult();
+                                     if (file == juce::File())
+                                         return;
+                                     file = file.withFileExtension(".pfsettings");
+                                     juce::XmlElement xml("PIANOFORGESETTINGS");
+                                     xml.setAttribute("version", 1);
+                                     const auto& all = properties.getUserSettings()->getAllProperties();
+                                     int count = 0;
+                                     for (int k = 0; k < all.size(); ++k) {
+                                         const auto key = all.getAllKeys()[k];
+                                         if (machineSetting(key))
+                                             continue;
+                                         auto* e = xml.createNewChildElement("VALUE");
+                                         e->setAttribute("name", key);
+                                         e->setAttribute("val", all.getAllValues()[k]);
+                                         ++count;
+                                     }
+                                     if (xml.writeTo(file))
+                                         showMessage("Exported " + juce::String(count) + " settings to " + file.getFullPathName(), theme::good);
+                                     else
+                                         showMessage("Cannot write " + file.getFullPathName(), theme::bad);
+                                 });
+}
+
+void MainComponent::importSettings()
+{
+    settingsChooser = std::make_unique<juce::FileChooser>(
+        "Import settings", juce::File::getSpecialLocation(juce::File::userDocumentsDirectory), "*.pfsettings");
+    settingsChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                 [this](const juce::FileChooser& chooser) {
+                                     const auto file = chooser.getResult();
+                                     if (file == juce::File())
+                                         return;
+                                     const auto xml = juce::XmlDocument::parse(file);
+                                     if (xml == nullptr || !xml->hasTagName("PIANOFORGESETTINGS")) {
+                                         showMessage(file.getFileName() + " is not a PianoForge settings file", theme::bad);
+                                         return;
+                                     }
+                                     auto* s = properties.getUserSettings();
+                                     int count = 0;
+                                     for (auto* e : xml->getChildWithTagNameIterator("VALUE")) {
+                                         const auto key = e->getStringAttribute("name");
+                                         if (key.isEmpty() || machineSetting(key))
+                                             continue;
+                                         s->setValue(key, e->getStringAttribute("val"));
+                                         ++count;
+                                     }
+                                     s->saveIfNeeded();
+                                     reloadSettings();
+                                     showMessage("Imported " + juce::String(count) + " settings from " + file.getFileName()
+                                                     + " (the audio device and the folders of this computer are kept)",
+                                                 theme::good);
+                                 });
 }
 
 void MainComponent::openPedalCurve()

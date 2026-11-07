@@ -75,6 +75,16 @@ private:
     void closeMidiFile();
     void openVelocityCurve();
     void openPedalCurve();
+    // Instrument presets (the whole setup, named) and the settings' backup.
+    static const juce::StringArray& instrumentKeys();
+    juce::Array<juce::var> instrumentPresets();
+    void reloadSettings();          // every live object from the settings file
+    void askSaveInstrument();
+    void applyInstrument(int index);
+    void askDeleteInstrument(int index);
+    void exportSettings();
+    void importSettings();
+    std::unique_ptr<juce::FileChooser> settingsChooser;
     void updateRenderedLayers();
     void showWindow(std::unique_ptr<ToolWindow>& window, const juce::String& title, juce::Component& content);
     void showShortcuts();

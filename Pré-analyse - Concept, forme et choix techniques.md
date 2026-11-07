@@ -876,6 +876,11 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
 
     Le voyant Pedal se remplit selon la course reçue par le moteur (`pedalValue`, nouveau dans le moteur). Essai dans Edge sans fenêtre : un préréglage enregistré revient avec sa distance et son Keep loudness, puis se supprime ; la courbe est mémorisée.
 
+**Préréglages de l'instrument, sauvegarde et restauration (7 novembre 2026).**
+  - *Menu Presets.* « Save the instrument as… » garde toute l'installation sous un nom : le moteur et ses réglages (options, résonance, unisson, refrappe), l'accord, la salle et la position d'écoute (avec le préréglage de salle choisi), les courbes de vélocité et de pédale, le volume. Un nom existant est remplacé. Les préréglages se choisissent dans le menu, se suppriment dans Delete après confirmation, et le préréglage en cours est coché. Le périphérique audio, le corpus, les dossiers et les formats d'enregistrement n'en font pas partie.
+  - *Export et import des réglages* (Presets > Export settings… / Import settings…) : un fichier `.pfsettings` (XML) qui contient tous les réglages, les préréglages de l'instrument et de salle et les courbes. Les réglages propres à l'ordinateur sont laissés de côté : périphérique audio, pilote par type, corpus, dossiers, sortie miroir, fréquence du moteur. L'import s'applique tout de suite, sans relancer.
+  - *Mécanisme commun* : `EnginePanel::reload()` et `RoomPanel::reload()` relisent tout depuis le fichier de réglages et l'appliquent au moteur et à la salle. L'autotest 8h modifie un fichier sous les panneaux (unisson 2,5, table coupée, La 442 Hz, une salle perso « Hall, 12 m ») et vérifie le moteur et la salle après relecture.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

@@ -196,6 +196,16 @@ RoomPanel::RoomPanel(pf::Room& r, juce::PropertiesFile& s) : room(r), settings(s
                                                              &positionLabel, &position, &keepLoudness, &summary, &note })
         addAndMakeVisible(*c);
 
+    reload();
+    setSize(600, 540);
+}
+
+void RoomPanel::reload()
+{
+    loading = true;
+    onButton.setToggleState(settings.getBoolValue("roomOn", true), juce::dontSendNotification);
+    loadUserPresets();
+    rebuildPresetList(kCustomId);
     // The saved settings, or the defaults. Settings of the earlier model (a level against the dry sound, other
     // sizes): their preset, at the keyboard.
     const bool current = settings.getIntValue("roomModel", 1) == kModel;
@@ -236,7 +246,6 @@ RoomPanel::RoomPanel(pf::Room& r, juce::PropertiesFile& s) : room(r), settings(s
     describe();
     if (!current)
         save();
-    setSize(600, 540);
 }
 
 void RoomPanel::setOn(bool on)

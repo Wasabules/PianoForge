@@ -45,6 +45,11 @@ Play a MIDI file live: File > Open MIDI file (Ctrl+O), drop it on the window, or
 Tracks... picks the parts to play (a part is a track's channel; drums off by default); -oct, -, +, +oct
 transpose the file by semitones or octaves.
 
+Presets saves the whole instrument under a name (the engine and its settings, the tuning, the room and the
+listening position, the curves, the volume) and switches between them; Presets > Export settings / Import settings
+keeps them, the curves and the rooms of one's own in a .pfsettings file (the audio device and the folders of the
+computer are left out).
+
 A safety limiter at the output (Audio > Output) keeps everything heard, recorded and streamed under -1 dBFS, with
 no latency and untouched while under it.
 

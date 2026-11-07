@@ -5,6 +5,8 @@
 #include "KeyboardInput.h"
 #include "MidiFilePlayer.h"
 #include "OfflineRender.h"
+#include "ui/EnginePanel.h"
+#include "ui/RoomPanel.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
 #include "TakeRecorder.h"
@@ -899,6 +901,41 @@ int runSelfTest(const juce::StringArray& arguments)
         }
         dir.deleteRecursively();
         r.check(ok, "recording formats: " + lines.joinIntoString("; "));
+    }
+
+    // 8h. Settings read back (an instrument preset, an import): the panels, rebuilt from a settings file changed
+    //     under them, set the engine and the room as the file says, a room preset of one's own included.
+    {
+        const auto file = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("pianoforge-selftest.settings");
+        file.deleteFile();
+        juce::PropertiesFile::Options options;
+        juce::PropertiesFile settings(file, options);
+        pf::ModalEngine engine;
+        ReferencePlayer reference;
+        pf::Room room;
+        EnginePanel enginePanel(engine, reference, settings);
+        RoomPanel roomPanel(room, settings);
+        const bool before = engine.unisonSpread.load() == 1.0f && room.distance.load() == 1.0f;
+        settings.setValue("unisonSpread", 2.5);
+        settings.setValue("modalBody", false);
+        settings.setValue("referenceA4", 442.0);
+        settings.setValue("roomModel", 2);
+        settings.setValue("roomUserPresets", "[{\"name\":\"Hall, 12 m\",\"roomLevel\":-2.0,\"roomSize\":0.93,\"roomDecay\":3.0,"
+                                             "\"roomBrightness\":0.45,\"roomWidth\":1.0,\"roomDistance\":12.0,\"keepLoudness\":false}]");
+        settings.setValue("roomPreset", 200);
+        settings.setValue("roomPresetName", "Hall, 12 m");
+        enginePanel.reload();
+        roomPanel.reload();
+        const bool engineOk = std::abs(engine.unisonSpread.load() - 2.5f) < 1e-6f && !engine.bodyEnabled.load()
+                           && std::abs(engine.referenceA4.load() - 442.0f) < 1e-3f;
+        const bool roomOk = std::abs(room.distance.load() - 12.0f) < 1e-3f && std::abs(room.decaySeconds.load() - 3.0f) < 1e-3f
+                         && !room.keepLoudness.load() && roomPanel.presetName().startsWith("Hall, 12 m");
+        r.check(before && engineOk && roomOk,
+                "settings read back: unison " + juce::String(engine.unisonSpread.load(), 2) + ", body " + (engine.bodyEnabled.load() ? "on" : "off")
+                    + ", A4 " + juce::String(engine.referenceA4.load(), 1) + " Hz; room \"" + roomPanel.presetName() + "\", decay "
+                    + juce::String(room.decaySeconds.load(), 1) + " s, keep loudness " + (room.keepLoudness.load() ? "on" : "off")
+                    + " (expected 2.50, off, 442.0; Hall, 12 m, 3.0 s, off)");
+        file.deleteFile();
     }
 
     // 9. Modal engine, when the corpus state has a modal profile (forge export).
