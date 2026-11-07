@@ -3,6 +3,7 @@
 #include "LiveRecorder.h"
 #include "MidiFilePlayer.h"
 #include "MirrorOutput.h"
+#include "TakePlayback.h"
 #include "TakeRecorder.h"
 
 #include <pianoforge/audio_feed.hpp>
@@ -55,6 +56,7 @@ public:
     MidiFilePlayer filePlayer;             // a MIDI file, played to the sample with what the keyboards play
     pf::Room room;                         // the room around the piano, at the output (off until the interface sets it)
     pf::Limiter limiter;                   // after it: nothing over -1 dBFS reaches the device, a recording or a stream
+    TakePlayback playback;                 // takes listened to: heard only (after the recording and streaming taps)
     /// The engine's rate: 0 the device's divided down to 48 kHz or less (applies at the next device start), 1 the
     /// device's own.
     std::atomic<int> rateMode { 0 };
@@ -183,12 +185,15 @@ public:
             if (numOutputs >= 2 && outputs[0] != nullptr && outputs[1] != nullptr)
                 limiter.process(outputs[0], outputs[1], n);
             finish(outputs, numOutputs, n);
+            if (numOutputs >= 2)
+                playback.render(outputs[0], outputs[1], n, recordingRate.load(std::memory_order_relaxed));
         } else {
             float* engineOut[2] = { engineL.data(), engineR.data() };
             engine.process(engineOut, 2, frames, events.data(), count);
             room.process(engineOut[0], engineOut[1], frames);
             limiter.process(engineOut[0], engineOut[1], frames);
             finish(engineOut, 2, frames);
+            playback.render(engineOut[0], engineOut[1], frames, recordingRate.load(std::memory_order_relaxed));
             // Up to the device's rate: the carry from last time, then the new frames; what is left over waits.
             upsampleL.process(engineL.data(), frames, upL.data());
             upsampleR.process(engineR.data(), frames, upR.data());

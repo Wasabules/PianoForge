@@ -64,6 +64,12 @@ Record (Ctrl+R) writes the sound live as a 32-bit float WAV; when it stops, the 
 formats are made from it in the background: WAV 24-bit, FLAC 24-bit, MP3 320 kbit/s (Windows' Media Foundation
 encoder), Opus 192 kbit/s; plus the MIDI, aligned to the sample. Recordings go to Documents/PianoForge/Recordings.
 
+File > Takes and recordings (Ctrl+T) lists the takes (Ctrl+S) and the recordings together, with their date, length,
+notes and files. Listen to one (Space), or to two in A/B from the same instant (A and B switch between them with a
+10 ms crossfade); play one again through the engine from its MIDI, or render it again with the settings heard now (a
+new WAV next to it); rename it (all its files), show it in its folder, or delete it (to the recycle bin). What is
+listened to there is heard only: neither recorded again nor streamed.
+
 When the device runs faster than 50 kHz (the Windows mixer can impose 192 kHz), the engine runs at the device's
 rate divided by 2, 4 or 8 (44.1 or 48 kHz) and its sound is brought up to the device's: Audio > Engine rate.
 

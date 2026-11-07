@@ -10,7 +10,7 @@ constexpr int kLayoutAzerty = 1, kLayoutQwerty = 2;
 
 enum MenuId {
     // File
-    kRecord = 1, kRecordMidi, kSaveTake, kOpenRecordings, kOpenTakes, kChangeCorpus, kQuit, kOpenMidi,
+    kRecord = 1, kRecordMidi, kSaveTake, kTakes, kOpenRecordings, kOpenTakes, kChangeCorpus, kQuit, kOpenMidi,
     // Player
     kPlayPause = 80, kStopPlayer, kBack, kForward, kLoop, kCloseMidi, kSpeed = 100,
     // Engine
@@ -265,6 +265,9 @@ MainComponent::~MainComponent()
         takeRender.join();
     if (modalLoader.joinable())
         modalLoader.join();
+    takesWindow.reset();
+    takesPanel.reset();
+    host.playback.release();
     engineWindow.reset();
     audioWindow.reset();
     performanceWindow.reset();
@@ -317,6 +320,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         menu.addItem(item(kSaveTake, "Save last take (MIDI and WAV render)", "Ctrl+S"));
         menu.addSeparator();
         menu.addItem(item(kOpenRecordings, "Open the recordings folder"));
+        menu.addItem(item(kTakes, "Takes and recordings...", "Ctrl+T"));
         menu.addItem(item(kOpenTakes, "Open the takes folder"));
         menu.addSeparator();
         menu.addItem(item(kChangeCorpus, "Change corpus..."));
@@ -468,6 +472,7 @@ void MainComponent::menuItemSelected(int id, int)
     case kSaveTake: saveLastTake(); break;
     case kOpenRecordings: recordingsFolder().createDirectory(); recordingsFolder().startAsProcess(); break;
     case kOpenTakes: takesFolder().createDirectory(); takesFolder().startAsProcess(); break;
+    case kTakes: openTakes(); break;
     case kChangeCorpus: chooseCorpus(); break;
     case kQuit: juce::JUCEApplication::getInstance()->systemRequestedQuit(); break;
     case kEngineReference: selectEngine(false); break;
@@ -588,6 +593,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
         case 'S': saveLastTake(); return true;
         case 'E': showWindow(engineWindow, "Engine settings", *enginePanel); return true;
         case 'M': showWindow(roomWindow, "Room", *roomPanel); return true;
+        case 'T': openTakes(); return true;
         case 'P': showWindow(performanceWindow, "Performance", performancePanel); return true;
         case ',': showWindow(audioWindow, "Audio, MIDI and streaming", *audioPanel); return true;
         case '1': selectEngine(false); return true;
@@ -1058,35 +1064,90 @@ void MainComponent::saveLastTake()
         return;
     }
     showMessage("Saved " + midiFile.getFileName() + " (" + summary + "); rendering the WAV...");
+    renderInBackground(TakeRecorder::toSequence(*take), take->sampleRate, wavFile, summary);
+}
+
+void MainComponent::renderInBackground(juce::MidiMessageSequence sequence, double rate, juce::File wavFile, juce::String summary,
+                                       std::function<void(bool)> done)
+{
+    auto bank = player.sharedBank();
+    auto profile = modal.sharedProfile();
+    const bool withModal = modalSelected() && profile != nullptr;
+    if ((withModal ? profile == nullptr : bank == nullptr) || renderingTake.load()) {
+        showMessage(renderingTake.load() ? juce::String("A render is running: try again once it is done") : juce::String("No engine to render with yet"),
+                    theme::busy);
+        if (done)
+            done(false);
+        return;
+    }
     if (takeRender.joinable())
         takeRender.join();
     renderingTake = true;
     // Same engine and settings as heard live, at the rate it was played: the WAV is the take as heard.
-    // Every setting of the engine heard (tuning, sympathetic resonance, pedal catch, release noise...) and the room,
-    // as they are now; the tail is longer by the room's.
-    takeRender = std::thread([sequence = TakeRecorder::toSequence(*take), bank = std::move(bank), profile = std::move(profile),
+    // Every setting of the engine heard (tuning, sympathetic resonance, pedal catch, release noise...), the room and
+    // the limiter, as they are now; the tail is longer by the room's.
+    takeRender = std::thread([sequence = std::move(sequence), bank = std::move(bank), profile = std::move(profile),
                               withModal, settings = modal.settings(), room = host.room.settings(), limit = host.limiter.enabled.load(),
-                              rate = take->sampleRate,
-                              restrike = enginePanel->restrikeSeconds(), whole = enginePanel->isOn(EnginePanel::Option::wholeTake),
-                              wavFile, summary, safe = juce::Component::SafePointer<MainComponent>(this)] {
+                              rate, restrike = enginePanel->restrikeSeconds(), whole = enginePanel->isOn(EnginePanel::Option::wholeTake),
+                              wavFile, summary, done = std::move(done), safe = juce::Component::SafePointer<MainComponent>(this)] {
         const double tail = 4.0 + (room.enabled ? pf::Room::tailSeconds(room) : 0.0);
         auto audio = withModal ? renderSequenceModal(sequence, profile, rate, settings, tail)
                                : renderSequence(sequence, bank, rate, restrike, whole, tail);
         applyRoom(audio, room, rate);
         applyLimiter(audio, limit, rate);
         const auto written = writeWav(audio, rate, wavFile);
-        juce::MessageManager::callAsync([safe, written, wavFile, summary] {
+        juce::MessageManager::callAsync([safe, written, wavFile, summary, done] {
             if (auto* self = safe.getComponent()) {
                 self->renderingTake = false;
                 if (written.wasOk())
-                    self->showMessage("Saved " + wavFile.getFileNameWithoutExtension() + " .mid and .wav (" + summary + ") in "
+                    self->showMessage("Rendered " + wavFile.getFileName() + " (" + summary + ") in "
                                           + wavFile.getParentDirectory().getFullPathName(),
                                       theme::good);
                 else
                     self->showMessage("WAV render failed: " + written.getErrorMessage(), theme::bad);
+                if (self->takesPanel != nullptr)
+                    self->takesPanel->refresh();
+                if (done)
+                    done(written.wasOk());
             }
         });
     });
+}
+
+void MainComponent::openTakes()
+{
+    if (takesPanel == nullptr) {
+        TakesPanel::Hooks hooks;
+        hooks.playMidi = [this](const juce::File& midi) {
+            openMidiFile(midi);
+            if (!host.filePlayer.isPlaying())
+                playerBar->togglePlay();
+        };
+        hooks.renderAgain = [this](const juce::File& midiFile) {
+            juce::MidiFile midi;
+            juce::FileInputStream in(midiFile);
+            if (!in.openedOk() || !midi.readFrom(in, false)) { // false: no added note-offs (see TakeRecorder)
+                showMessage("Cannot read " + midiFile.getFileName(), theme::bad);
+                return;
+            }
+            midi.convertTimestampTicksToSeconds();
+            juce::MidiMessageSequence sequence;
+            int notes = 0;
+            for (int t = 0; t < midi.getNumTracks(); ++t)
+                sequence.addSequence(*midi.getTrack(t), 0.0);
+            for (const auto* e : sequence)
+                notes += e->message.isNoteOn() ? 1 : 0;
+            const double rate = host.currentRate() > 0.0 ? host.currentRate() : 44100.0;
+            const auto stem = midiFile.getFileNameWithoutExtension();
+            const auto wav = midiFile.getSiblingFile(stem + " (render " + juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S") + ").wav");
+            showMessage("Rendering " + stem + " again with the settings heard now...");
+            renderInBackground(sequence, rate, wav, juce::String(notes) + " notes");
+        };
+        takesPanel = std::make_unique<TakesPanel>(host.playback, std::vector<juce::File> { takesFolder(), recordingsFolder() }, hooks);
+    } else {
+        takesPanel->refresh();
+    }
+    showWindow(takesWindow, "Takes and recordings", *takesPanel);
 }
 
 void MainComponent::chooseCorpus()

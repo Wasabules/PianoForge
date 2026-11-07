@@ -938,6 +938,68 @@ int runSelfTest(const juce::StringArray& arguments)
         file.deleteFile();
     }
 
+    // 8i. Takes listened to: a WAV (440 Hz on the left, 660 Hz on the right) played through the audio host, heard as
+    //     it is; then two in A/B (A silent, B the tone), switched to B mid-way with a 10 ms crossfade; the end stops
+    //     the playback. Not recorded: the live recording tap does not see it.
+    {
+        const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("pianoforge-selftest-takes");
+        dir.deleteRecursively();
+        dir.createDirectory();
+        auto write = [&](const juce::File& f, double amp) {
+            const int n = (int) (1.0 * fs);
+            juce::AudioBuffer<float> x(2, n);
+            for (int i = 0; i < n; ++i) {
+                x.setSample(0, i, (float) (amp * std::sin(2.0 * juce::MathConstants<double>::pi * 440.0 * i / fs)));
+                x.setSample(1, i, (float) (amp * std::sin(2.0 * juce::MathConstants<double>::pi * 660.0 * i / fs)));
+            }
+            writeWav(x, fs, f);
+            return x;
+        };
+        const auto tone = write(dir.getChildFile("tone.wav"), 0.25);
+        write(dir.getChildFile("silence.wav"), 0.0);
+        player.playWholeTake = false;
+        AudioHost host { player };
+        host.start(fs, 512);
+        std::vector<float> l(512), rr(512);
+        float* outputs[2] = { l.data(), rr.data() };
+        auto run = [&](double seconds, std::vector<float>& outL) {
+            for (int k = 0; k < (int) (seconds * fs) / 512; ++k) {
+                host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, 512, {});
+                outL.insert(outL.end(), l.begin(), l.end());
+            }
+        };
+        const auto loaded = host.playback.load(dir.getChildFile("tone.wav"));
+        host.playback.play();
+        std::vector<float> heard;
+        run(0.5, heard);
+        float heardWorst = 0.0f; // against the file, sample for sample (the engine is silent)
+        for (std::size_t k = 0; k < heard.size(); ++k)
+            heardWorst = std::max(heardWorst, std::abs(heard[k] - tone.getSample(0, (int) k)));
+        // A/B: A silent, B the tone; B from 0.25 s.
+        host.playback.load(dir.getChildFile("silence.wav"), dir.getChildFile("tone.wav"));
+        host.playback.play();
+        std::vector<float> ab;
+        run(0.25, ab);
+        host.playback.setSide(1);
+        run(0.5, ab);
+        auto rms = [&](double a, double b) {
+            double e = 0.0;
+            for (int i = (int) (a * fs); i < (int) (b * fs); ++i)
+                e += (double) ab[(size_t) i] * ab[(size_t) i];
+            return std::sqrt(e / ((b - a) * fs));
+        };
+        const double before = rms(0.05, 0.24), after = rms(0.3, 0.7);
+        std::vector<float> rest;
+        run(0.5, rest); // past the end (1 s): stopped
+        const bool stopped = !host.playback.isPlaying();
+        r.check(loaded.isEmpty() && heardWorst < 1e-6f && before < 1e-6 && std::abs(after - 0.25 / std::sqrt(2.0)) < 0.01 && stopped,
+                "takes listened to: the file heard as it is (largest difference " + juce::String(heardWorst, 7) + "); A/B: A "
+                    + juce::String(before, 4) + ", B " + juce::String(after, 4) + " RMS (expected 0, 0.177); stopped at the end: "
+                    + (stopped ? "yes" : "no"));
+        host.playback.release();
+        dir.deleteRecursively();
+    }
+
     // 9. Modal engine, when the corpus state has a modal profile (forge export).
     if (const auto path = folder.getParentDirectory().getChildFile("modal-profile.bin"); path.existsAsFile()) {
         std::string error;

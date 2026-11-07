@@ -3,6 +3,7 @@
 #include "AudioHost.h"
 #include "MirrorOutput.h"
 #include "ui/AudioPanel.h"
+#include "ui/TakesPanel.h"
 #include "ui/EnginePanel.h"
 #include "ui/PerformancePanel.h"
 #include "ui/PlayerBar.h"
@@ -424,6 +425,12 @@ int runUiSnapshots(const juce::StringArray& arguments)
             lift[(std::size_t) v] = juce::jlimit(0.0f, 1.0f, (float) (v - 12) / 8.0f);
         pedalPanel.setDamperLift(lift);
         save(pedalPanel, "pedal-curve");
+        {   // The takes and recordings of this computer.
+            TakePlayback playback;
+            const auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("PianoForge");
+            TakesPanel takes(playback, { docs.getChildFile("Takes"), docs.getChildFile("Recordings") }, {});
+            save(takes, "takes");
+        }
         settings.getFile().deleteFile();
     }
     juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
