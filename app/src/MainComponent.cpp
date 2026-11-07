@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 
+#include "CurveText.h"
 #include "OfflineRender.h"
 
 namespace pf::app {
@@ -52,46 +53,21 @@ juce::File findCorpus(const juce::String& saved)
     return {};
 }
 
-/// Saved as "inputMin;inputMax;p0,p1,p2,p3,p4".
+/// Saved as "inputMin;inputMax;p0,p1,p2,p3,p4" (CurveText.h, shared with the plugin).
 pf::VelocityCurve::Settings parseCurve(const juce::String& text)
 {
-    pf::VelocityCurve::Settings s;
-    const auto parts = juce::StringArray::fromTokens(text, ";", "");
-    if (parts.size() != 3)
-        return s;
-    const auto points = juce::StringArray::fromTokens(parts[2], ",", "");
-    if (points.size() != pf::VelocityCurve::kPoints)
-        return s;
-    s.inputMin = juce::jlimit(1, 126, parts[0].getIntValue());
-    s.inputMax = juce::jlimit(s.inputMin + 1, 127, parts[1].getIntValue());
-    for (int i = 0; i < pf::VelocityCurve::kPoints; ++i)
-        s.points[(size_t) i] = juce::jlimit(0.0f, 1.0f, points[i].getFloatValue());
-    return s;
+    return parseCurveText(text);
 }
 
 /// The pedal curve, saved like the velocity curve; its input range may start at 0.
 pf::PedalCurve::Settings parsePedalCurve(const juce::String& text)
 {
-    auto s = pf::PedalCurve::defaults();
-    const auto parts = juce::StringArray::fromTokens(text, ";", "");
-    if (parts.size() != 3)
-        return s;
-    const auto points = juce::StringArray::fromTokens(parts[2], ",", "");
-    if (points.size() != pf::PedalCurve::kPoints)
-        return s;
-    s.inputMin = juce::jlimit(0, 126, parts[0].getIntValue());
-    s.inputMax = juce::jlimit(s.inputMin + 1, 127, parts[1].getIntValue());
-    for (int i = 0; i < pf::PedalCurve::kPoints; ++i)
-        s.points[(size_t) i] = juce::jlimit(0.0f, 1.0f, points[i].getFloatValue());
-    return s;
+    return parseCurveText(text, 0, pf::PedalCurve::defaults());
 }
 
 juce::String formatCurve(const pf::VelocityCurve::Settings& s)
 {
-    juce::StringArray points;
-    for (const float p : s.points)
-        points.add(juce::String(p, 4));
-    return juce::String(s.inputMin) + ";" + juce::String(s.inputMax) + ";" + points.joinIntoString(",");
+    return formatCurveText(s);
 }
 
 juce::String noteName(int note)

@@ -63,6 +63,9 @@ public:
     void process(float* const* outputs, int numChannels, int numSamples, const Event* events,
                  int numEvents) noexcept override;
     void allSoundOff() noexcept override;
+    /// From any thread: from the next block, everything silent (voices, soundboard, free strings) and the pedals up,
+    /// as a fresh start (a host's reset: the same input then gives the same output).
+    void reset() noexcept { resetPending.store(true, std::memory_order_release); }
 
     /// Message thread: replaces the profile (nullptr: silence). Waits for the audio thread to let go of the old one.
     void install(std::shared_ptr<const ModalProfile> profile);
@@ -212,6 +215,7 @@ private:
     std::atomic<const ModalProfile*> seenByAudio { nullptr };
     const ModalProfile* current = nullptr;              // audio thread
     std::atomic<bool> audioRunning { false };
+    std::atomic<bool> resetPending { false };
 };
 
 } // namespace pf

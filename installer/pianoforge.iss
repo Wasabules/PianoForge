@@ -3,8 +3,10 @@
 ;
 ; - For the current user by default (no administrator rights; %LOCALAPPDATA%\Programs\PianoForge), or for every
 ;   user if chosen; an update keeps the choice made the first time.
-; - The application and the Visual C++ runtime next to it; optionally the OBS Studio plugin, where OBS looks for
-;   plugins of every user (a plugin OBS is using moves aside, the new one loads at OBS's next start).
+; - The application and the Visual C++ runtime next to it; the VST3 plugin (ticked by default), in the VST3 folder
+;   of every user (all-users install: Common Files\VST3) or of the current user (%LOCALAPPDATA%\Programs\Common\VST3);
+;   optionally the OBS Studio plugin, where OBS looks for plugins of every user. A plugin a host or OBS is using
+;   moves aside, and the new one loads when it is loaded again.
 ; - Never the corpus nor a profile: the application asks for its corpus at first start.
 ; - Settings, takes and recordings are the user's: neither an update nor an uninstall touches them.
 ; - Updates (Help > Check for updates) run it with /SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS
@@ -15,6 +17,9 @@
 #endif
 #ifndef WithObs
   #define WithObs "0"
+#endif
+#ifndef WithVst3
+  #define WithVst3 "0"
 #endif
 
 [Setup]
@@ -52,6 +57,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+#if WithVst3 == "1"
+Name: "vst3"; Description: "The VST3 plugin (PianoForge in a host: REAPER, FL Studio, Cubase...)"; GroupDescription: "Plugins:"
+#endif
 #if WithObs == "1"
 Name: "obsplugin"; Description: "The OBS Studio plugin (the PianoForge audio source, for streaming)"; GroupDescription: "OBS Studio:"; Check: ObsInstalled
 #endif
@@ -61,6 +69,12 @@ Source: "{#StageDir}\PianoForge.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\msvcp140.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\vcruntime140_1.dll"; DestDir: "{app}"; Flags: ignoreversion
+#if WithVst3 == "1"
+Source: "{#StageDir}\vst3\PianoForge.vst3\Contents\x86_64-win\PianoForge.vst3"; DestDir: "{autocf64}\VST3\PianoForge.vst3\Contents\x86_64-win"; Flags: ignoreversion; Tasks: vst3; BeforeInstall: MoveVst3Aside
+Source: "{#StageDir}\vst3\PianoForge.vst3\Contents\Resources\moduleinfo.json"; DestDir: "{autocf64}\VST3\PianoForge.vst3\Contents\Resources"; Flags: ignoreversion; Tasks: vst3
+Source: "{#StageDir}\vst3\PianoForge.vst3\desktop.ini"; DestDir: "{autocf64}\VST3\PianoForge.vst3"; Flags: ignoreversion; Tasks: vst3
+Source: "{#StageDir}\vst3\PianoForge.vst3\Plugin.ico"; DestDir: "{autocf64}\VST3\PianoForge.vst3"; Flags: ignoreversion; Tasks: vst3
+#endif
 #if WithObs == "1"
 Source: "{#StageDir}\obs\pianoforge-obs.dll"; DestDir: "{commonappdata}\obs-studio\plugins\pianoforge-obs\bin\64bit"; Flags: ignoreversion; Tasks: obsplugin; BeforeInstall: MovePluginAside
 Source: "{#StageDir}\obs\en-US.ini"; DestDir: "{commonappdata}\obs-studio\plugins\pianoforge-obs\data\locale"; Flags: ignoreversion; Tasks: obsplugin
@@ -76,6 +90,7 @@ Filename: "{app}\PianoForge.exe"; Flags: nowait; Check: RelaunchAfterUpdate
 
 [UninstallDelete]
 Type: files; Name: "{commonappdata}\obs-studio\plugins\pianoforge-obs\bin\64bit\*.old"
+Type: files; Name: "{autocf64}\VST3\PianoForge.vst3\Contents\x86_64-win\*.old"
 
 [Code]
 function ObsInstalled: Boolean;
@@ -106,6 +121,26 @@ begin
     FindClose(Found);
   end;
   Target := Dir + '\pianoforge-obs.dll';
+  if FileExists(Target) and not DeleteFile(Target) then
+    RenameFile(Target, Target + '.' + GetDateTimeString('yyyymmdd-hhnnss', #0, #0) + '.old');
+end;
+
+{ The same for the VST3 plugin a host has loaded. }
+procedure MoveVst3Aside;
+var
+  Dir, Target: String;
+  Found: TFindRec;
+begin
+  Dir := ExpandConstant('{autocf64}\VST3\PianoForge.vst3\Contents\x86_64-win');
+  if FindFirst(Dir + '\*.old', Found) then
+  try
+    repeat
+      DeleteFile(Dir + '\' + Found.Name);
+    until not FindNext(Found);
+  finally
+    FindClose(Found);
+  end;
+  Target := Dir + '\PianoForge.vst3';
   if FileExists(Target) and not DeleteFile(Target) then
     RenameFile(Target, Target + '.' + GetDateTimeString('yyyymmdd-hhnnss', #0, #0) + '.old');
 end;

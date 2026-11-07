@@ -19,6 +19,7 @@ switches between that reference and the modal engine while playing.
 | `tools/bench/` | Reference bench (Python): renders a VST3 instrument through measurement sessions and checks the takes. |
 | `tools/forge/` | Forge (Python): analysis and calibration, from the reference corpus to engine data. |
 | `studies/` | Standalone computations and spikes behind design decisions (resonator precision, CPU budget, resynthesis). |
+| `plugin/` | The VST3 instrument (JUCE): the same engine, room, headphones and limiter in a host. |
 | `obs/` | OBS Studio plugin: the PianoForge audio source, fed by the application through shared memory. |
 | `web/` | The modal engine and the room in WebAssembly, played from a browser page. |
 | `installer/` | The Windows installer (Inno Setup 6) and the update manifest it comes with. |
@@ -94,6 +95,32 @@ Offline render of a MIDI file, through the reference player or the modal engine:
 PianoForge.exe --render take.mid take.wav corpus/reference/noire-dry/single-notes [--engine modal]
 ```
 
+## VST3 plugin
+
+```
+cmake --build --preset windows-release --target install-vst3-plugin
+```
+
+builds `PianoForge.vst3` and copies it to the per-user VST3 folder (`%LOCALAPPDATA%\Programs\Common\VST3`, which
+REAPER scans; FL Studio and others may need it added to their plugin folders), no administrator rights needed. A
+host that has it loaded keeps its copy (moved aside) until it loads the plugin again; rescan the plugins in the
+host the first time. The installer offers it too.
+
+- The sound is the application's: the modal engine, the room and the listening position (headphones included), the
+  limiter, with the same settings as automatable parameters (volume, what the engine models, sympathetic level,
+  unison tuning, re-strike, room, distance, keep loudness, speakers or headphones, A4, temperament, limiter).
+  MIDI: notes, CC64 continuous sustain, CC66 sostenuto, CC67 soft pedal. A velocity curve of its own, drawn, or the
+  application's (Keyboard > Velocity curve) copied in.
+- The modal profile is never inside the plugin: it plays the one of the application's corpus (its settings say
+  where), or a `modal-profile.bin` chosen in the plugin (Choose profile...), whose path the project keeps. It loads
+  in the background, once per process for every instance.
+- Any block size, sample-accurate MIDI. Over 50 kHz the engine runs at 44.1 or 48 kHz as in the application and is
+  brought up to the host's rate: a latency of 127 samples at 192 kHz, reported to the host. None otherwise.
+- Tested as a host loads it (`ctest -R plugin_host`, `plugin/tests/host_test.cpp`): the same sound as the engine,
+  blocks of 1 to 512 samples, automation, headphones, a project saved and opened again, a host at 192 kHz, the cost.
+  `PianoForgePluginTest <PianoForge.vst3> --show-editor 10` opens its window.
+- The engine needs a processor with AVX2. VST3 only for now (CLAP later).
+
 ## Install (Windows)
 
 With Inno Setup 6 installed:
@@ -104,11 +131,11 @@ cmake --build --preset windows-release --target installer
 
 makes `build/windows-msvc/installer/output/PianoForge-<version>-setup.exe` (the version is the project's, in the
 root `CMakeLists.txt`), with `latest.json` (the update manifest) and the installer's SHA-256 next to it. The
-installer holds the application, the Visual C++ runtime it needs (next to it: nothing else to install) and,
-optionally, the OBS plugin (when OBS Studio is installed; a plugin OBS is using moves aside and the new one loads at
+installer holds the application, the Visual C++ runtime it needs (next to it: nothing else to install), the VST3
+plugin (in the VST3 folder of every user, or of the current user) and, optionally, the OBS plugin (when OBS Studio is installed; a plugin OBS is using moves aside and the new one loads at
 its next start). It installs for the current user without administrator rights (`%LOCALAPPDATA%\Programs\PianoForge`),
 or for every user if chosen. Settings, takes and recordings are never touched, by an update or an uninstall.
-It never holds the corpus nor a profile calibrated on it (the build refuses anything but its six files): the
+It never holds the corpus nor a profile calibrated on it (the build refuses anything but its ten files): the
 installed application asks for its corpus (File > Change corpus). Not code-signed: Windows SmartScreen warns
 about it the first time.
 

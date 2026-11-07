@@ -933,6 +933,37 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - par registre, moitié et 90 % : grave 2,3 et 5,5 dB (3,7 et 8,6 avant), médium 1,8 et 4,4 dB (4,0 et 9,7 avant), aigu 3,3 dB (5,3 avant). Le 90e centile de l'aigu (22 dB) vient de cases où notre résonance est déjà retombée au silence numérique après 4 s, quand celle de Noire est vers −115 dBFS : c'est inaudible, et c'était déjà le cas.
   - *Limites.* Chaque note est ajustée sur ses propres prises : il n'y a plus d'interpolation entre notes, mais pas non plus de validation hors échantillon. Seules v40 et v100 sont mesurées : entre et au-delà, la vélocité suit l'exposant de la note. Les tests du moteur, l'autotest et la page web passent avec ce profil.
 
+**Le plugin VST3 (7 novembre 2026).** PianoForge dans un DAW (`plugin/`, JUCE, format VST3).
+  - *Le même son que l'application.* Le plugin joue la même chaîne : le moteur modal, la salle et la position d'écoute (casque compris), le limiteur.
+    - Il suit la même règle de fréquence : au-delà de 50 kHz, le moteur tourne à 44,1 ou 48 kHz et `pf::Upsampler` remonte le son. La latence, 127 échantillons à 192 kHz, est annoncée à l'hôte ; elle est nulle sinon.
+    - Les tables (préréglages de salle et positions, tempéraments, format texte des courbes) sont partagées avec l'application (`RoomPresets.h`, `Tuning.h`, `CurveText.h`), pas recopiées.
+  - *Paramètres automatisables*, avec les noms et les valeurs par défaut de l'application : volume (+6 dB), les six options du moteur, niveau de la sympathie, unisson, refrappe, salle (volume, décroissance, brillance, largeur, niveau), distance, keep loudness, haut-parleurs ou casque, La, tempérament et tonique, limiteur.
+    - Les préréglages de salle et les positions sont des raccourcis de l'éditeur, qui règlent ces paramètres en un geste. « Custom » s'affiche dès qu'on s'en écarte.
+    - Le MIDI : notes, CC64 continu, CC66, CC67. En VST3, les contrôleurs n'existent pas comme événements : l'hôte les envoie sous forme de paramètres cachés (2 048, ajoutés par JUCE), que le plugin retransforme en MIDI.
+  - *Le profil n'est jamais dans le plugin.* Par défaut, c'est celui du corpus de l'application : ses réglages, lus sans être modifiés, disent où il est. Sinon, c'est un `modal-profile.bin` choisi dans le plugin ; le projet garde son chemin, pas le fichier.
+    - Le chargement se fait en tâche de fond : 0,1 s, puis 0,02 s pour une seconde instance, qui partage le même profil en mémoire (un cache par fichier et par version).
+    - Pendant l'installation d'un profil, le fil audio est tenu à l'écart par un protocole de Dekker (suspendu / dans le bloc) et rend du silence ; rien ne se verrouille côté audio.
+  - *Blocs de toute taille*, jusqu'à un échantillon (FL Studio coupe aux points d'automation). Le MIDI est placé à l'échantillon. Au-delà de 50 kHz, les échantillons rendus mais pas encore donnés attendent le bloc suivant, et un événement qui tombe dessus attend la trame suivante. Un événement placé sur la grille du moteur tombe ainsi sur la même trame, quel que soit le découpage.
+  - *`reset()` de l'hôte* (transport relancé, rendu hors ligne) : le moteur a maintenant un `reset()` sans verrou. Au bloc suivant, tout est silencieux (voix, table, cordes libres), les pédales sont relevées et l'ordre d'allocation des voix repart de zéro. La salle, le limiteur et le suréchantillonnage repartent aussi de zéro.
+  - *L'éditeur*, au thème de l'application :
+    - en-tête : le profil et d'où il vient, avec « Choose profile… » et « Application's profile » ;
+    - cartes Sound, Output (limiteur et crête), Room around the piano, Listening position (avec le résumé physique et, au casque, l'angle et le retard interaural), Tuning, Velocity curve ;
+    - la courbe de vélocité est propre au plugin et gardée dans le projet : cinq points qu'on tire, la plage de la touche la plus douce à la plus forte, « Linear », et « Application's curve » pour reprendre celle de l'atelier calée sur le B2 ;
+    - en bas : la fréquence du moteur, la latence et les voix.
+  - *Installation* : la cible `install-vst3-plugin` copie le bundle dans le dossier VST3 par utilisateur (`%LOCALAPPDATA%\Programs\Common\VST3`, que REAPER parcourt chez l'utilisateur), sans droits d'administrateur. Une copie chargée par un hôte est déplacée de côté. L'installateur le propose (case cochée) dans le dossier VST3 commun ou par utilisateur, selon le mode d'installation ; la liste blanche passe à dix fichiers.
+  - *Tests* (`plugin_host`, un hôte VST3 JUCE qui charge le vrai `PianoForge.vst3`) :
+    - déclaration : un instrument, sans entrée, sortie stéréo, MIDI en entrée, 23 paramètres ;
+    - son : identique à celui du moteur appelé directement, à −137 dB sous la crête, pédale comprise. Le CC64 traverse donc bien le passage par les paramètres VST3 ;
+    - blocs de 1 à 512 échantillons : même son à −52 dB sous la crête. Le moteur prend quelques décisions aux frontières de ses blocs (début d'un fondu de partiel, mise en veille de la table) ; un autre découpage les déplace de quelques échantillons, ce qui reste inaudible ;
+    - sous le plafond du limiteur ; volume automatisé de +6 à 0 dB : −6,00 dB ; casque : −0,74 dB par rapport aux haut-parleurs ;
+    - projet rouvert : paramètres et son identiques au bit près, profil partagé avec la seconde instance ;
+    - hôte à 192 kHz : latence de 127 échantillons, même niveau qu'à 48 kHz (−0,00 dB), blocs de 1 à 1 024 à −54 dB ;
+    - coût : 64 notes pédale enfoncée, salle allumée, 22 % du temps réel.
+
+    Le même test passe sur la copie installée par l'installateur, que la désinstallation retire.
+  - *Ce que le test a appris.* Un hôte ne doit pas envoyer plus d'échantillons qu'il n'en a annoncé (VST3 l'interdit) : un premier test qui le faisait corrompait le tas dans la couche VST3 elle-même. Le plugin découpe tout de même les blocs trop longs. Les paramètres d'un plugin hébergé ne connaissent que leur valeur normalisée et leur texte.
+  - *Limites.* VST3 seulement (CLAP plus tard). Windows seulement à l'essai (le code est portable). Processeur AVX2 requis par le moteur. Le plugin n'est pas signé.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

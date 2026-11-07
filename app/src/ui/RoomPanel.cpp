@@ -10,8 +10,7 @@ namespace {
 
 constexpr int kCustomId = 100;
 constexpr int kUserBase = 200;      // the user's presets: kUserBase + their index
-constexpr int kDefaultPreset = 2;   // Concert hall
-constexpr int kDefaultPosition = 0; // at the keyboard
+constexpr int kDefaultPreset = kDefaultRoomPreset;
 constexpr int kModel = 2;           // the settings' model: 2, the listening position (1: a level against the dry sound)
 
 struct ControlInfo {
@@ -59,31 +58,6 @@ juce::String withThousands(double v)
 }
 
 } // namespace
-
-const std::array<RoomPanel::Preset, 5>& RoomPanel::presets()
-{
-    // name, size (60 m3 at 0, 40 000 m3 at 1, geometric), decay s, brightness, width
-    static const std::array<Preset, 5> list { {
-        { "Studio", 0.14f, 0.6f, 0.60f, 0.8f },        // 150 m3
-        { "Chamber", 0.50f, 1.4f, 0.55f, 1.0f },       // 1 600 m3
-        { "Concert hall", 0.85f, 2.2f, 0.50f, 1.0f },  // 15 000 m3
-        { "Large hall", 0.93f, 3.0f, 0.45f, 1.0f },    // 25 000 m3
-        { "Cathedral", 1.0f, 5.5f, 0.35f, 1.0f },      // 40 000 m3
-    } };
-    return list;
-}
-
-const std::array<RoomPanel::Position, 5>& RoomPanel::positions()
-{
-    static const std::array<Position, 5> list { {
-        { "At the keyboard", 1.0f },
-        { "On stage", 3.0f },
-        { "Front row", 6.0f },
-        { "Middle of the hall", 12.0f },
-        { "Back of the hall", 20.0f },
-    } };
-    return list;
-}
 
 RoomPanel::RoomPanel(pf::Room& r, juce::PropertiesFile& s) : room(r), settings(s)
 {

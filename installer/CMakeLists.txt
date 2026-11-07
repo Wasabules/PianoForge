@@ -2,8 +2,8 @@
 #   cmake --build --preset windows-release --target installer
 # makes build/windows-msvc/installer/output/PianoForge-<version>-setup.exe, the update manifest latest.json and
 # the installer's SHA-256 next to it (make_installer.cmake). The installer holds the application, the Visual C++
-# runtime it needs (next to it: no administrator rights, no redistributable to run) and, when it is built, the OBS
-# plugin. Never the corpus nor a profile calibrated on it: the installed application asks for its corpus.
+# runtime it needs (next to it: no administrator rights, no redistributable to run), the VST3 plugin and, when it is
+# built, the OBS plugin. Never the corpus nor a profile calibrated on it: the installed application asks for its corpus.
 
 find_program(PIANOFORGE_ISCC ISCC
     HINTS "C:/Program Files (x86)/Inno Setup 6" "C:/Program Files/Inno Setup 6" "$ENV{LOCALAPPDATA}/Programs/Inno Setup 6"
@@ -36,6 +36,10 @@ set(obs_dll "")
 if(TARGET pianoforge-obs)
     set(obs_dll "$<TARGET_FILE:pianoforge-obs>")
 endif()
+set(vst3_binary "")
+if(TARGET PianoForgePlugin_VST3)
+    set(vst3_binary "$<TARGET_FILE:PianoForgePlugin_VST3>")
+endif()
 
 add_custom_target(installer
     COMMAND ${CMAKE_COMMAND}
@@ -44,6 +48,7 @@ add_custom_target(installer
             -DRUNTIME=${runtime_argument}
             -DOBS_DLL=${obs_dll}
             -DOBS_LOCALE=${PROJECT_SOURCE_DIR}/obs/data/locale/en-US.ini
+            -DVST3_BINARY=${vst3_binary}
             -DICON=${CMAKE_BINARY_DIR}/app/PianoForgeApp_artefacts/JuceLibraryCode/icon.ico
             -DISCC=${PIANOFORGE_ISCC}
             -DISS=${CMAKE_CURRENT_SOURCE_DIR}/pianoforge.iss
@@ -57,4 +62,7 @@ add_custom_target(installer
 add_dependencies(installer PianoForgeApp)
 if(TARGET pianoforge-obs)
     add_dependencies(installer pianoforge-obs)
+endif()
+if(TARGET PianoForgePlugin_VST3)
+    add_dependencies(installer PianoForgePlugin_VST3)
 endif()

@@ -399,7 +399,8 @@ void ModalEngine::process(float* const* outputs, int numChannels, int n, const E
             std::fill(outputs[c], outputs[c] + n, 0.0f);
 
     const auto* p = published.load(std::memory_order_acquire);
-    if (p != current) {
+    const bool fresh = resetPending.exchange(false, std::memory_order_acq_rel);
+    if (p != current || fresh) {
         for (auto& v : voices)
             v.active = false;
         body.silence();
@@ -407,6 +408,23 @@ void ModalEngine::process(float* const* outputs, int numChannels, int n, const E
         for (int g = 0; g < strings.groups(); ++g)
             strings.silence(g);
         stringRinging.fill(false);
+        if (fresh) { // a host's reset: the rest of the state as at a start
+            bodyGain = bodyDecay = 1.0f;
+            stringsCut = false;
+            ageCounter = 0;
+            pedalLift = 0.0f;
+            softPedal = 0.0f;
+            sostenuto = false;
+            sostenutoHeld.fill(false);
+            keyHeld.fill(false);
+            noteDriven.fill(false);
+            knockScale = 1.0f;
+            sustainDown.store(false, std::memory_order_relaxed);
+            sostenutoDown.store(false, std::memory_order_relaxed);
+            pedalValue.store(0, std::memory_order_relaxed);
+            pedalPosition.store(0.0f, std::memory_order_relaxed);
+            softPedalPosition.store(0.0f, std::memory_order_relaxed);
+        }
         current = p;
         seenByAudio.store(p, std::memory_order_release);
     }

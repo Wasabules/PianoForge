@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../RoomPresets.h"
+
 #include <pianoforge/room.hpp>
 
 #include <juce_data_structures/juce_data_structures.h>
@@ -38,16 +40,10 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
 
-    struct Preset {
-        const char* name;
-        float size, decay, brightness, width;
-    };
-    static const std::array<Preset, 5>& presets();
-    struct Position {
-        const char* name;
-        float distance;
-    };
-    static const std::array<Position, 5>& positions();
+    using Preset = RoomPreset; // the tables are shared with the plugin (RoomPresets.h)
+    static const std::array<Preset, 5>& presets() { return kRoomPresets; }
+    using Position = ListeningPosition;
+    static const std::array<Position, 5>& positions() { return kListeningPositions; }
 
 private:
     enum Control { level, size, decay, brightness, width, distance, count };

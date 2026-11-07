@@ -27,6 +27,12 @@ FetchContent_MakeAvailable(JUCE)
 add_subdirectory(engine)
 add_subdirectory(app)
 
+# The VST3 instrument (plugin/): the same engine, room and limiter in a host.
+option(PIANOFORGE_PLUGIN "Build the VST3 plugin" ON)
+if(PIANOFORGE_PLUGIN)
+    add_subdirectory(plugin)
+endif()
+
 # The OBS plugin (obs/): on Windows when OBS Studio is installed, on Linux when libobs is.
 if(WIN32)
     set(obs_found_default OFF)
