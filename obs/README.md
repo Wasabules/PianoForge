@@ -83,8 +83,9 @@ The keys shown: all 88, a smaller keyboard's (76, 61, 49, 37), from one key to a
 while the playing stays inside it); the keys keep a piano's proportions for their width.
 
 The notes: they last as the sound does (a note whose key is up but a pedal still holds, sustain or sostenuto, goes on
-as a fainter tail until the pedal lets it go or the key is struck again; a line of light along the keyboard while the
-sustain pedal is down); along its bar a note dims as a string dies away (slowly in the bass, quickly in the treble);
+as a fainter tail until the pedal lets it go or the key is struck again, then its end draws in and fades out: the
+tails' width, opacity and fine end are set; a line of light along the keyboard while the sustain pedal is down, its
+strength set, 0 for none); along its bar a note dims as a string dies away (slowly in the bass, quickly in the treble);
 the melody (the right hand's top notes) is a line of light through them.
 
 The lights also: a bloom (the keyboard drawn into an image, its bright coloured parts, not the white keys, blurred

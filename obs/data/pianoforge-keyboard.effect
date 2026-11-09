@@ -14,6 +14,7 @@ uniform float2 box_half;
 uniform float box_radius;      // a box's corners
 uniform float box_border;      // its rim's width (0: none)
 uniform float box_soft;        // how soft its edge is, pixels (1: sharp; a shadow: several)
+uniform float box_taper;       // its width at its bottom, a share of its top's (1: straight; a tail's end: narrower)
 uniform float4 fill_top;       // its gradient, top to bottom (straight alpha)
 uniform float4 fill_bottom;
 uniform float fill_curve;      // the gradient's curve (1: even; below: it reaches the bottom's colour sooner)
@@ -69,15 +70,17 @@ float rounded_box(float2 p, float2 b, float r)
 	return length(max(q, float2(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
-// A rounded box: its gradient, its rim, a light from its top or its bottom; its edge smoothed (soft: a shadow).
+// A rounded box: its gradient, its rim, a light from its top or its bottom; its edge smoothed (soft: a shadow); its
+// sides drawing in toward its bottom (box_taper).
 float4 PSBox(VertData v_in) : TARGET
 {
 	float2 pix = pixel_of(v_in);
 	float2 p = pix - box_center;
-	float d = rounded_box(p, box_half, box_radius);
+	float t = saturate(p.y / max(2.0 * box_half.y, 1.0) + 0.5);
+	float2 size_here = float2(box_half.x * lerp(1.0, box_taper, t), box_half.y);
+	float d = rounded_box(p, size_here, min(box_radius, size_here.x));
 	float cover = saturate(0.5 - d / max(box_soft, 1.0));
 	cover = cover * cover * (3.0 - 2.0 * cover);
-	float t = saturate(p.y / max(2.0 * box_half.y, 1.0) + 0.5);
 	float4 c = lerp(fill_top, fill_bottom, pow(t, max(fill_curve, 0.05)));
 	float rim = saturate(1.0 - abs(d + box_border * 0.5) / max(box_border * 0.5, 0.5)) * step(0.01, box_border);
 	c.rgb = lerp(c.rgb, border_color.rgb, rim * border_color.a);

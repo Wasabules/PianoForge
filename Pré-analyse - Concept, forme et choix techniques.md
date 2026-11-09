@@ -1111,6 +1111,12 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - Il n'est appliqué qu'une fois, quand on le choisit : OBS rappelle les fonctions de modification à chaque ouverture des propriétés, et réappliquer le style écraserait les retouches faites depuis.
     - Un bouton remet tous les réglages par défaut, sauf la largeur.
     - Les réglages sont rangés en groupes : Clavier, Couleurs, Notes, Lumières, Paillettes, Vélocité, Accords puissants.
+  - *Après l'essai, les traînées et la ligne de la pédale.*
+    - Les traînées ont trois réglages : largeur (35 % de la note), opacité (50 %) et fin effilée (80 %).
+    - Une fois la pédale levée, la fin de la traînée s'amincit et s'estompe. Il a fallu ajouter au shader une boîte qui se resserre vers le bas (`box_taper`) : la demi-largeur diminue avec la hauteur, et l'arrondi suit.
+    - Tant que la note sonne, la traînée descend jusqu'aux touches, à peine resserrée.
+    - Le trait orange au-dessus du clavier, pédale enfoncée, n'était pas réglable. Il a maintenant son propre curseur (30 % par défaut, 0 pour aucun), indépendant des traînées.
+    - Dans la laque, chaque traînée se reflétait à la largeur de sa note, en pavé. La barre et la traînée s'y reflètent maintenant chacune à sa largeur.
   - *Les touches affichées.*
     - Au choix : 88, 76, 61, 49 ou 37 touches, une plage d'une touche à une autre, ou le suivi du jeu.
     - La géométrie passe par une vue : la première touche blanche montrée et le nombre de touches blanches en travers. Les touches gardent les proportions d'un piano pour leur largeur.

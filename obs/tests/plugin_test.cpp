@@ -626,10 +626,18 @@ int main(int argc, char** argv)
         {
             auto quiet = [&](bool tails) {
                 look({ { "color_mode", 2 }, { "trail_height", 100 }, { "glow", 0 }, { "sparkles", 0 }, { "bloom", 0 }, { "reflection", 0 },
-                       { "ambiance", 0 }, { "velocity_accent", 0 } },
+                       { "ambiance", 0 }, { "velocity_accent", 0 }, { "pedal_line", tails ? 100 : 0 } },
                      { { "chords", false }, { "melody", false }, { "pedal_tails", tails }, { "note_decay", false } });
             };
+            std::array<int, 3> lineOn {}, lineOff {};
+            int widthTop = 0, widthEnd = 99, fadeTop = 0, fadeEnd = 255;
             auto alpha = [&](int x, int y) { return (int) px[((std::size_t) y * w + (std::size_t) x) * 4 + 3]; };
+            auto across = [&](int y) { // how many pixels wide the tail is at row y (around E4's centre)
+                int n = 0;
+                for (int x = 500; x < 521 && !px.empty(); ++x)
+                    n += alpha(x, y) > 40 ? 1 : 0;
+                return n;
+            };
             int held = 0, bar = 0, without = 0, after = 0;
             for (bool tails : { true, false }) {
                 quiet(tails);
@@ -641,21 +649,34 @@ int main(int argc, char** argv)
                 if (!px.empty() && tails) {
                     held = alpha(510, 96); // under the bar: the tail
                     bar = alpha(510, 84);
+                    lineOn = at(300, 100); // the pedal's line along the keyboard's top
                     save(px, w, h, "keyboard-pedal.bmp");
                 } else if (!px.empty()) {
                     without = alpha(510, 96);
+                    lineOff = at(300, 100);
                 }
                 play({ { 0, 0xB0, 64, 0, 0, 0 } });
                 std::this_thread::sleep_for(std::chrono::milliseconds(400));
                 if (tails) {
                     px = renderSource(keyboard, w, h);
                     after = px.empty() ? 255 : alpha(510, 97); // the tail ended where the pedal went up, a few pixels higher
+                    widthTop = across(79);                     // just under the bar
+                    widthEnd = across(88);                     // near its end: drawn in, faded
+                    fadeTop = px.empty() ? 0 : alpha(510, 80);
+                    fadeEnd = px.empty() ? 255 : alpha(510, 89);
+                    if (!px.empty())
+                        save(px, w, h, "keyboard-pedal-up.bmp");
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
             check(held > 60 && bar > 100 && without < 30 && after < 30,
                   "a note the pedal holds: its tail under the bar (" + std::to_string(held) + "), none without the option ("
                       + std::to_string(without) + "), ended once the pedal is up (" + std::to_string(after) + ")");
+            check(widthTop >= 3 && widthEnd < widthTop && fadeEnd * 2 < fadeTop,
+                  "the tail's end once the pedal is up, drawn in and faded: " + std::to_string(widthTop) + " px wide under its note ("
+                      + std::to_string(fadeTop) + "), " + std::to_string(widthEnd) + " near its end (" + std::to_string(fadeEnd) + ")");
+            check(lineOn[0] > lineOn[2] + 40 && std::abs(lineOff[0] - lineOff[2]) < 20,
+                  "the pedal's line: orange at 100 % (" + show(lineOn) + "), none at 0 (" + show(lineOff) + ")");
         }
 
         // The melody: a line of light between the right hand's notes; none without it.
@@ -872,7 +893,7 @@ int main(int argc, char** argv)
             for (const char* name : { "color_mode", "hue_left", "hue_right", "hue_white", "hue_black", "hue", "saturation", "glow", "sparkles",
                                      "sparkle_height", "sparkle_spread", "sparkle_tilt", "velocity_accent", "velocity_top", "velocity_measure",
                                      "chords", "chord_notes", "chord_threshold", "chord_intensity", "chord_fireworks", "style", "reset", "range",
-                                     "range_first", "follow_octaves", "pedal_tails", "note_decay", "melody", "bloom", "reflection",
+                                     "range_first", "follow_octaves", "pedal_tails", "tail_width", "tail_fine", "pedal_line", "note_decay", "melody", "bloom", "reflection",
                                      "ambiance" })
                 rainbow = rainbow && props != nullptr && obs_properties_get(props, name) != nullptr;
             obs_properties_destroy(props);

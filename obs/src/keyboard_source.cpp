@@ -92,6 +92,8 @@ struct Settings {
     int rangeFirst = 36, rangeLast = 96;  // (C2 to C7)
     int followOctaves = 3;                // following: at least this wide
     bool pedalTails = true, decay = true, melody = true;
+    int tailWidth = 35, tailOpacity = 50, tailFine = 80; // a pedal's tail: its width (% of its note's), opacity, end
+    int pedalLine = 30;   // the line of light along the keyboard while the sustain pedal is down, %
     int bloom = 40, reflection = 50, ambiance = 35; // %
 };
 
@@ -110,7 +112,7 @@ struct Drawing {
                    *aurora = nullptr, *image = nullptr, *bright = nullptr, *blur = nullptr, *bloom = nullptr;
     gs_eparam_t *quadOrigin = nullptr, *quadSize = nullptr, *boxCenter = nullptr, *boxHalf = nullptr, *boxRadius = nullptr,
                 *boxBorder = nullptr, *boxSoft = nullptr, *fillTop = nullptr, *fillBottom = nullptr, *fillCurve = nullptr,
-                *borderColor = nullptr, *lightColor = nullptr, *lightStrength = nullptr, *lightFrom = nullptr,
+                *borderColor = nullptr, *lightColor = nullptr, *lightStrength = nullptr, *lightFrom = nullptr, *boxTaper = nullptr,
                 *lightReach = nullptr, *fadeBand = nullptr, *time = nullptr, *seed = nullptr, *linePoints = nullptr,
                 *lineCount = nullptr, *auroraLeft = nullptr, *auroraRight = nullptr, *texture = nullptr, *texel = nullptr,
                 *bloomGain = nullptr;
@@ -122,7 +124,7 @@ struct Drawing {
                && quadOrigin && quadSize && boxCenter && boxHalf && boxRadius && boxBorder && boxSoft && fillTop
                && fillBottom && fillCurve && borderColor && lightColor && lightStrength && lightFrom && lightReach
                && fadeBand && time && seed && line && aurora && image && bright && blur && bloom && linePoints && lineCount
-               && auroraLeft && auroraRight && texture && texel && bloomGain;
+               && auroraLeft && auroraRight && texture && texel && bloomGain && boxTaper;
     }
 };
 
@@ -696,6 +698,7 @@ void loadDrawing(Drawing& d)
         d.texture = param("image");
         d.texel = param("texel");
         d.bloomGain = param("bloom_gain");
+        d.boxTaper = param("box_taper");
         d.quadOrigin = param("quad_origin");
         d.quadSize = param("quad_size");
         d.boxCenter = param("box_center");
@@ -731,6 +734,7 @@ void loadDrawing(Drawing& d)
 struct BoxStyle {
     std::uint32_t top = kWhite, bottom = kWhite;
     float alpha = 1.0f, curve = 1.0f, fadeTo = 1.0f; // the bottom's alpha: fadeTo of the top's
+    float taper = 1.0f;                              // the bottom's width: taper of the top's
     std::uint32_t rim = kBlack;
     float rimAlpha = 0.0f, rimWidth = 0.0f;
     std::uint32_t light = kWhite;
@@ -790,6 +794,7 @@ public:
         gs_effect_set_float(look.boxRadius, r);
         gs_effect_set_float(look.boxBorder, st.rimWidth);
         gs_effect_set_float(look.boxSoft, st.soft);
+        gs_effect_set_float(look.boxTaper, st.taper);
         color(look.fillTop, st.top, st.alpha);
         color(look.fillBottom, st.bottom, st.alpha * st.fadeTo);
         gs_effect_set_float(look.fillCurve, st.curve);
@@ -1030,7 +1035,7 @@ private:
 struct Bar {
     float x = 0.0f, y0 = 0.0f, y1 = 0.0f, w = 0.0f, strength = 0.0f, tailEnd = 0.0f;
     float bright0 = 1.0f, bright1 = 1.0f, brightTail = 1.0f;
-    bool open = false, black = false;
+    bool open = false, black = false, ringing = false; // ringing: a pedal still holds it (its tail reaches the keys)
     int key = 0;
     Tint tint;
 };
@@ -1088,6 +1093,7 @@ void barsOf(const Keyboard& k, const Settings& s, const Layout& l, std::vector<B
         b.bright1 = decayOf(n.key, ageAt(b.y1), s);
         b.brightTail = decayOf(n.key, ageAt(b.tailEnd), s);
         b.open = n.open();
+        b.ringing = n.ringing();
         b.black = shape.black;
         b.key = n.key;
         b.tint = tintOf(s, n.key, n.hand);
@@ -1141,17 +1147,27 @@ void drawNotes(const Keyboard& k, const Settings& s, const Layout& l, Painter& p
     const float accent = s.accent / 100.0f;
     auto yAt = [&](std::uint64_t f) { return (float) (l.top - (frame - (double) f) / rate * speed); };
     p.fade(trailTop, trailTop + 0.3f * (float) s.trailHeight);
-    // The tails, under the bars: narrower, fainter, dying away.
+    // The tails, under the bars: narrower, fainter, dying away; once the pedal has let them go, their end drawing in
+    // and fading out (the finer, the more).
     p.over();
+    const float fine = s.tailFine / 100.0f;
     for (const auto& b : bars) {
         if (b.tailEnd <= b.y1 + 0.5f)
             continue;
-        const float tw = std::max(2.0f, 0.42f * b.w);
+        const float tw = std::max(1.5f, s.tailWidth / 100.0f * b.w);
         BoxStyle tail;
         tail.top = b.tint.main;
         tail.bottom = mixColor(b.tint.main, b.tint.deep, 0.4);
-        tail.alpha = 0.5f * alphaOf(b.strength, accent) * b.bright1;
-        tail.fadeTo = b.brightTail / std::max(0.01f, b.bright1);
+        tail.alpha = s.tailOpacity / 100.0f * alphaOf(b.strength, accent) * b.bright1;
+        const float decay = b.brightTail / std::max(0.01f, b.bright1);
+        if (b.ringing) { // still sounding: down to the keys
+            tail.taper = 1.0f - 0.3f * fine;
+            tail.fadeTo = decay;
+        } else {
+            tail.taper = 1.0f - 0.85f * fine;
+            tail.fadeTo = (1.0f - fine) * decay;
+            tail.curve = 1.0f + 0.6f * fine;
+        }
         tail.radius = 0.5f * tw;
         p.box(b.x + 0.5f * (b.w - tw), b.y1 - 0.5f * tw, tw, b.tailEnd - b.y1 + 0.5f * tw, tail);
     }
@@ -1308,18 +1324,26 @@ void drawKeyboard(Keyboard& k, const Settings& s, const Layout& l, Painter& p)
         p.box(0.0f, l.top, l.width, l.rail, band);
         const float refl = s.reflection / 100.0f, squash = 0.55f, depth = l.rail - feltHeight;
         p.clip(0.0f, l.top, l.width, l.keysTop - feltHeight);
-        for (const auto& b : k.bars) {
-            const float m0 = l.top + (l.top - b.tailEnd) * squash, m1 = l.top + (l.top - b.y0) * squash;
-            if (m0 >= l.top + depth)
-                continue;
+        // A part of a note (from y `from` to `to`, x to x + w) seen in the lacquer, `alpha` at the band's top.
+        auto mirrored = [&](const Bar& b, float from, float to, float x, float w, float alpha) {
+            const float m0 = l.top + (l.top - to) * squash, m1 = l.top + (l.top - from) * squash;
+            if (m0 >= l.top + depth || m1 <= m0)
+                return;
             const float d0 = (m0 - l.top) / depth, d1 = std::min(1.0f, (m1 - l.top) / depth);
             BoxStyle mirror;
             mirror.top = b.tint.main;
             mirror.bottom = b.tint.deep;
-            mirror.alpha = refl * 0.55f * (1.0f - d0) * b.bright1;
+            mirror.alpha = refl * 0.55f * (1.0f - d0) * alpha;
             mirror.fadeTo = (1.0f - d1) / std::max(0.01f, 1.0f - d0);
-            mirror.radius = 0.42f * b.w;
-            p.box(b.x, m0, b.w, std::max(1.0f, m1 - m0), mirror);
+            mirror.radius = 0.42f * w;
+            p.box(x, m0, w, std::max(1.0f, m1 - m0), mirror);
+        };
+        for (const auto& b : k.bars) {
+            mirrored(b, b.y0, b.y1, b.x, b.w, b.bright1);
+            if (b.tailEnd > b.y1 + 0.5f) { // its tail, as narrow and faint as it is
+                const float tw = std::max(1.5f, s.tailWidth / 100.0f * b.w);
+                mirrored(b, b.y1, b.tailEnd, b.x + 0.5f * (b.w - tw), tw, s.tailOpacity / 100.0f * b.brightTail);
+            }
         }
         p.add();
         for (int key = kFirstKey; key <= kLastKey; ++key) {
@@ -1355,11 +1379,11 @@ void drawKeyboard(Keyboard& k, const Settings& s, const Layout& l, Painter& p)
     felt.top = felt.bottom = kFelt;
     p.box(0.0f, l.keysTop - feltHeight, l.width, feltHeight, felt);
     // The sustain pedal down: a line of light along the keyboard's top, a faint light over the notes' feet.
-    if (const float down = k.state.pedal(0); down > 0.0f && s.pedalTails) {
+    if (const float down = k.state.pedal(0) * s.pedalLine / 100.0f; down > 0.0f) {
         const Tint tint = pedalTint(s, 2);
         p.add();
-        p.glow(0.5f * l.width, l.top, 0.5f * l.width, 0.5f, 0.5f, 2.0f + 0.1f * l.rail, tint.light, 0.45f * down);
-        p.glow(0.5f * l.width, l.top, 0.5f * l.width, 0.5f, 0.5f, 0.1f * l.top + 4.0f, tint.light, 0.1f * down);
+        p.glow(0.5f * l.width, l.top, 0.5f * l.width, 0.5f, 0.5f, 2.0f + 0.1f * l.rail, tint.light, 0.9f * down);
+        p.glow(0.5f * l.width, l.top, 0.5f * l.width, 0.5f, 0.5f, 0.1f * l.top + 4.0f, tint.light, 0.2f * down);
         p.over();
     }
 
@@ -1769,6 +1793,10 @@ void defaults(obs_data_t* settings)
     obs_data_set_default_int(settings, "range_last", s.rangeLast);
     obs_data_set_default_int(settings, "follow_octaves", s.followOctaves);
     obs_data_set_default_bool(settings, "pedal_tails", s.pedalTails);
+    obs_data_set_default_int(settings, "tail_width", s.tailWidth);
+    obs_data_set_default_int(settings, "tail_opacity", s.tailOpacity);
+    obs_data_set_default_int(settings, "tail_fine", s.tailFine);
+    obs_data_set_default_int(settings, "pedal_line", s.pedalLine);
     obs_data_set_default_bool(settings, "note_decay", s.decay);
     obs_data_set_default_bool(settings, "melody", s.melody);
     obs_data_set_default_int(settings, "bloom", s.bloom);
@@ -1821,6 +1849,10 @@ void update(void* data, obs_data_t* settings)
     s.rangeLast = (int) std::clamp<long long>(obs_data_get_int(settings, "range_last"), s.rangeFirst, kLastKey);
     s.followOctaves = (int) std::clamp<long long>(obs_data_get_int(settings, "follow_octaves"), 1, 7);
     s.pedalTails = obs_data_get_bool(settings, "pedal_tails");
+    s.tailWidth = (int) std::clamp<long long>(obs_data_get_int(settings, "tail_width"), 10, 100);
+    s.tailOpacity = (int) std::clamp<long long>(obs_data_get_int(settings, "tail_opacity"), 10, 100);
+    s.tailFine = (int) std::clamp<long long>(obs_data_get_int(settings, "tail_fine"), 0, 100);
+    s.pedalLine = (int) std::clamp<long long>(obs_data_get_int(settings, "pedal_line"), 0, 100);
     s.decay = obs_data_get_bool(settings, "note_decay");
     s.melody = obs_data_get_bool(settings, "melody");
     s.bloom = (int) std::clamp<long long>(obs_data_get_int(settings, "bloom"), 0, 100);
@@ -1869,7 +1901,8 @@ bool measureVelocity(obs_properties_t*, obs_property_t*, void* data)
 constexpr const char* kLookKeys[] = { "color_mode", "hue_left", "hue_right", "hue_white", "hue_black", "hue", "saturation",
                                       "glow", "sparkles", "sparkle_height", "sparkle_spread", "sparkle_tilt", "afterglow_ms",
                                       "flash", "velocity_accent", "chords", "chord_intensity", "chord_wave", "chord_wash",
-                                      "chord_fireworks", "chord_bracket", "chord_shake", "pedal_tails", "note_decay", "melody",
+                                      "chord_fireworks", "chord_bracket", "chord_shake", "pedal_tails", "tail_width", "tail_opacity",
+                                      "tail_fine", "pedal_line", "note_decay", "melody",
                                       "bloom", "reflection", "ambiance" };
 
 enum Style : int { kStyleCustom = 0, kStylePianoForge, kStyleConcert, kStyleNeon, kStyleGalaxy, kStyleRainbow, kStyleMinimal };
@@ -1892,6 +1925,7 @@ void applyStyle(obs_data_t* settings, int style)
         set("velocity_accent", 50);
         set("chord_intensity", 50);
         flag("chord_fireworks", false);
+        set("pedal_line", 15);
         set("afterglow_ms", 600);
         set("bloom", 25);
         set("reflection", 60);
@@ -1907,6 +1941,7 @@ void applyStyle(obs_data_t* settings, int style)
         set("chord_intensity", 100);
         set("bloom", 80);
         set("ambiance", 50);
+        set("pedal_line", 60);
         break;
     case kStyleGalaxy: // violet and turquoise, sparkles high, curtains of light
         set("hue_left", 265);
@@ -1944,6 +1979,8 @@ void applyStyle(obs_data_t* settings, int style)
         set("bloom", 0);
         set("reflection", 0);
         set("ambiance", 0);
+        set("pedal_line", 0);
+        set("tail_opacity", 35);
         break;
     default: // PianoForge: the defaults
         break;
@@ -2001,6 +2038,9 @@ bool modeChanged(obs_properties_t* props, obs_property_t*, obs_data_t* settings)
     show("range_first", range == 0);
     show("range_last", range == 0);
     show("follow_octaves", range == -1);
+    const bool tails = obs_data_get_bool(settings, "pedal_tails");
+    for (const char* name : { "tail_width", "tail_opacity", "tail_fine" })
+        show(name, tails);
     return true;
 }
 
@@ -2095,6 +2135,16 @@ obs_properties_t* properties(void* data)
     obs_properties_t* notes = obs_properties_create();
     obs_property_t* tails = obs_properties_add_bool(notes, "pedal_tails", text("Keyboard.PedalTails"));
     obs_property_set_long_description(tails, text("Keyboard.PedalTails.Description"));
+    obs_property_set_modified_callback(tails, modeChanged);
+    auto share = [&](const char* name, const char* label, const char* description, int low) {
+        obs_property_t* p = obs_properties_add_int_slider(notes, name, text(label), low, 100, 1);
+        obs_property_int_set_suffix(p, " %");
+        obs_property_set_long_description(p, text(description));
+    };
+    share("tail_width", "Keyboard.TailWidth", "Keyboard.TailWidth.Description", 10);
+    share("tail_opacity", "Keyboard.TailOpacity", "Keyboard.TailOpacity.Description", 10);
+    share("tail_fine", "Keyboard.TailFine", "Keyboard.TailFine.Description", 0);
+    share("pedal_line", "Keyboard.PedalLine", "Keyboard.PedalLine.Description", 0);
     obs_property_t* decay = obs_properties_add_bool(notes, "note_decay", text("Keyboard.NoteDecay"));
     obs_property_set_long_description(decay, text("Keyboard.NoteDecay.Description"));
     obs_property_t* melody = obs_properties_add_bool(notes, "melody", text("Keyboard.Melody"));
