@@ -1,5 +1,6 @@
 // The PianoForge keyboard's drawing (obs/src/keyboard_source.cpp): rounded boxes with a gradient, a rim and a light
-// from within (keys, notes, pedals, shadows), and lights added over them (halos, beams, ripples, sparkles).
+// from within (keys, notes, pedals, shadows), lights added over them (halos, beams, ripples, sparkles, the melody's
+// line, the ambiance), and the bloom over the whole.
 //
 // Each shape but the sparkles is drawn on a quad, quad_origin and quad_size in the source's pixels, its texture coordinates running
 // from 0 to 1 across it: the shader works in the source's pixels, so a quad cut at the source's edge cuts the shape
@@ -24,6 +25,19 @@ uniform float light_reach;     // a halo's reach beyond its box, pixels
 uniform float2 fade_band;      // from y = fade_band.x (nothing) to fade_band.y (whole): the shape fades upward
 uniform float time;            // seconds (shimmer, twinkle)
 uniform float seed;            // a shape's own phase
+uniform float4 line_points[64]; // a line's points (x, y: pixels; z: brightness), line_count of them
+uniform float line_count;
+uniform float4 aurora_left;    // the ambiance's colours, left and right
+uniform float4 aurora_right;
+uniform texture2d image;       // a texture drawn (the keyboard's image, its glow)
+uniform float2 texel;          // a step across it (the blur: its direction too)
+uniform float bloom_gain;
+
+sampler_state linearClamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
 
 struct VertData {
 	float4 pos : POSITION;
@@ -107,6 +121,82 @@ float4 PSRing(VertData v_in) : TARGET
 	return float4(light_color.rgb * k, saturate(k));
 }
 
+// A line of light through its points (the melody): a thin bright core in a soft halo (light_reach), as bright as
+// its points at each place.
+float4 PSLine(VertData v_in) : TARGET
+{
+	float2 pix = pixel_of(v_in);
+	float best = 100000.0;
+	float bright = 0.0;
+	for (int i = 0; i < 63; i++) {
+		if (float(i) < line_count - 1.0) {
+			float2 a = line_points[i].xy;
+			float2 ab = line_points[i + 1].xy - a;
+			float2 ap = pix - a;
+			float h = saturate(dot(ap, ab) / max(dot(ab, ab), 0.0001));
+			float d = length(ap - ab * h);
+			if (d < best) {
+				best = d;
+				bright = lerp(line_points[i].z, line_points[i + 1].z, h);
+			}
+		}
+	}
+	float core = exp(-best * best / 1.4);
+	float halo = 0.45 * exp(-best / max(light_reach, 1.0));
+	float k = light_strength * bright * (core + halo) * fade_of(pix.y);
+	float3 c = lerp(light_color.rgb, float3(1.0, 1.0, 1.0), saturate(core * 0.6));
+	return float4(c * k, saturate(k));
+}
+
+// The ambiance: curtains of light rising from the keys over the room (box_center, box_half), swaying, as strong as
+// the playing is loud (light_strength), from one colour on the left to the other on the right.
+float4 PSAurora(VertData v_in) : TARGET
+{
+	float2 pix = pixel_of(v_in);
+	float2 size = max(2.0 * box_half, float2(1.0, 1.0));
+	float2 q = (pix - (box_center - box_half)) / size;
+	float curtain = 0.5 + 0.5 * sin(q.x * 8.0 + time * 0.55 + 2.2 * sin(q.x * 2.7 - time * 0.31));
+	float folds = 0.72 + 0.28 * sin(q.x * 47.0 + 3.5 * sin(q.x * 6.1 + time * 0.7));
+	float reach = 0.3 + 0.6 * curtain;
+	float v = saturate(1.0 - (1.0 - q.y) / reach);
+	float k = light_strength * (0.35 + 0.65 * curtain) * folds * v * v;
+	float3 c = lerp(aurora_left.rgb, aurora_right.rgb, smoothstep(0.2, 0.8, q.x));
+	return float4(c * k, saturate(k * 0.7));
+}
+
+// The bloom. The keyboard is drawn into an image first (premultiplied colour); its bright, coloured parts (lights,
+// keys and notes lit: not the white keys) taken at a quarter of its size, blurred, and added over it.
+float4 PSImage(VertData v_in) : TARGET
+{
+	return image.Sample(linearClamp, v_in.uv);
+}
+
+float4 PSBright(VertData v_in) : TARGET
+{
+	float4 c = 0.25 * (image.Sample(linearClamp, v_in.uv + texel * float2(-1.0, -1.0))
+	                 + image.Sample(linearClamp, v_in.uv + texel * float2(1.0, -1.0))
+	                 + image.Sample(linearClamp, v_in.uv + texel * float2(-1.0, 1.0))
+	                 + image.Sample(linearClamp, v_in.uv + texel * float2(1.0, 1.0)));
+	float hi = max(c.r, max(c.g, c.b));
+	float lo = min(c.r, min(c.g, c.b));
+	float k = smoothstep(0.1, 0.4, hi - lo) * smoothstep(0.2, 0.65, hi);
+	return float4(c.rgb * k, 1.0);
+}
+
+float4 PSBlur(VertData v_in) : TARGET
+{
+	float4 c = image.Sample(linearClamp, v_in.uv) * 0.2270270270;
+	c += (image.Sample(linearClamp, v_in.uv + texel * 1.3846153846) + image.Sample(linearClamp, v_in.uv - texel * 1.3846153846)) * 0.3162162162;
+	c += (image.Sample(linearClamp, v_in.uv + texel * 3.2307692308) + image.Sample(linearClamp, v_in.uv - texel * 3.2307692308)) * 0.0702702703;
+	return c;
+}
+
+float4 PSBloom(VertData v_in) : TARGET
+{
+	float3 c = image.Sample(linearClamp, v_in.uv).rgb * bloom_gain;
+	return float4(c, saturate(max(c.r, max(c.g, c.b))));
+}
+
 // Sparkles, many in one draw: each on its own square (two triangles), its colour, brightness and phase in its
 // vertices, its texture coordinates running from -1 to 1 across it (a square cut at the source's edge, less far).
 struct SparkData {
@@ -182,5 +272,59 @@ technique Sparkles
 	{
 		vertex_shader = VSSpark(v_in);
 		pixel_shader  = PSSpark(v_in);
+	}
+}
+
+technique Line
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSLine(v_in);
+	}
+}
+
+technique Aurora
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSAurora(v_in);
+	}
+}
+
+technique Image
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSImage(v_in);
+	}
+}
+
+technique Bright
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBright(v_in);
+	}
+}
+
+technique Blur
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBlur(v_in);
+	}
+}
+
+technique Bloom
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBloom(v_in);
 	}
 }

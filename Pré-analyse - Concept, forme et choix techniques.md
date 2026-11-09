@@ -1099,6 +1099,28 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
   - Les réglages sont rangés dans deux groupes des propriétés : *Vélocité*, et *Accords puissants* (un groupe à cocher).
   - *Tests* : le détecteur d'accords (connu à la fin de sa fenêtre et une seule fois ; rien pour un accord doux, un arpège ou deux notes ; repos entre deux) et les fusées (montée, gerbe dans toutes les directions, rayon, retombée) dans le test sans OBS. Dans libobs : une note douce plus fine et plus terne qu'une forte ; un accord fort qui éclaire l'espace et lance un feu d'artifice, rien pour un accord doux ni sans l'option ; images d'un gros accord à deux mains.
 
+**Le clavier OBS : la durée du son, la mélodie, les lumières et les styles (10 novembre 2026).** Huit suggestions retenues sur douze.
+  - *Les notes tenues par la pédale.* Une barre s'arrêtait au relâchement de la touche, même quand la pédale forte faisait encore sonner la note. L'état du clavier (`KeyboardState`) garde maintenant la fin du son de chaque note. C'est le relâchement de la touche, ou plus tard le lever de la pédale forte, celui de la tonale (pour les touches qu'elle tenait en s'abaissant), ou la touche refrappée. Sous la barre, une traîne plus étroite et plus pâle dure tant que la note sonne. Une ligne de lumière court le long du clavier tant que la pédale forte est enfoncée.
+  - *Les notes s'éteignent.* Le long de sa barre, une note faiblit comme une corde : son éclat suit 0,3 + 0,7·e^(−t/τ), avec τ de 7 s dans les graves à 1,2 s dans les aigus. Le dégradé de la barre va de l'éclat de la frappe à celui du relâchement, et la traîne continue la descente.
+  - *La ligne mélodique* : la note du dessus de chaque groupe joué par la main droite (35 ms), reliée aux suivantes par une courbe de Catmull-Rom. Le shader la trace d'un seul dessin, en mesurant la distance à une polyligne de 64 points au plus passée en tableau uniforme. Un dessin par segment aurait doublé la lumière aux jointures.
+  - *Le bloom.* Le clavier est d'abord dessiné dans une image, en couleur prémultipliée. Ses parties vives et colorées (la saturation écarte les touches blanches) sont prises au quart de la taille, floutées deux fois dans chaque direction (9 échantillons), puis ajoutées par-dessus. Le dessin passe alors par trois images intermédiaires, pour environ 1 ms par image chargée.
+  - *Le reflet* : la bande au-dessus des touches devient une laque noire, de 17 % de la hauteur du clavier au lieu de 5 %. Elle reflète les notes (en miroir, écrasées à 55 %, de plus en plus pâles avec la profondeur) et les lumières des touches. Le dessin y est découpé à la bande.
+  - *L'ambiance.* Le plugin lit le mix « tel qu'entendu » sur les 1 024 dernières trames montrées, et le niveau en dB donne une force de 0 à 1 (−48 à −14 dBFS), qui monte vite et redescend lentement. Des voiles de lumière ondulent au-dessus des touches, de la couleur de gauche à celle de droite.
+  - *Les styles* : PianoForge (les réglages par défaut), Concert, Néon, Galaxie, Arc-en-ciel, Minimal.
+    - Un style remet le rendu par défaut puis pose ses propres valeurs. Il ne touche ni à la taille, ni aux touches affichées, ni au minutage, ni à l'échelle de vélocité.
+    - Il n'est appliqué qu'une fois, quand on le choisit : OBS rappelle les fonctions de modification à chaque ouverture des propriétés, et réappliquer le style écraserait les retouches faites depuis.
+    - Un bouton remet tous les réglages par défaut, sauf la largeur.
+    - Les réglages sont rangés en groupes : Clavier, Couleurs, Notes, Lumières, Paillettes, Vélocité, Accords puissants.
+  - *Les touches affichées.*
+    - Au choix : 88, 76, 61, 49 ou 37 touches, une plage d'une touche à une autre, ou le suivi du jeu.
+    - La géométrie passe par une vue : la première touche blanche montrée et le nombre de touches blanches en travers. Les touches gardent les proportions d'un piano pour leur largeur.
+    - En suivant le jeu, la vue couvre les touches jouées dans les 4 dernières secondes, tenues ou qui sonnent encore, avec une marge, sur au moins 3 octaves.
+    - Elle ne bouge que si une note sort de ses bords ou si elle peut rétrécir d'un quart, puis glisse en 0,6 s. Une vue qui bouge à chaque note fatigue.
+  - *Tests* :
+    - sans OBS : la fin du son (pédale forte, tonale, refrappe, oubli des notes) ; la vue (plage, bords noirs, suivi, immobilité à l'intérieur) ; la mélodie ;
+    - dans libobs : une traîne sous la note tenue, absente sans l'option et finie au lever de la pédale ; la ligne mélodique entre deux notes ; 61 touches (do2 au bord gauche, clavier plus haut) et le suivi ; le bloom autour d'une note éclairée, sans toucher les touches blanches ; le reflet de la teinte dans la laque ; l'ambiance pendant que le son joue ; les styles appliqués une seule fois et la remise à zéro ; des images du rendu par défaut ;
+    - les tests ciblés coupent bloom, reflet et ambiance pour rester isolés.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

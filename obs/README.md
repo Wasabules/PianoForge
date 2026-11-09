@@ -73,7 +73,25 @@ Properties) so that it is not heard twice.
 - **Chapter markers in OBS recordings** (on by default).
 - **Let PianoForge's gestures control OBS** (on by default).
 
-**PianoForge keyboard**: width; the notes above the keys (height, time to the top; 0: the keyboard alone), rounded
+**PianoForge keyboard**: a **style** sets the whole look at once (PianoForge's defaults, Concert, Neon, Galaxy,
+Rainbow, Minimal; the size, the keys shown and the timing kept), and a button brings every setting back to its
+default (the width kept). The settings are grouped: Keyboard, Colours, Notes, Lights, Sparkles, Velocity, Powerful
+chords.
+
+The keys shown: all 88, a smaller keyboard's (76, 61, 49, 37), from one key to another, or following the playing
+(the view glides to the keys played in the last 4 s, held or ringing, at least so many octaves wide, and stays put
+while the playing stays inside it); the keys keep a piano's proportions for their width.
+
+The notes: they last as the sound does (a note whose key is up but a pedal still holds, sustain or sostenuto, goes on
+as a fainter tail until the pedal lets it go or the key is struck again; a line of light along the keyboard while the
+sustain pedal is down); along its bar a note dims as a string dies away (slowly in the bass, quickly in the treble);
+the melody (the right hand's top notes) is a line of light through them.
+
+The lights also: a bloom (the keyboard drawn into an image, its bright coloured parts, not the white keys, blurred
+at a quarter of its size and added over it), a reflection (the band over the keys a black lacquer mirroring the
+notes and lights above it), an ambiance (curtains of light over the room, as strong as PianoForge's sound is loud).
+
+Width; the notes above the keys (height, time to the top; 0: the keyboard alone), rounded
 bars with a bright rim and a halo, fading as they rise; the pedals. The keys have rounded fronts and a front edge
 that sinks as they go down; the black keys cast their shadow. The colours, chosen by hue (a slider in degrees) and
 saturation: each hand's (estimated from the notes: where each hand plays, how far it stretches, chords too wide for
@@ -104,7 +122,8 @@ line whose fields are all empty disappears), then OBS's text properties (font, c
 - `pianoforge-obs-overlay-test` (ctest `obs_overlay`): the keyboard's geometry, the keys and pedals at a frame, the
   notes kept for the trails and struck for the sparkles, the colours by hue, the sparkles (a stream rises, slows and
   goes out; fireworks burst), the powerful chords (found once their window has passed; not a soft chord, an arpeggio
-  or two notes; not too soon after another), the text template.
+  or two notes; not too soon after another), how long notes sound (the sustain pedal, the sostenuto, a key struck
+  again), the keys shown (a range; the view following the playing), the melody, the text template.
 - `pianoforge-obs-test` (ctest `obs_plugin`, about 45 s) loads the plugin into the installed libobs without the OBS
   application (audio, and video through OBS's Direct3D 11 module, offscreen; OBS's text source beside it), writes
   the feed as PianoForge does (three mixes of a 1 kHz sine, on a clock 200 ppm fast, the volume at -6 dB, MIDI
@@ -114,6 +133,8 @@ line whose fields are all empty disappears), then OBS's text properties (font, c
   keyboard rendered (each hand's colour, a key not lit, a note rising, the sustain pedal; a phrase played, its
   images kept beside the report; sparkles after strikes, leaning as asked, and none when off; a soft note thinner
   and duller than a strong one; a powerful chord lighting the room and throwing fireworks, nothing for a soft chord
-  nor with them off; the rainbow; the time a busy image takes; no word from Direct3D); the text filled and resized;
+  nor with them off; a pedal's tail, the melody's line, 61 keys and the view following the playing, the bloom, the
+  reflection, the ambiance; the styles and the reset; the rainbow; the time a busy image takes; no word from
+  Direct3D); the text filled and resized;
   a mark logged while OBS does not record.
   The test's feed has a name of its own (`PIANOFORGE_AUDIO_FEED`): it runs beside a PianoForge and an OBS in use.

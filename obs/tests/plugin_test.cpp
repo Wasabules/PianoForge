@@ -405,18 +405,19 @@ int main(int argc, char** argv)
         auto show = [](const std::array<int, 3>& c) { return std::to_string(c[0]) + "," + std::to_string(c[1]) + "," + std::to_string(c[2]); };
         // 1040 wide: white keys of 20 pixels; the band of keys 130 high (a rail of 7, the keys from 107 to 230), the
         // pedals under it (16).
-        const int keysTop = 107, bottom = 230;
-        bool ok = !px.empty() && w == 1040 && h == 100 + 130 + 16;
+        // (the band over them lacquered by default: 22 px)
+        const int keysTop = 122, bottom = 245;
+        bool ok = !px.empty() && w == 1040 && h == 100 + 22 + 123 + 16;
         if (ok) {
             save(px, w, h, "keyboard.bmp");
             const int y = keysTop + (int) (0.75 * (bottom - keysTop));
-            const auto c2 = at(9 * 20 + 10, y), c4 = at(23 * 20 + 10, y), d4 = at(24 * 20 + 10, y);
+            const auto c2 = at(9 * 20 + 10, y), c4 = at(23 * 20 + 10, y), g4 = at(27 * 20 + 10, y); // (G: away from the bloom)
             const auto pedal = at(1040 - 20, bottom + 8), note = at(23 * 20 + 10, 60);
-            say("        C2 " + show(c2) + "; middle C " + show(c4) + "; D " + show(d4) + "; pedal " + show(pedal) + "; note " + show(note));
-            ok = c2[2] > c2[0] + 40 && c4[0] > c4[2] + 60 && c4[0] > 150 && d4[0] > 200 && d4[1] > 200 && d4[2] > 200
-                 && std::abs(d4[0] - d4[2]) < 15 && pedal[0] > pedal[2] + 40 && note[0] > note[2] + 40;
+            say("        C2 " + show(c2) + "; middle C " + show(c4) + "; G " + show(g4) + "; pedal " + show(pedal) + "; note " + show(note));
+            ok = c2[2] > c2[0] + 40 && c4[0] > c4[2] + 60 && c4[0] > 150 && g4[0] > 200 && g4[1] > 200 && g4[2] > 200
+                 && std::abs(g4[0] - g4[2]) < 15 && pedal[0] > pedal[2] + 40 && note[0] > note[2] + 40;
         }
-        check(ok, "the keyboard by hand: C2 to the left (blue), middle C to the right (orange), D not lit, its note rising, the sustain pedal");
+        check(ok, "the keyboard by hand: C2 to the left (blue), middle C to the right (orange), G not lit, its note rising, the sustain pedal");
 
         // A phrase: the keys up, then a rising arpeggio and a chord, struck harder and harder.
         play({ { 0, 0x80, 36, 0, 0, 0 }, { 0, 0x80, 60, 0, 0, 0 }, { 0, 0xB0, 64, 0, 0, 0 } });
@@ -489,6 +490,9 @@ int main(int argc, char** argv)
                 obs_data_set_int(s, "sparkle_spread", 10);
                 obs_data_set_int(s, "sparkle_tilt", tilt);
                 obs_data_set_bool(s, "chords", false);
+                obs_data_set_int(s, "bloom", 0);
+                obs_data_set_int(s, "reflection", 0);
+                obs_data_set_int(s, "ambiance", 0);
                 obs_source_update(keyboard, s);
                 obs_data_release(s);
                 std::this_thread::sleep_for(std::chrono::milliseconds(150));
@@ -541,7 +545,9 @@ int main(int argc, char** argv)
         auto noteOff = [](int key) { return pf::FeedEvent { 0, 0x80, (std::uint8_t) key, 0, 0, 0 }; };
 
         {   // The velocity shows: a soft note thinner and duller than a strong one (its white-hot core).
-            look({ { "color_mode", 0 }, { "trail_height", 100 }, { "glow", 60 }, { "sparkles", 0 } }, { { "chords", false } });
+            look({ { "color_mode", 0 }, { "trail_height", 100 }, { "glow", 60 }, { "sparkles", 0 }, { "bloom", 0 }, { "reflection", 0 },
+                   { "ambiance", 0 } },
+                 { { "chords", false }, { "melody", false } });
             play({ noteOn(50, 25), noteOn(69, 110) });
             std::this_thread::sleep_for(std::chrono::milliseconds(450));
             px = renderSource(keyboard, w, h);
@@ -570,7 +576,9 @@ int main(int argc, char** argv)
                 int bright = 0;
             };
             auto chordTest = [&](bool on, int velocity) {
-                look({ { "color_mode", 2 }, { "trail_height", 0 }, { "glow", 0 }, { "sparkles", 0 } }, { { "chords", on } });
+                look({ { "color_mode", 2 }, { "trail_height", 0 }, { "glow", 0 }, { "sparkles", 0 }, { "bloom", 0 }, { "reflection", 0 },
+                       { "ambiance", 0 } },
+                     { { "chords", on } });
                 play({ noteOn(60, velocity), noteOn(64, velocity), noteOn(67, velocity), noteOn(72, velocity) });
                 std::this_thread::sleep_for(std::chrono::milliseconds(120));
                 Chorded out;
@@ -599,7 +607,9 @@ int main(int argc, char** argv)
                       + " without, " + std::to_string(soft.bright) + " for a soft chord)");
 
             // Its images, the look as by default: a big chord of both hands.
-            look({ { "color_mode", 2 }, { "trail_height", 100 }, { "glow", 60 }, { "sparkles", 50 } }, { { "chords", true } });
+            look({ { "color_mode", 2 }, { "trail_height", 100 }, { "glow", 60 }, { "sparkles", 50 }, { "bloom", 40 }, { "reflection", 50 },
+                   { "ambiance", 35 } },
+                 { { "chords", true }, { "melody", true } });
             play({ noteOn(36, 118), noteOn(43, 116), noteOn(48, 117), noteOn(72, 120), noteOn(76, 119), noteOn(79, 121) });
             const char* chordFrames[3] = { "keyboard-chord-1.bmp", "keyboard-chord-2.bmp", "keyboard-chord-3.bmp" };
             const int chordWaits[3] = { 90, 260, 450 };
@@ -612,6 +622,230 @@ int main(int argc, char** argv)
             play({ noteOff(36), noteOff(43), noteOff(48), noteOff(72), noteOff(76), noteOff(79) });
         }
 
+        // The notes held by the pedal: a tail under the bar while it holds them, ended when it is up; none without them.
+        {
+            auto quiet = [&](bool tails) {
+                look({ { "color_mode", 2 }, { "trail_height", 100 }, { "glow", 0 }, { "sparkles", 0 }, { "bloom", 0 }, { "reflection", 0 },
+                       { "ambiance", 0 }, { "velocity_accent", 0 } },
+                     { { "chords", false }, { "melody", false }, { "pedal_tails", tails }, { "note_decay", false } });
+            };
+            auto alpha = [&](int x, int y) { return (int) px[((std::size_t) y * w + (std::size_t) x) * 4 + 3]; };
+            int held = 0, bar = 0, without = 0, after = 0;
+            for (bool tails : { true, false }) {
+                quiet(tails);
+                play({ { 0, 0xB0, 64, 127, 0, 0 }, noteOn(64, 100) }); // E4, the pedal down
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                play({ noteOff(64) });
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                px = renderSource(keyboard, w, h);
+                if (!px.empty() && tails) {
+                    held = alpha(510, 96); // under the bar: the tail
+                    bar = alpha(510, 84);
+                    save(px, w, h, "keyboard-pedal.bmp");
+                } else if (!px.empty()) {
+                    without = alpha(510, 96);
+                }
+                play({ { 0, 0xB0, 64, 0, 0, 0 } });
+                std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                if (tails) {
+                    px = renderSource(keyboard, w, h);
+                    after = px.empty() ? 255 : alpha(510, 97); // the tail ended where the pedal went up, a few pixels higher
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+            check(held > 60 && bar > 100 && without < 30 && after < 30,
+                  "a note the pedal holds: its tail under the bar (" + std::to_string(held) + "), none without the option ("
+                      + std::to_string(without) + "), ended once the pedal is up (" + std::to_string(after) + ")");
+        }
+
+        // The melody: a line of light between the right hand's notes; none without it.
+        {
+            auto melodyAt = [&](bool on) {
+                look({ { "color_mode", 2 }, { "trail_height", 100 }, { "glow", 0 }, { "sparkles", 0 }, { "bloom", 0 }, { "reflection", 0 },
+                       { "ambiance", 0 }, { "velocity_accent", 0 } },
+                     { { "chords", false }, { "melody", on }, { "pedal_tails", false } });
+                for (int key : { 72, 76, 79, 84 }) {
+                    play({ noteOn(key, 100) });
+                    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                px = renderSource(keyboard, w, h);
+                int brightest = 0; // between C5's and E5's notes (x 610 and 650), around their tops
+                for (int y = 70; y < 96 && !px.empty(); ++y) {
+                    const auto c = at(630, y);
+                    brightest = std::max(brightest, c[0] + c[1] + c[2]);
+                }
+                if (on && !px.empty())
+                    save(px, w, h, "keyboard-melody.bmp");
+                play({ noteOff(72), noteOff(76), noteOff(79), noteOff(84) });
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                return brightest;
+            };
+            const int on = melodyAt(true), off = melodyAt(false);
+            check(on > 300 && off < 60, "the melody: a line of light between the notes (" + std::to_string(on) + "), none without it ("
+                                            + std::to_string(off) + ")");
+        }
+
+        // The keys shown: 61 keys (C2 at the left edge, the keys wider, the keyboard taller); following the playing.
+        {
+            look({ { "range", 61 }, { "color_mode", 2 }, { "trail_height", 100 }, { "glow", 0 }, { "sparkles", 0 }, { "bloom", 0 },
+                   { "reflection", 0 }, { "ambiance", 0 } },
+                 { { "chords", false }, { "melody", false } });
+            play({ noteOn(36, 100) });
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            px = renderSource(keyboard, w, h);
+            // 36 white keys over 1040 px: the band 188 high (a rail of 9, the keys 179), the pedals 23.
+            const bool sized = w == 1040 && h == 100 + 9 + 179 + 23;
+            const auto c2 = px.empty() || !sized ? std::array<int, 3> {} : at(14, (int) h - 23 - 30);
+            if (!px.empty())
+                save(px, w, h, "keyboard-61.bmp");
+            play({ noteOff(36) });
+            look({ { "range", -1 }, { "follow_octaves", 3 } }, {});
+            for (int key : { 84, 88, 91, 96 }) {
+                play({ noteOn(key, 100) });
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+            px = renderSource(keyboard, w, h);
+            int longest = 0, run = 0; // the widest key lit (orange), along the keys' lower part
+            for (int x = 0; x < (int) w && !px.empty(); ++x) {
+                const auto c = at(x, (int) h - 23 - 20);
+                run = c[0] > 180 && c[0] > c[2] + 60 ? run + 1 : 0;
+                longest = std::max(longest, run);
+            }
+            if (!px.empty())
+                save(px, w, h, "keyboard-follow.bmp");
+            play({ noteOff(84), noteOff(88), noteOff(91), noteOff(96) });
+            look({ { "range", 88 } }, {});
+            check(sized && c2[2] > c2[0] + 30 && longest > 22, // (wider: the view narrows to the keys played lately)
+                  "61 keys: C2 at the left edge (" + show(c2) + "), the keyboard " + std::to_string(h) + " px high; following the "
+                      + "playing: keys " + std::to_string(longest) + " px wide (20 on 88 keys)");
+        }
+
+        // The bloom: the light around a lit key and its note grows; the white keys away from it do not change.
+        {
+            auto bloomAt = [&](int bloom) {
+                look({ { "color_mode", 2 }, { "trail_height", 100 }, { "glow", 60 }, { "sparkles", 0 }, { "bloom", bloom }, { "reflection", 0 },
+                       { "ambiance", 0 } },
+                     { { "chords", false }, { "melody", false } });
+                play({ noteOn(64, 110) });
+                std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                px = renderSource(keyboard, w, h);
+                std::pair<long long, long long> out { 0, 0 };
+                for (int y = 60; y < 96 && !px.empty(); ++y)
+                    for (int x : { 486, 490, 494, 526, 530, 534 }) {
+                        const auto c = at(x, y);
+                        out.first += c[0] + c[1] + c[2];
+                    }
+                for (int y = 167; y < 177 && !px.empty(); ++y)
+                    for (int x = 202; x < 218; ++x) {
+                        const auto c = at(x, y);
+                        out.second += c[0] + c[1] + c[2];
+                    }
+                if (bloom > 0 && !px.empty())
+                    save(px, w, h, "keyboard-bloom.bmp");
+                play({ noteOff(64) });
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                return out;
+            };
+            const auto off = bloomAt(0), on = bloomAt(100);
+            check(on.first > off.first * 13 / 10 + 2000 && std::llabs(on.second - off.second) * 100 < off.second * 3,
+                  "the bloom: the light around a lit note " + std::to_string(on.first) + " (" + std::to_string(off.first)
+                      + " without), the white keys away " + std::to_string(on.second) + " (" + std::to_string(off.second) + ")");
+        }
+
+        // The reflection: under a note, the lacquered band takes its hue; elsewhere it stays dark.
+        {
+            look({ { "color_mode", 2 }, { "trail_height", 100 }, { "glow", 0 }, { "sparkles", 0 }, { "bloom", 0 }, { "reflection", 100 },
+                   { "ambiance", 0 } },
+                 { { "chords", false }, { "melody", false }, { "pedal_tails", false }, { "note_decay", false } });
+            play({ noteOn(64, 100) });
+            std::this_thread::sleep_for(std::chrono::milliseconds(600));
+            px = renderSource(keyboard, w, h);
+            const bool sized = h == 100 + 22 + 123 + 16;
+            const auto under = px.empty() || !sized ? std::array<int, 3> {} : at(510, 104), away = px.empty() || !sized ? std::array<int, 3> {} : at(300, 104);
+            if (!px.empty())
+                save(px, w, h, "keyboard-reflection.bmp");
+            play({ noteOff(64) });
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            const int hi = std::max({ under[0], under[1], under[2] }), lo = std::min({ under[0], under[1], under[2] });
+            check(sized && hi > std::max({ away[0], away[1], away[2] }) + 40 && hi - lo > 40,
+                  "the reflection: under the note, the lacquer in its hue (" + show(under) + "), elsewhere dark (" + show(away) + ")");
+        }
+
+        // The ambiance: curtains of light over the room while the sound plays (the test's sine); no room for them at 0.
+        {
+            look({ { "trail_height", 0 }, { "glow", 0 }, { "sparkles", 0 }, { "bloom", 0 }, { "reflection", 0 }, { "ambiance", 100 } },
+                 { { "chords", false }, { "melody", false } });
+            std::this_thread::sleep_for(std::chrono::milliseconds(600));
+            px = renderSource(keyboard, w, h);
+            long long light = 0;
+            for (int y = 0; y + 146 < (int) h && !px.empty(); ++y)
+                for (int x = 0; x < (int) w; x += 2) {
+                    const auto c = at(x, y);
+                    light += c[0] + c[1] + c[2];
+                }
+            if (!px.empty())
+                save(px, w, h, "keyboard-ambiance.bmp");
+            look({ { "ambiance", 0 } }, {});
+            const std::uint32_t without = obs_source_get_height(keyboard);
+            check(light > 100000 && h == 78 + 146 && without == 146,
+                  "the ambiance: light over the room as the sound plays (" + std::to_string(light) + "); at 0, no room above the keys ("
+                      + std::to_string(without) + " px high)");
+        }
+
+        // The styles: one chosen sets the look, once (the properties opened again do not apply it over what changed
+        // since); back to the defaults keeps the width.
+        {
+            obs_data_t* settings = obs_source_get_settings(keyboard);
+            obs_properties_t* props = obs_source_properties(keyboard);
+            obs_property_t* style = obs_properties_get(props, "style");
+            obs_data_set_int(settings, "style", 6); // minimal
+            obs_property_modified(style, settings);
+            const bool minimal = obs_data_get_int(settings, "sparkles") == 0 && obs_data_get_int(settings, "bloom") == 0
+                                 && !obs_data_get_bool(settings, "chords") && obs_data_get_int(settings, "color_mode") == 0;
+            obs_data_set_int(settings, "sparkles", 33);
+            obs_property_modified(style, settings); // as the properties open again
+            const bool kept = obs_data_get_int(settings, "sparkles") == 33;
+            obs_data_set_int(settings, "style", 3); // neon
+            obs_property_modified(style, settings);
+            const bool neon = obs_data_get_int(settings, "hue_right") == 320 && obs_data_get_int(settings, "bloom") == 80
+                              && obs_data_get_bool(settings, "chords") && obs_data_get_int(settings, "sparkles") == 70;
+            obs_source_update(keyboard, settings);
+            obs_property_button_clicked(obs_properties_get(props, "reset"), keyboard);
+            const bool reset = obs_data_get_int(settings, "sparkles") == 50 && obs_data_get_int(settings, "bloom") == 40
+                               && obs_data_get_int(settings, "width") == 1040 && obs_data_get_int(settings, "style") == 0;
+            obs_properties_destroy(props);
+            obs_data_release(settings);
+            check(minimal && kept && neon && reset, "styles: minimal, then neon, each applied once; back to the defaults, the width kept");
+        }
+
+        // Images of the look by default (the notes 240 px high): a phrase, the pedal down, its melody, a chord.
+        {
+            play({ { 0, 0xB0, 64, 127, 0, 0 } });
+            const int phrase[10] = { 48, 55, 60, 64, 67, 72, 76, 79, 77, 76 };
+            for (int i = 0; i < 10; ++i) {
+                play({ noteOn(phrase[i], 60 + 6 * i) });
+                std::this_thread::sleep_for(std::chrono::milliseconds(160));
+                if (i < 7)
+                    play({ noteOff(phrase[i]) });
+            }
+            play({ noteOn(36, 118), noteOn(43, 116), noteOn(48, 117), noteOn(72, 120), noteOn(76, 119), noteOn(79, 121) });
+            const char* lookFrames[3] = { "keyboard-look-1.bmp", "keyboard-look-2.bmp", "keyboard-look-3.bmp" };
+            for (int i = 0; i < 3; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(i == 0 ? 120 : 350));
+                px = renderSource(keyboard, w, h);
+                if (!px.empty())
+                    save(px, w, h, lookFrames[i]);
+            }
+            std::vector<pf::FeedEvent> up;
+            for (int key = 21; key <= 108; ++key)
+                up.push_back(noteOff(key));
+            up.push_back({ 0, 0xB0, 64, 0, 0, 0 });
+            const std::lock_guard<std::mutex> guard(playLock);
+            played.insert(played.end(), up.begin(), up.end());
+        }
+
         {   // The rainbow: the bass warm (C2 toward orange), the treble cool (E6 toward blue); the hues in the properties.
             obs_data_t* s = obs_data_create();
             obs_data_set_int(s, "color_mode", 3);
@@ -619,6 +853,9 @@ int main(int argc, char** argv)
             obs_data_set_int(s, "glow", 60);
             obs_data_set_int(s, "sparkles", 50);
             obs_data_set_int(s, "sparkle_tilt", 0);
+            obs_data_set_int(s, "reflection", 0);
+            obs_data_set_int(s, "bloom", 0);
+            obs_data_set_int(s, "ambiance", 0);
             obs_source_update(keyboard, s);
             obs_data_release(s);
             play({ { 0, 0x90, 36, 110, 0, 0 }, { 0, 0x90, 88, 110, 0, 0 } }); // C2 and E6 held
@@ -627,14 +864,16 @@ int main(int argc, char** argv)
             bool rainbow = !px.empty() && h == 246;
             if (rainbow) {
                 save(px, w, h, "keyboard-rainbow.bmp");
-                const auto low = at(9 * 20 + 10, keysTop + 90), high = at(39 * 20 + 10, keysTop + 90);
+                const auto low = at(9 * 20 + 10, 107 + 90), high = at(39 * 20 + 10, 107 + 90); // (a thin rail: the keys from 107)
                 say("        rainbow: C2 " + show(low) + "; E6 " + show(high));
                 rainbow = low[0] > low[2] + 60 && high[2] > high[0] + 60;
             }
             obs_properties_t* props = obs_source_properties(keyboard);
             for (const char* name : { "color_mode", "hue_left", "hue_right", "hue_white", "hue_black", "hue", "saturation", "glow", "sparkles",
                                      "sparkle_height", "sparkle_spread", "sparkle_tilt", "velocity_accent", "velocity_top", "velocity_measure",
-                                     "chords", "chord_notes", "chord_threshold", "chord_intensity", "chord_fireworks" })
+                                     "chords", "chord_notes", "chord_threshold", "chord_intensity", "chord_fireworks", "style", "reset", "range",
+                                     "range_first", "follow_octaves", "pedal_tails", "note_decay", "melody", "bloom", "reflection",
+                                     "ambiance" })
                 rainbow = rainbow && props != nullptr && obs_properties_get(props, name) != nullptr;
             obs_properties_destroy(props);
             check(rainbow, "the rainbow along the keyboard (the bass warm, the treble cool); hues, saturation, lights and sparkles in the properties");

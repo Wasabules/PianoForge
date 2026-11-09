@@ -77,8 +77,9 @@ int main()
         k.advance(600, 1000);
         check(k.notes().size() == 4 && k.notes()[2].end == 520 && k.notes()[3].open() && k.velocity(64) == 80,
               "struck again while held: the first note ends where the second starts");
+        k.add(event(8000, 0xB0, 64, 0)); // the pedal up: the sounds it held end
         k.advance(10000, 1000);
-        check(k.notes().size() == 1 && k.notes()[0].open(), "notes ended long ago are forgotten, the one held kept");
+        check(k.notes().size() == 1 && k.notes()[0].open(), "notes whose sound ended long ago are forgotten, the one held kept");
         k.add(event(10001, 0xB0, 123, 0));
         k.advance(10002, 1000);
         check(k.velocity(64) == 0 && !k.notes()[0].open(), "all notes off: every key up");
@@ -262,6 +263,104 @@ int main()
         old.age = 0.9f;
         check(s.sparks().size() == Sparkles::kMax && young.brightness() > 0.4f && old.brightness() < 0.25f,
               "no more than kMax at once; lit at once, going out at the end");
+    }
+
+    // How long notes sound: to the key's release, or, held by a pedal, until the pedal is up or the key struck again.
+    {
+        KeyboardState k;
+        k.reset();
+        k.add(event(100, 0x90, 60, 90));
+        k.add(event(200, 0x80, 60, 0)); // no pedal: its sound ends with the key
+        k.add(event(300, 0xB0, 64, 127));
+        k.add(event(400, 0x90, 64, 90));
+        k.add(event(500, 0x80, 64, 0)); // the sustain pedal down: it rings on
+        k.advance(600, 100000);
+        const bool rings = k.notes().size() == 2 && !k.notes()[0].ringing() && k.notes()[0].sound == 200 && k.notes()[1].ringing()
+                           && k.notes()[1].end == 500;
+        k.add(event(700, 0xB0, 64, 0));
+        k.advance(800, 100000);
+        check(rings && !k.notes()[1].ringing() && k.notes()[1].sound == 700, "the sustain pedal holds a note's sound until it is up");
+        k.add(event(900, 0xB0, 64, 127));
+        k.add(event(1000, 0x90, 67, 90));
+        k.add(event(1100, 0x80, 67, 0));
+        k.add(event(1200, 0x90, 67, 80)); // struck again: the sound before ends
+        k.advance(1300, 100000);
+        const auto& first = k.notes()[2];
+        check(first.key == 67 && first.sound == 1200 && k.notes()[3].open(), "a key struck again ends the sound the pedal held");
+        k.add(event(1300, 0x80, 67, 0));
+        k.add(event(1400, 0xB0, 64, 0));
+        // The sostenuto holds the keys down when it goes down, and only those.
+        k.add(event(1500, 0x90, 48, 90));
+        k.add(event(1600, 0xB0, 66, 127));
+        k.add(event(1700, 0x80, 48, 0));
+        k.add(event(1800, 0x90, 50, 90));
+        k.add(event(1900, 0x80, 50, 0));
+        k.advance(2000, 100000);
+        const PlayedNote* c3 = nullptr;
+        const PlayedNote* d3 = nullptr;
+        for (const auto& n : k.notes()) {
+            c3 = n.key == 48 ? &n : c3;
+            d3 = n.key == 50 ? &n : d3;
+        }
+        const bool held = c3 != nullptr && d3 != nullptr && c3->ringing() && d3->sound == 1900;
+        k.add(event(2100, 0xB0, 66, 0));
+        k.advance(2200, 100000);
+        for (const auto& n : k.notes())
+            c3 = n.key == 48 ? &n : c3;
+        check(held && c3->sound == 2100, "the sostenuto holds the keys down as it goes down, until it is up");
+        k.advance(2200 + 200000, 1000);
+        check(k.notes().empty(), "notes are forgotten once their sound has ended long ago");
+    }
+
+    // The part of the keyboard shown: a range's keys across the width; the view following the playing.
+    {
+        const KeyView all;
+        const KeyView v61 = viewOf(36, 96); // C2 to C7: 36 white keys
+        const auto c2 = keyShape(36, 720.0f, v61), c7 = keyShape(96, 720.0f, v61), a0 = keyShape(21, 720.0f, v61);
+        check(v61.first == 9.0f && v61.count == 36.0f && std::fabs(c2.x) < 1e-3f && std::fabs(c2.width - 20.0f) < 1e-3f
+                  && std::fabs(c7.x + c7.width - 720.0f) < 1e-3f && a0.x + a0.width <= 0.0f
+                  && std::fabs(keyShape(60, 1040.0f, all).x - keyShape(60, 1040.0f).x) < 1e-3f,
+              "a range of keys: its first at the left edge, its last at the right, the others outside");
+        const KeyView sharp = viewOf(37, 94); // black ends: widened to the white keys beside them
+        check(sharp.first == 9.0f && sharp.count == 35.0f, "a range ending on black keys takes the white keys beside them");
+
+        ViewFollower f;
+        f.reset(all);
+        for (int i = 0; i < 100; ++i)
+            f.step(72, 84, 0.05f, 21.0f); // an octave around C6: three octaves shown at least
+        const KeyView v = f.view();
+        const float c5 = (float) whitesBefore(72), c6 = (float) whitesBefore(84) + 1.0f;
+        check(std::fabs(v.count - 21.0f) < 0.1f && v.first < c5 && v.first + v.count > c6, "following: at least the width asked, around the keys played");
+        const KeyView before = f.view();
+        for (int i = 0; i < 20; ++i)
+            f.step(74, 81, 0.05f, 21.0f); // inside, not much narrower: it stays
+        check(std::fabs(f.view().first - before.first) < 0.01f, "keys played inside the view do not move it");
+        for (int i = 0; i < 100; ++i)
+            f.step(21, 30, 0.05f, 21.0f); // the bass: it glides there, within the keyboard
+        check(f.view().first < 0.05f && f.view().count >= 20.9f, "keys played outside move it there, never beyond the keyboard");
+    }
+
+    // The melody: the highest note of each group the right hand strikes.
+    {
+        std::vector<PlayedNote> notes;
+        auto add = [&](int key, int hand, std::uint64_t at) {
+            PlayedNote n;
+            n.key = key;
+            n.hand = hand;
+            n.start = at;
+            notes.push_back(n);
+        };
+        add(48, kLeftHand, 1000);
+        add(60, kRightHand, 1000);
+        add(67, kRightHand, 1010);
+        add(64, kRightHand, 1020); // a chord: its top, 67
+        add(72, kRightHand, 5000);
+        add(40, kLeftHand, 6000);
+        add(71, kRightHand, 9000);
+        std::vector<PlayedNote> melody;
+        melodyOf(notes, 1680, melody);
+        check(melody.size() == 3 && melody[0].key == 67 && melody[1].key == 72 && melody[2].key == 71,
+              "the melody: the right hand's top notes, in order, the left hand left out");
     }
 
     // A firework: the rocket rises to its height, then bursts all around it.

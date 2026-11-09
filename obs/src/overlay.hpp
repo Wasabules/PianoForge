@@ -2,7 +2,8 @@
 
 // The overlays' logic, without OBS (tests: obs/tests/overlay_test.cpp): the keyboard's geometry, the keys and
 // pedals as the MIDI events of the feed leave them at a frame, the notes played (for the trails) and struck (for the
-// sparkles), the colours by hue, the sparkles and fireworks, the powerful chords, and the text source's template.
+// sparkles) and how long they sound (the pedals holding them), the part of the keyboard shown (following the playing),
+// the melody, the colours by hue, the sparkles and fireworks, the powerful chords, and the text source's template.
 
 #include <pianoforge/audio_feed.hpp>
 
@@ -91,6 +92,76 @@ inline std::uint32_t mixColor(std::uint32_t a, std::uint32_t b, double t) noexce
     }
     return out;
 }
+
+/// The part of the keyboard shown: from white key `first` (counted from A0, fractional while moving), `count` white
+/// keys across the width.
+struct KeyView {
+    float first = 0.0f, count = (float) kWhiteKeys;
+};
+
+/// A key over a keyboard `width` wide showing `view` (keys outside it fall outside the width).
+inline KeyShape keyShape(int key, float width, const KeyView& view) noexcept
+{
+    const float w = width / std::max(1.0f, view.count);
+    KeyShape s = keyShape(key, w * (float) kWhiteKeys);
+    s.x -= view.first * w;
+    return s;
+}
+
+/// The view of the keys from `firstKey` to `lastKey` (a black end widened to the white key beside it).
+inline KeyView viewOf(int firstKey, int lastKey) noexcept
+{
+    firstKey = std::clamp(firstKey, kFirstKey, kLastKey);
+    lastKey = std::clamp(lastKey, firstKey, kLastKey);
+    if (isBlack(firstKey))
+        --firstKey;
+    if (isBlack(lastKey))
+        ++lastKey;
+    KeyView v;
+    v.first = (float) whitesBefore(firstKey);
+    v.count = (float) (whitesBefore(lastKey) + 1) - v.first;
+    return v;
+}
+
+/// The view following the playing: the keys played lately with a margin, at least `minWhites` wide, within the
+/// keyboard. It moves only when a key played falls near its edge or when it could narrow by a quarter (a view that
+/// moves at every note is tiring), and then glides there.
+class ViewFollower {
+public:
+    static constexpr float kMargin = 1.5f, kSeconds = 0.6f;
+
+    void reset(const KeyView& v)
+    {
+        now = target = v;
+    }
+    /// The keys played lately (`low` > `high`: none), `dt` seconds on.
+    const KeyView& step(int low, int high, float dt, float minWhites)
+    {
+        minWhites = std::clamp(minWhites, 1.0f, (float) kWhiteKeys);
+        if (low <= high) {
+            const float needLo = (float) whitesBefore(std::clamp(low, kFirstKey, kLastKey));
+            const float needHi = (float) (whitesBefore(std::clamp(high, kFirstKey, kLastKey)) + 1);
+            float lo = needLo - kMargin, hi = needHi + kMargin;
+            const float span = std::min((float) kWhiteKeys, std::max(hi - lo, minWhites)), mid = 0.5f * (lo + hi);
+            lo = std::clamp(mid - 0.5f * span, 0.0f, std::max(0.0f, (float) kWhiteKeys - span));
+            hi = std::min((float) kWhiteKeys, lo + span);
+            const bool outside = needLo < target.first + 0.5f || needHi > target.first + target.count - 0.5f;
+            const bool narrower = hi - lo < 0.75f * target.count;
+            if (outside || narrower || target.count < minWhites) {
+                target.first = lo;
+                target.count = hi - lo;
+            }
+        }
+        const float k = 1.0f - std::exp(-std::max(0.0f, dt) / kSeconds);
+        now.first += (target.first - now.first) * k;
+        now.count += (target.count - now.count) * k;
+        return now;
+    }
+    const KeyView& view() const noexcept { return now; }
+
+private:
+    KeyView now, target;
+};
 
 enum Hand : int { kNoHand = 0, kLeftHand = 1, kRightHand = 2 };
 
@@ -195,10 +266,14 @@ private:
 };
 
 /// A note played: its key, velocity, hand, and frames (end: open while the key is down).
+/// `sound`: when its sound ends (its key's release, or later: the pedal holding it lifted, the key struck again;
+/// open while it sounds).
 struct PlayedNote {
     int key = 0, velocity = 0, hand = kNoHand;
-    std::uint64_t start = 0, end = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t start = 0, end = std::numeric_limits<std::uint64_t>::max(), sound = std::numeric_limits<std::uint64_t>::max();
     bool open() const noexcept { return end == std::numeric_limits<std::uint64_t>::max(); }
+    /// Its key up, a pedal holding its sound.
+    bool ringing() const noexcept { return !open() && sound == std::numeric_limits<std::uint64_t>::max(); }
 };
 
 /// A key's light: held at `velocity` (0: up), by `hand`, pressed at frame `pressed` and released at `released` (the
@@ -223,6 +298,7 @@ public:
             l = KeyLight {};
         open.fill(-1);
         pedals.fill(0.0f);
+        sostenuto.fill(false);
         hands.reset();
     }
     /// The feed's rate (the window of notes struck together: kTogetherSeconds).
@@ -246,7 +322,7 @@ public:
         }
         const std::uint64_t horizon = frame > keep ? frame - keep : 0;
         played.erase(std::remove_if(played.begin(), played.end(),
-                                    [&](const PlayedNote& n) { return !n.open() && n.end < horizon; }),
+                                    [&](const PlayedNote& n) { return !n.open() && !n.ringing() && n.sound < horizon; }),
                      played.end());
         for (int k = 0; k < 128; ++k) // the indices of the notes still open, after the erase
             open[(std::size_t) k] = -1;
@@ -305,7 +381,8 @@ private:
         const int type = e.status & 0xF0, key = e.data1 & 0x7F, value = e.data2 & 0x7F;
         auto& light = lights[(std::size_t) key];
         if (type == 0x90 && value > 0) {
-            close(key, e.frame); // struck again: the earlier note ends here
+            close(key, e.frame); // struck again: the earlier note ends here, and its sound
+            silence(key, e.frame);
             light.velocity = light.lastVelocity = value;
             light.hand = e.reserved != kNoHand ? (int) e.reserved : kRightHand;
             light.pressed = e.frame;
@@ -323,17 +400,47 @@ private:
         } else if (type == 0x80 || (type == 0x90 && value == 0)) {
             release(key, e.frame);
         } else if (type == 0xB0) {
-            if (key == 64)
+            if (key == 64) {
+                const bool was = sustainDown();
                 pedals[0] = value / 127.0f;
-            else if (key == 66)
+                if (was && !sustainDown()) // the sustain pedal up: what it held stops
+                    for (auto& n : played)
+                        if (n.ringing() && !(sostenutoDown() && sostenuto[(std::size_t) n.key]))
+                            n.sound = e.frame;
+            } else if (key == 66) {
+                const bool was = sostenutoDown();
                 pedals[1] = value / 127.0f;
-            else if (key == 67)
+                if (!was && sostenutoDown()) { // the sostenuto down: it holds the keys down now
+                    for (int k = 0; k < 128; ++k)
+                        sostenuto[(std::size_t) k] = lights[(std::size_t) k].velocity > 0;
+                } else if (was && !sostenutoDown()) {
+                    for (auto& n : played)
+                        if (n.ringing() && sostenuto[(std::size_t) n.key] && !sustainDown())
+                            n.sound = e.frame;
+                    sostenuto.fill(false);
+                }
+            } else if (key == 67) {
                 pedals[2] = value / 127.0f;
-            else if (key == 120 || key == 123) // all sound off, all notes off
+            } else if (key == 120 || key == 123) { // all sound off, all notes off
                 for (int k = 0; k < 128; ++k)
                     if (lights[(std::size_t) k].velocity > 0)
                         release(k, e.frame);
+                for (auto& n : played)
+                    if (n.ringing())
+                        n.sound = e.frame;
+            }
         }
+    }
+
+    bool sustainDown() const noexcept { return pedals[0] >= 0.5f; }
+    bool sostenutoDown() const noexcept { return pedals[1] >= 0.5f; }
+
+    /// The sound of `key`'s notes still ringing ends at `frame`.
+    void silence(int key, std::uint64_t frame)
+    {
+        for (auto& n : played)
+            if (n.key == key && n.ringing())
+                n.sound = std::max(frame, n.end);
     }
 
     void release(int key, std::uint64_t frame)
@@ -346,11 +453,16 @@ private:
         close(key, frame);
     }
 
+    /// The note held on `key` ends at `frame`; its sound too, unless a pedal holds it.
     void close(int key, std::uint64_t frame)
     {
         const int i = open[(std::size_t) key];
-        if (i >= 0 && i < (int) played.size() && played[(std::size_t) i].open())
-            played[(std::size_t) i].end = std::max(frame, played[(std::size_t) i].start);
+        if (i >= 0 && i < (int) played.size() && played[(std::size_t) i].open()) {
+            auto& n = played[(std::size_t) i];
+            n.end = std::max(frame, n.start);
+            const bool held = sustainDown() || (sostenutoDown() && sostenuto[(std::size_t) key]);
+            n.sound = held ? std::numeric_limits<std::uint64_t>::max() : n.end;
+        }
         open[(std::size_t) key] = -1;
     }
 
@@ -363,10 +475,30 @@ private:
         return a;
     }();
     std::array<float, 3> pedals {};
+    std::array<bool, 128> sostenuto {}; // the keys the sostenuto pedal holds
     HandEstimator hands;
     std::uint64_t together = 1680; // 35 ms at 48 kHz
     std::vector<int> groupKeys, groupHands;
 };
+
+/// The melody: the highest note of each group of notes the right hand struck together (within `window` frames of the
+/// group's first), in order (`notes` in the order struck).
+inline void melodyOf(const std::vector<PlayedNote>& notes, std::uint64_t window, std::vector<PlayedNote>& out)
+{
+    out.clear();
+    std::uint64_t groupStart = 0;
+    for (const auto& n : notes) {
+        if (n.hand != kRightHand)
+            continue;
+        if (!out.empty() && n.start <= groupStart + window) {
+            if (n.key > out.back().key)
+                out.back() = n;
+            continue;
+        }
+        groupStart = n.start;
+        out.push_back(n);
+    }
+}
 
 /// A spark: where it is and where it goes (pixels, pixels per second), how old it is (seconds; below 0 it has not
 /// left yet) and how long it lives, its size (pixels: its star's reach), its colour (0xAABBGGRR) and its phase (it
