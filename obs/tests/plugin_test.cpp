@@ -7,7 +7,9 @@
 //     latency, the resync button; another mix with the volume followed, reached through fades (no click);
 //   - the readers the application sees (sound, keyboard, text, and the mix taken);
 //   - the keyboard: rendered, C2 lit blue (left hand), middle C orange, D not, a note rising, the sustain pedal; a
-//     phrase played (its images kept), sparkles thrown up by strikes (leaning as asked), none when off;
+//     phrase played (its images kept), sparkles thrown up by strikes (leaning as asked), none when off; the velocity
+//     (a soft note thinner and duller than a strong one); a powerful chord (the room lit, fireworks; nothing for a
+//     soft chord, nor with them off);
 //   - the text: its template filled with the application's state, wider for a longer text;
 //   - the chapters: a mark while OBS does not record is said so in the log.
 // The feed has a name of its own (PIANOFORGE_AUDIO_FEED): the test runs beside a PianoForge and an OBS in use.
@@ -486,6 +488,7 @@ int main(int argc, char** argv)
                 obs_data_set_int(s, "sparkles", sparkles);
                 obs_data_set_int(s, "sparkle_spread", 10);
                 obs_data_set_int(s, "sparkle_tilt", tilt);
+                obs_data_set_bool(s, "chords", false);
                 obs_source_update(keyboard, s);
                 obs_data_release(s);
                 std::this_thread::sleep_for(std::chrono::milliseconds(150));
@@ -523,6 +526,92 @@ int main(int argc, char** argv)
         check(leaning.bright > 30 && leaning.meanX > with.meanX + 4.0,
               "sparkles leaning to the right: around x " + std::to_string((int) leaning.meanX) + ", straight up around x "
                   + std::to_string((int) with.meanX));
+        // The keyboard's look, set for a test (what is not given keeps its value).
+        auto look = [&](std::initializer_list<std::pair<const char*, long long>> numbers, std::initializer_list<std::pair<const char*, bool>> flags) {
+            obs_data_t* s = obs_data_create();
+            for (const auto& [name, value] : numbers)
+                obs_data_set_int(s, name, value);
+            for (const auto& [name, value] : flags)
+                obs_data_set_bool(s, name, value);
+            obs_source_update(keyboard, s);
+            obs_data_release(s);
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        };
+        auto noteOn = [](int key, int velocity) { return pf::FeedEvent { 0, 0x90, (std::uint8_t) key, (std::uint8_t) velocity, 0, 0 }; };
+        auto noteOff = [](int key) { return pf::FeedEvent { 0, 0x80, (std::uint8_t) key, 0, 0, 0 }; };
+
+        {   // The velocity shows: a soft note thinner and duller than a strong one (its white-hot core).
+            look({ { "color_mode", 0 }, { "trail_height", 100 }, { "glow", 60 }, { "sparkles", 0 } }, { { "chords", false } });
+            play({ noteOn(50, 25), noteOn(69, 110) });
+            std::this_thread::sleep_for(std::chrono::milliseconds(450));
+            px = renderSource(keyboard, w, h);
+            auto measure = [&](int from, int to, int& width, int& peak) {
+                width = peak = 0;
+                for (int x = from; x < to && !px.empty(); ++x) {
+                    const std::size_t i = ((std::size_t) 96 * w + (std::size_t) x) * 4; // 4 pixels above the keys
+                    width += px[i + 3] > 110 ? 1 : 0;
+                    peak = std::max(peak, (int) px[i] + px[i + 1] + px[i + 2]);
+                }
+            };
+            int softWidth = 0, softPeak = 0, strongWidth = 0, strongPeak = 0;
+            measure(330, 370, softWidth, softPeak); // D3: white key 17
+            measure(550, 590, strongWidth, strongPeak); // A4: white key 28
+            if (!px.empty())
+                save(px, w, h, "keyboard-velocity.bmp");
+            play({ noteOff(50), noteOff(69) });
+            check(strongWidth >= softWidth + 3 && strongPeak > softPeak + 60,
+                  "the velocity shows: a soft note " + std::to_string(softWidth) + " px wide (brightest " + std::to_string(softPeak)
+                      + "), a strong one " + std::to_string(strongWidth) + " px (" + std::to_string(strongPeak) + ")");
+        }
+
+        {   // A powerful chord: the room above the keys lit, then fireworks; nothing for a soft chord, nor with them off.
+            struct Chorded {
+                long long light = 0;
+                int bright = 0;
+            };
+            auto chordTest = [&](bool on, int velocity) {
+                look({ { "color_mode", 2 }, { "trail_height", 0 }, { "glow", 0 }, { "sparkles", 0 } }, { { "chords", on } });
+                play({ noteOn(60, velocity), noteOn(64, velocity), noteOn(67, velocity), noteOn(72, velocity) });
+                std::this_thread::sleep_for(std::chrono::milliseconds(120));
+                Chorded out;
+                px = renderSource(keyboard, w, h);
+                const int top = (int) h - 130 - 16;
+                for (int y = 8; y + 8 < top && !px.empty(); ++y)
+                    for (int x = 0; x < (int) w; ++x) {
+                        const auto c = at(x, y);
+                        out.light += c[0] + c[1] + c[2];
+                    }
+                std::this_thread::sleep_for(std::chrono::milliseconds(630));
+                px = renderSource(keyboard, w, h);
+                for (int y = 0; y + 20 < top && !px.empty(); ++y)
+                    for (int x = 0; x < (int) w; ++x) {
+                        const auto c = at(x, y);
+                        out.bright += c[0] + c[1] + c[2] > 180 ? 1 : 0;
+                    }
+                play({ noteOff(60), noteOff(64), noteOff(67), noteOff(72) });
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                return out;
+            };
+            const auto on = chordTest(true, 110), off = chordTest(false, 110), soft = chordTest(true, 50);
+            check(on.light > off.light * 13 / 10 && on.bright > 20 && off.bright == 0 && soft.bright == 0,
+                  "a powerful chord: the room lit (" + std::to_string(on.light) + " against " + std::to_string(off.light)
+                      + " without), fireworks (" + std::to_string(on.bright) + " bright pixels; " + std::to_string(off.bright)
+                      + " without, " + std::to_string(soft.bright) + " for a soft chord)");
+
+            // Its images, the look as by default: a big chord of both hands.
+            look({ { "color_mode", 2 }, { "trail_height", 100 }, { "glow", 60 }, { "sparkles", 50 } }, { { "chords", true } });
+            play({ noteOn(36, 118), noteOn(43, 116), noteOn(48, 117), noteOn(72, 120), noteOn(76, 119), noteOn(79, 121) });
+            const char* chordFrames[3] = { "keyboard-chord-1.bmp", "keyboard-chord-2.bmp", "keyboard-chord-3.bmp" };
+            const int chordWaits[3] = { 90, 260, 450 };
+            for (int i = 0; i < 3; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(chordWaits[i]));
+                px = renderSource(keyboard, w, h);
+                if (!px.empty())
+                    save(px, w, h, chordFrames[i]);
+            }
+            play({ noteOff(36), noteOff(43), noteOff(48), noteOff(72), noteOff(76), noteOff(79) });
+        }
+
         {   // The rainbow: the bass warm (C2 toward orange), the treble cool (E6 toward blue); the hues in the properties.
             obs_data_t* s = obs_data_create();
             obs_data_set_int(s, "color_mode", 3);
@@ -544,7 +633,8 @@ int main(int argc, char** argv)
             }
             obs_properties_t* props = obs_source_properties(keyboard);
             for (const char* name : { "color_mode", "hue_left", "hue_right", "hue_white", "hue_black", "hue", "saturation", "glow", "sparkles",
-                                     "sparkle_height", "sparkle_spread", "sparkle_tilt" })
+                                     "sparkle_height", "sparkle_spread", "sparkle_tilt", "velocity_accent", "velocity_top", "velocity_measure",
+                                     "chords", "chord_notes", "chord_threshold", "chord_intensity", "chord_fireworks" })
                 rainbow = rainbow && props != nullptr && obs_properties_get(props, name) != nullptr;
             obs_properties_destroy(props);
             check(rainbow, "the rainbow along the keyboard (the bass warm, the treble cool); hues, saturation, lights and sparkles in the properties");

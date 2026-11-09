@@ -85,14 +85,26 @@ held (0 to 100 %), their height (a share of the room above the keys), spread (0:
 wide fountain) and direction (leaning left or right); a burst and a flare along the keyboard at the strike; an
 afterglow once a key is up; an offset against the sound.
 
+The velocity (group *Velocity*): its accent (soft notes thinner, deeper and more transparent, strong ones wider with
+a white-hot core and a wider halo, a ripple of light from the key at the strike; the keys' light by it), against the
+keyboard's strongest velocity (112 by default, a Korg B2's; a button takes the strongest strike of the last minute).
+
+**Powerful chords** (a checkable group, on by default): a chord of at least so many notes (3) struck within 35 ms,
+their mean strength over a threshold (75 % of the strongest velocity), is known once its window has passed (all its
+notes in) and becomes an event, at its intensity: a wave of light running along the keys and the rail, the room
+above the keys lit in each hand's hue, fireworks (a rocket from each hand, one more for six notes or more, bursting
+at about half the room), the chord's notes tied at their tops by a bar of light, and, if asked, the keyboard
+shaking a few pixels. After one, the next waits 0.6 s: a fortissimo passage is not a firework at every chord.
+
 **PianoForge text**: the template (fields `{file}`, `{state}`, `{preset}`, `{room}`, `{engine}`, `{recording}`; a
 line whose fields are all empty disappears), then OBS's text properties (font, colours, outline, background...).
 
 ## Tests
 
 - `pianoforge-obs-overlay-test` (ctest `obs_overlay`): the keyboard's geometry, the keys and pedals at a frame, the
-  notes kept for the trails and struck for the sparkles, the colours by hue, the sparkles (a burst rises, slows and
-  goes out), the text template.
+  notes kept for the trails and struck for the sparkles, the colours by hue, the sparkles (a stream rises, slows and
+  goes out; fireworks burst), the powerful chords (found once their window has passed; not a soft chord, an arpeggio
+  or two notes; not too soon after another), the text template.
 - `pianoforge-obs-test` (ctest `obs_plugin`, about 45 s) loads the plugin into the installed libobs without the OBS
   application (audio, and video through OBS's Direct3D 11 module, offscreen; OBS's text source beside it), writes
   the feed as PianoForge does (three mixes of a 1 kHz sine, on a clock 200 ppm fast, the volume at -6 dB, MIDI
@@ -100,6 +112,8 @@ line whose fields are all empty disappears), then OBS's text properties (font, c
   on OBS's clock (within a few ppm); no glitch; the status and the key-to-OBS latency; a new latency, the resync
   button; another mix with the volume followed, through fades (no step); the readers the application sees; the
   keyboard rendered (each hand's colour, a key not lit, a note rising, the sustain pedal; a phrase played, its
-  images kept beside the report; sparkles after strikes, leaning as asked, and none when off; the rainbow; the time
-  a busy image takes; no word from Direct3D); the text filled and resized; a mark logged while OBS does not record.
+  images kept beside the report; sparkles after strikes, leaning as asked, and none when off; a soft note thinner
+  and duller than a strong one; a powerful chord lighting the room and throwing fireworks, nothing for a soft chord
+  nor with them off; the rainbow; the time a busy image takes; no word from Direct3D); the text filled and resized;
+  a mark logged while OBS does not record.
   The test's feed has a name of its own (`PIANOFORGE_AUDIO_FEED`): it runs beside a PianoForge and an OBS in use.

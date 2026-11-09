@@ -264,6 +264,90 @@ int main()
               "no more than kMax at once; lit at once, going out at the end");
     }
 
+    // A firework: the rocket rises to its height, then bursts all around it.
+    {
+        Sparkles s;
+        s.rocket(500.0f, 300.0f, 100.0f, 0.4f, 0.0f, 8.0f, 0xFFFFFFFFu, 20, 40.0f, 0.8f, 30.0f);
+        bool rising = s.sparks().size() == 1 && s.sparks()[0].vy < 0.0f;
+        float apex = 300.0f;
+        for (int i = 0; i < 60 && s.sparks().size() == 1; ++i) {
+            s.step(0.01f, 0.0f);
+            if (s.sparks().size() == 1)
+                apex = s.sparks()[0].y;
+        }
+        const auto& burst = s.sparks();
+        bool around = burst.size() == 20, left = false, right = false, up = false, down = false;
+        for (const auto& c : burst) {
+            left = left || c.vx < -10.0f;
+            right = right || c.vx > 10.0f;
+            up = up || c.vy < -10.0f;
+            down = down || c.vy > 10.0f;
+            around = around && std::fabs(c.x - 500.0f) < 2.0f && std::fabs(c.y - apex) < 4.0f && c.burst == 0;
+        }
+        check(rising && std::fabs(apex - 200.0f) < 4.0f && around && left && right && up && down,
+              "a firework: the rocket rises to its height, and bursts there into sparks going every way");
+        float lowest = 0.0f, farthest = 0.0f;
+        for (int i = 0; i < 100 && !s.sparks().empty(); ++i) {
+            s.step(0.01f, 0.0f);
+            for (const auto& c : s.sparks()) {
+                farthest = std::max(farthest, std::fabs(c.x - 500.0f));
+                lowest = std::max(lowest, c.y - apex);
+            }
+        }
+        check(s.sparks().empty() && farthest > 25.0f && farthest < 45.0f && lowest > 0.0f,
+              "its sparks spread about the radius asked, droop, and go out");
+    }
+
+    // Powerful chords: enough notes together, strong enough, known once their window has passed (all their notes in);
+    // not an arpeggio, not too soon after another.
+    {
+        ChordDetector d;
+        d.reset();
+        d.setRate(48000.0);
+        d.configure(3, 0.75f);
+        auto note = [](int key, std::uint64_t at) {
+            PlayedNote n;
+            n.key = key;
+            n.velocity = 100;
+            n.start = at;
+            return n;
+        };
+        ChordHit hit;
+        d.add(note(48, 1000), 0.9f);
+        d.add(note(52, 1200), 0.9f);
+        d.add(note(55, 1500), 0.8f);
+        const bool waiting = !d.poll(2000, hit); // still within its window: a fourth note may come
+        d.add(note(60, 1900), 1.0f);
+        const bool found = d.poll(2700, hit) && hit.frame == 1000 && hit.notes.size() == 4
+                           && std::fabs(hit.strength - 3.6f / 4.0f) < 1e-4f && !d.poll(2800, hit);
+        check(waiting && found, "a strong chord: known once its window has passed, all its notes in, once");
+        for (int k = 0; k < 4; ++k) // 0.3 s later: resting
+            d.add(note(60 + k, 1000 + 14400), 1.0f);
+        const bool soon = !d.poll(1000 + 14400 + 2000, hit);
+        for (int k = 0; k < 4; ++k) // 0.7 s later
+            d.add(note(60 + k, 1000 + 33600 + (std::uint64_t) k), 1.0f);
+        const bool again = d.poll(1000 + 33600 + 2000, hit) && hit.notes.size() == 4;
+        check(soon && again, "another one too soon is not announced; once rested, it is");
+        for (int k = 0; k < 4; ++k)
+            d.add(note(40 + k, 200000 + (std::uint64_t) k), 0.5f);
+        const bool soft = !d.poll(210000, hit);
+        bool spread = true;
+        for (int k = 0; k < 4; ++k) { // an arpeggio: 50 ms apart
+            d.add(note(40 + k, 300000 + 2400 * (std::uint64_t) k), 1.0f);
+            spread = spread && !d.poll(300000 + 2400 * (std::uint64_t) k + 100, hit);
+        }
+        spread = spread && !d.poll(320000, hit);
+        d.add(note(40, 400000), 1.0f);
+        d.add(note(41, 400001), 1.0f);
+        const bool few = !d.poll(410000, hit);
+        d.add(note(40, 500000), 1.0f); // a new group closes the one before
+        d.add(note(44, 500010), 1.0f);
+        d.add(note(47, 500020), 1.0f);
+        d.add(note(80, 520000), 1.0f);
+        const bool closed = d.poll(520001, hit) && hit.notes.size() == 3 && hit.frame == 500000;
+        check(soft && spread && few && closed, "a soft chord, an arpeggio, two notes: nothing; a note after the window closes the chord");
+    }
+
     // The text template.
     {
         pf::FeedInfo info;

@@ -1086,6 +1086,19 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - la direction, une inclinaison de −45° à 45°, comme une brise ; droites par défaut.
   - *Tests* : couleurs par teinte, frappes, filets de paillettes (montée droite dans la largeur de la touche, jamais plus haut que demandé, inclinaison, départs échelonnés, extinction, plafond) dans le test sans OBS. Dans libobs, en plus, des paillettes penchées à droite se décalent bien vers la droite. Dans libobs : couleur de chaque main, note montante, pédale, phrase jouée (images gardées), paillettes présentes ou absentes selon le réglage, arc-en-ciel, propriétés, temps de rendu et silence de Direct3D. Le shader est installé à côté des langues, par `install-obs-plugin` comme par l'installateur.
 
+**La vélocité et les accords puissants sur le clavier OBS (9 novembre 2026).** Mettre en avant la force du jeu, et faire des gros accords des événements. Deux volets proposés, faits ensemble.
+  - *Une échelle à la mesure du clavier.* Le B2 dépasse rarement 112 : rapportée à 127, une frappe fortissimo n'avait jamais l'air pleine. La force d'une frappe se mesure donc contre la vélocité la plus forte du clavier (112 par défaut). Un bouton prend la frappe la plus forte de la dernière minute : on joue quelques notes aussi fort que possible, puis on appuie.
+  - *L'accent* (70 % par défaut) règle à quel point la force se voit :
+    - une note douce est plus fine, plus profonde et plus transparente ; une forte, plus large, avec un cœur chauffé à blanc et un halo plus large ;
+    - à la frappe, une onde de lumière en ellipse part de la touche, d'autant plus large et vive que la frappe est forte ;
+    - l'éclat des touches suit la même échelle.
+  - *Les accords puissants* : au moins 3 notes frappées en 35 ms, leur force moyenne au-dessus d'un seuil (75 % de la plus forte, soit une vélocité moyenne de 84 sur un B2).
+    - L'accord n'est connu qu'une fois sa fenêtre passée, toutes ses notes arrivées. Annoncé dès sa troisième note, le feu d'artifice partait avec les seules premières notes, c'est-à-dire une main. Les 35 ms d'attente ne se voient pas.
+    - Après un accord, le suivant attend 0,6 s : un passage fortissimo ne tire pas un feu d'artifice à chaque accord.
+    - Les effets, chacun à cocher : une onde de lumière qui court le long des touches et du rail ; l'espace au-dessus des touches éclairé aux couleurs de chaque main ; un feu d'artifice (une fusée par main, une de plus pour six notes ou plus, qui éclate vers la moitié de la hauteur) ; les notes de l'accord reliées en haut par une barre de lumière ; et, désactivée par défaut, une secousse du clavier de quelques pixels. Leur intensité dépend du réglage, de l'écart au seuil et du nombre de notes.
+  - Les réglages sont rangés dans deux groupes des propriétés : *Vélocité*, et *Accords puissants* (un groupe à cocher).
+  - *Tests* : le détecteur d'accords (connu à la fin de sa fenêtre et une seule fois ; rien pour un accord doux, un arpège ou deux notes ; repos entre deux) et les fusées (montée, gerbe dans toutes les directions, rayon, retombée) dans le test sans OBS. Dans libobs : une note douce plus fine et plus terne qu'une forte ; un accord fort qui éclaire l'espace et lance un feu d'artifice, rien pour un accord doux ni sans l'option ; images d'un gros accord à deux mains.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

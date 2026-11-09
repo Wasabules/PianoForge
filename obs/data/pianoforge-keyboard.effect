@@ -1,5 +1,5 @@
 // The PianoForge keyboard's drawing (obs/src/keyboard_source.cpp): rounded boxes with a gradient, a rim and a light
-// from within (keys, notes, pedals, shadows), and lights added over them (halos, beams, sparkles).
+// from within (keys, notes, pedals, shadows), and lights added over them (halos, beams, ripples, sparkles).
 //
 // Each shape but the sparkles is drawn on a quad, quad_origin and quad_size in the source's pixels, its texture coordinates running
 // from 0 to 1 across it: the shader works in the source's pixels, so a quad cut at the source's edge cuts the shape
@@ -97,6 +97,16 @@ float4 PSBeam(VertData v_in) : TARGET
 	return float4(c * k, saturate(k * 0.85));
 }
 
+// A ripple: a ring of light around an ellipse (box_half its radii), light_reach its thickness in pixels.
+float4 PSRing(VertData v_in) : TARGET
+{
+	float2 pix = pixel_of(v_in);
+	float2 q = (pix - box_center) / max(box_half, float2(1.0, 1.0));
+	float d = abs(length(q) - 1.0) * box_half.x;
+	float k = light_strength * exp(-d * d / max(light_reach * light_reach, 0.25));
+	return float4(light_color.rgb * k, saturate(k));
+}
+
 // Sparkles, many in one draw: each on its own square (two triangles), its colour, brightness and phase in its
 // vertices, its texture coordinates running from -1 to 1 across it (a square cut at the source's edge, less far).
 struct SparkData {
@@ -154,6 +164,15 @@ technique Beam
 	{
 		vertex_shader = VSDefault(v_in);
 		pixel_shader  = PSBeam(v_in);
+	}
+}
+
+technique Ring
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRing(v_in);
 	}
 }
 

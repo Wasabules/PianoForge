@@ -10,6 +10,11 @@
 // many and as high as it is strong (their height, spread and direction chosen), a few more rising while a key is
 // held. Colours are chosen by hue: each hand's (estimated from the notes: overlay.hpp), the white and the black
 // keys', one for all, or the rainbow along the keyboard; the black keys take a deeper shade of theirs.
+//
+// The velocity shows (against the keyboard's strongest): soft notes thinner, deeper and more transparent, strong
+// ones wider with a white-hot core, a ripple of light from the key at the strike. Powerful chords (enough notes
+// struck together, hard enough: overlay.hpp) are events: a wave of light along the keyboard, the room above the keys
+// lit, fireworks, the chord's notes tied by a bar of light, the keyboard shaking if asked.
 #include "common.hpp"
 #include "overlay.hpp"
 
@@ -34,6 +39,10 @@ constexpr double kFlashSeconds = 0.12;    // the strike's light, its decay
 constexpr double kReleaseSeconds = 0.08;  // a key coming back up
 constexpr double kRecentStrike = 0.25;    // a strike seen later than this (a catch-up): no sparkles
 constexpr int kSparksPerDraw = 128;       // sparkles drawn at once (their vertices sent together)
+constexpr double kRippleSeconds = 0.45;   // a strike's ripple
+constexpr double kWashSeconds = 0.55;     // a powerful chord's light over the room
+constexpr double kWaveSeconds = 0.7;      // its wave along the keyboard
+constexpr double kShakeSeconds = 0.25;    // its shake
 
 // The keyboard's own colours, as OBS keeps colours (0xAABBGGRR).
 constexpr std::uint32_t kBedTop = 0xFF161618, kBedBottom = 0xFF060607;
@@ -61,14 +70,27 @@ struct Settings {
     int sparkleTilt = 0;    // degrees from the vertical, positive to the right
     int afterglowMs = 400;
     bool flash = true;
+    int accent = 70;        // how much the velocity shows, %
+    int velocityTop = 112;  // the velocity shown at full strength (the keyboard's strongest)
+    bool chords = true;     // powerful chords as events
+    int chordNotes = 3;     // notes at least
+    int chordThreshold = 75; // their mean strength at least, %
+    int chordIntensity = 80; // %
+    bool chordWave = true, chordWash = true, chordFireworks = true, chordBracket = true, chordShake = false;
 };
+
+/// A velocity's strength, 0 to 1, against the keyboard's strongest.
+float strengthOf(int velocity, const Settings& s)
+{
+    return std::clamp((float) velocity / (float) std::max(1, s.velocityTop), 0.0f, 1.0f);
+}
 
 /// The shader and its parameters, the unit square every shape is drawn on and the sparkles' vertices, made once on
 /// the graphics thread.
 struct Drawing {
     gs_effect_t* effect = nullptr;
     gs_vertbuffer_t *quad = nullptr, *sparks = nullptr;
-    gs_technique_t *box = nullptr, *glow = nullptr, *beam = nullptr, *sparkle = nullptr;
+    gs_technique_t *box = nullptr, *glow = nullptr, *beam = nullptr, *ring = nullptr, *sparkle = nullptr;
     gs_eparam_t *quadOrigin = nullptr, *quadSize = nullptr, *boxCenter = nullptr, *boxHalf = nullptr, *boxRadius = nullptr,
                 *boxBorder = nullptr, *boxSoft = nullptr, *fillTop = nullptr, *fillBottom = nullptr, *fillCurve = nullptr,
                 *borderColor = nullptr, *lightColor = nullptr, *lightStrength = nullptr, *lightFrom = nullptr,
@@ -77,9 +99,10 @@ struct Drawing {
 
     bool ready() const noexcept
     {
-        return effect != nullptr && quad != nullptr && sparks != nullptr && box && glow && beam && sparkle && quadOrigin && quadSize && boxCenter && boxHalf && boxRadius
-               && boxBorder && boxSoft && fillTop && fillBottom && fillCurve && borderColor && lightColor && lightStrength
-               && lightFrom && lightReach && fadeBand && time && seed;
+        return effect != nullptr && quad != nullptr && sparks != nullptr && box && glow && beam && ring && sparkle
+               && quadOrigin && quadSize && boxCenter && boxHalf && boxRadius && boxBorder && boxSoft && fillTop
+               && fillBottom && fillCurve && borderColor && lightColor && lightStrength && lightFrom && lightReach
+               && fadeBand && time && seed;
     }
 };
 
@@ -95,6 +118,15 @@ struct Keyboard {
     Sparkles sparkles;
     std::vector<PlayedNote> strikes;
     std::array<float, 128> owed {}; // the sparks owed to each key held
+    ChordDetector chordFinder;
+    ChordHit chordFound;
+    struct ShownChord {
+        ChordHit hit;
+        float power = 0.0f; // how strongly it shows, 0 to 1
+    };
+    std::deque<ShownChord> chords; // the powerful chords still shown
+    std::deque<std::pair<std::uint64_t, int>> recent; // the last minute's strikes: when (ns), their velocity
+    std::atomic<int> strongest { 0 };                 // their strongest (read by the properties' button)
     std::uint64_t session = ~0ull, nextEvent = 0, lastTry = 0, lastBeat = 0;
     double frame = 0.0, rate = 0.0;
     int sparksWidth = 0; // the width the sparks were thrown over
@@ -112,10 +144,11 @@ int pedalHeight(const Settings& s)
     return s.pedals ? std::max(6, keyboardHeight(s) / 8) : 0;
 }
 
-/// Above the keys: the notes, or room for the lights and sparkles (0.6 of a key's length).
+/// Above the keys: the notes, or room for the lights, sparkles and fireworks (0.6 of a key's length).
 int topHeight(const Settings& s)
 {
-    return std::max(s.trailHeight, s.glow > 0 || s.sparkles > 0 ? (int) std::lround(0.6 * keyboardHeight(s)) : 0);
+    const bool room = s.glow > 0 || s.sparkles > 0 || (s.chords && s.chordFireworks);
+    return std::max(s.trailHeight, room ? (int) std::lround(0.6 * keyboardHeight(s)) : 0);
 }
 
 /// Where things are, in the source's pixels: the area above the keys (0 to `top`), the rail, the keys (from
@@ -205,7 +238,8 @@ Lit lightOf(const KeyLight& l, double frame, double rate, const Settings& s)
     Lit lit;
     if (!l.struck || rate <= 0.0)
         return lit;
-    const double strength = 0.55 + 0.45 * l.lastVelocity / 127.0;
+    const double st = strengthOf(l.lastVelocity, s), accent = s.accent / 100.0;
+    const double strength = (0.55 + 0.45 * st) * (1.0 - accent) + (0.35 + 0.65 * st) * accent;
     if (l.velocity > 0) {
         lit.level = strength;
         lit.depth = 1.0;
@@ -220,8 +254,72 @@ Lit lightOf(const KeyLight& l, double frame, double rate, const Settings& s)
     }
     const double since = (frame - (double) l.pressed) / rate;
     if (s.flash && since >= 0.0 && since < 1.0)
-        lit.flash = (l.lastVelocity / 127.0) * std::exp(-since / kFlashSeconds);
+        lit.flash = st * std::exp(-since / kFlashSeconds);
     return lit;
+}
+
+/// How strongly a powerful chord shows (0 to 1): the intensity chosen, more for a chord well over the threshold and
+/// for one of more notes than asked.
+float chordPower(const ChordHit& hit, const Settings& s)
+{
+    const float threshold = s.chordThreshold / 100.0f;
+    const float over = std::clamp((hit.strength - threshold) / std::max(0.05f, 1.0f - threshold), 0.0f, 1.0f);
+    const float more = std::clamp((float) ((int) hit.notes.size() - s.chordNotes) / 3.0f, 0.0f, 1.0f);
+    return s.chordIntensity / 100.0f * (0.55f + 0.3f * over + 0.15f * more);
+}
+
+/// A chord's notes by hand: for each hand playing in it, the span of its keys (pixels) and the key at its middle.
+struct HandPart {
+    float x0 = 0.0f, x1 = 0.0f;
+    int count = 0, key = 0, hand = kRightHand;
+};
+
+std::vector<HandPart> partsOf(const ChordHit& hit, const Layout& l)
+{
+    std::vector<HandPart> parts;
+    for (int hand : { kLeftHand, kRightHand }) {
+        HandPart part;
+        part.hand = hand;
+        int low = 128, high = -1;
+        for (const auto& n : hit.notes) {
+            if ((n.hand == kLeftHand) != (hand == kLeftHand) || n.key < kFirstKey || n.key > kLastKey)
+                continue;
+            const auto shape = keyShape(n.key, l.width);
+            part.x0 = part.count == 0 ? shape.x : std::min(part.x0, shape.x);
+            part.x1 = part.count == 0 ? shape.x + shape.width : std::max(part.x1, shape.x + shape.width);
+            low = std::min(low, n.key);
+            high = std::max(high, n.key);
+            ++part.count;
+        }
+        if (part.count > 0) {
+            part.key = (low + high) / 2;
+            parts.push_back(part);
+        }
+    }
+    return parts;
+}
+
+/// A powerful chord's fireworks: a rocket from each hand playing in it (one more from a chord of six notes or more),
+/// rising to about half the room and bursting, in that hand's hue.
+void launchFireworks(Keyboard& k, const Settings& s, const Layout& l, const ChordHit& hit, float power)
+{
+    if (l.top < 30.0f || power <= 0.0f)
+        return;
+    auto parts = partsOf(hit, l);
+    if (hit.notes.size() >= 6 && !parts.empty()) {
+        HandPart middle = parts.front();
+        middle.x0 = middle.x1 = 0.5f * (parts.front().x0 + parts.back().x1);
+        middle.key = (parts.front().key + parts.back().key) / 2;
+        parts.push_back(middle);
+    }
+    int i = 0;
+    for (const auto& part : parts) {
+        const Tint tint = tintOf(s, part.key, part.hand);
+        k.sparkles.rocket(0.5f * (part.x0 + part.x1), l.top, l.top * (0.42f + 0.12f * power), 0.45f, 0.09f * (float) i,
+                          l.white * 0.45f, tint.light, (int) std::lround(18.0f + 24.0f * power), l.top * (0.25f + 0.12f * power),
+                          0.9f + 0.3f * power, 0.35f * l.top);
+        ++i;
+    }
 }
 
 void tick(void* data, float seconds)
@@ -255,6 +353,9 @@ void tick(void* data, float seconds)
         k->state.reset();
         k->state.setRate(k->rate);
         k->sparkles.clear();
+        k->chordFinder.reset();
+        k->chordFinder.setRate(k->rate);
+        k->chords.clear();
         const std::uint64_t written = k->feed.eventsWritten();
         k->nextEvent = written - std::min<std::uint64_t>(written, pf::AudioFeedReader::kEventCapacity / 4);
     }
@@ -289,15 +390,44 @@ void tick(void* data, float seconds)
     const auto keep = (std::uint64_t) std::max(0.0, (s.trailSeconds + 0.5) * k->rate);
     k->state.advance((std::uint64_t) std::max(0.0, k->frame), keep);
 
-    // The sparkles: a stream at each strike, a few rising from the keys held, as high and in the direction chosen;
-    // they move on.
     const Layout l = layoutOf(s);
     const float amount = s.sparkles / 100.0f, dt = std::clamp(seconds, 0.0f, 0.1f);
+    const bool fireworks = s.chords && s.chordFireworks;
     k->state.takeStrikes(k->strikes);
-    if (k->sparksWidth != s.width || amount <= 0.0f) {
+    if (k->sparksWidth != s.width || (amount <= 0.0f && !fireworks)) {
         k->sparkles.clear();
         k->sparksWidth = s.width;
     }
+    // The last minute's strongest strike (the velocity button).
+    for (const auto& n : k->strikes)
+        k->recent.emplace_back(now, n.velocity);
+    while (!k->recent.empty() && now - k->recent.front().first > 60'000'000'000ull)
+        k->recent.pop_front();
+    int strongest = 0;
+    for (const auto& r : k->recent)
+        strongest = std::max(strongest, r.second);
+    k->strongest = strongest;
+    // The powerful chords: announced as they qualify (a fireworks for each), shown while their effects last.
+    if (k->rate > 0.0) {
+        if (s.chords) {
+            k->chordFinder.configure(s.chordNotes, s.chordThreshold / 100.0f);
+            for (const auto& n : k->strikes)
+                if ((k->frame - (double) n.start) / k->rate <= kRecentStrike)
+                    k->chordFinder.add(n, strengthOf(n.velocity, s));
+            while (k->chordFinder.poll((std::uint64_t) std::max(0.0, k->frame), k->chordFound)) {
+                k->chords.push_back({ k->chordFound, chordPower(k->chordFound, s) });
+                if (fireworks)
+                    launchFireworks(*k, s, l, k->chordFound, k->chords.back().power);
+            }
+        }
+        const double shown = std::max({ kWaveSeconds, kWashSeconds, s.trailSeconds + 0.5 });
+        while (!k->chords.empty() && (k->frame - (double) k->chords.front().hit.frame) / k->rate > shown)
+            k->chords.pop_front();
+        if (!s.chords)
+            k->chords.clear();
+    }
+    // The sparkles: a stream at each strike, a few rising from the keys held, as high and in the direction chosen;
+    // they move on, the fireworks with them.
     if (amount > 0.0f && l.top > 4.0f && k->rate > 0.0) {
         constexpr float radians = 3.14159265f / 180.0f;
         const float height = s.sparkleHeight / 100.0f * l.top, tilt = s.sparkleTilt * radians, spread = s.sparkleSpread * radians;
@@ -306,7 +436,7 @@ void tick(void* data, float seconds)
                 continue;
             const auto shape = keyShape(n.key, l.width);
             const Tint tint = tintOf(s, n.key, n.hand);
-            const float v = n.velocity / 127.0f;
+            const float v = strengthOf(n.velocity, s);
             SparkBurst b;
             b.x = shape.x + 0.5f * shape.width;
             b.y = l.top;
@@ -332,7 +462,7 @@ void tick(void* data, float seconds)
                 owed = 0.0f;
                 continue;
             }
-            owed += dt * amount * (0.8f + 2.5f * light.velocity / 127.0f);
+            owed += dt * amount * (0.8f + 2.5f * strengthOf(light.velocity, s));
             if (owed < 1.0f)
                 continue;
             const auto shape = keyShape(key, l.width);
@@ -351,8 +481,9 @@ void tick(void* data, float seconds)
             k->sparkles.burst(b);
             owed -= (float) b.count;
         }
-        k->sparkles.step(dt, 0.3f * l.white);
     }
+    if (l.top > 4.0f)
+        k->sparkles.step(dt, 0.3f * l.white);
     if (now - k->lastBeat > (std::uint64_t) (kBeatSeconds * 1e9)) {
         k->feed.heartbeat(pf::FeedMix::heard, 0.0f);
         k->lastBeat = now;
@@ -421,6 +552,7 @@ void loadDrawing(Drawing& d)
         d.box = gs_effect_get_technique(d.effect, "Box");
         d.glow = gs_effect_get_technique(d.effect, "Glow");
         d.beam = gs_effect_get_technique(d.effect, "Beam");
+        d.ring = gs_effect_get_technique(d.effect, "Ring");
         d.sparkle = gs_effect_get_technique(d.effect, "Sparkles");
         d.quadOrigin = param("quad_origin");
         d.quadSize = param("quad_size");
@@ -485,6 +617,12 @@ public:
     }
     void noFade() { fade(-2.0f, -1.0f); }
     void time(float seconds) { now = seconds; }
+    /// Everything drawn moves by (x, y) pixels (the shake), still cut at the source's edges.
+    void offset(float x, float y)
+    {
+        dx = x;
+        dy = y;
+    }
 
     /// A rounded box from (x, y), `w` by `h`; `squareTop`: its top corners square (it goes on under what is above).
     void box(float x, float y, float w, float h, const BoxStyle& st, bool squareTop = false)
@@ -539,6 +677,21 @@ public:
         draw(cx - halfW, foot - h, cx + halfW, foot);
     }
 
+    /// A ripple: a ring of light around the ellipse of radii (rx, ry) centred on (cx, cy), `thickness` pixels thick.
+    void ring(float cx, float cy, float rx, float ry, float thickness, std::uint32_t c, float strength)
+    {
+        if (strength <= 0.003f || rx <= 0.5f || ry <= 0.5f)
+            return;
+        use(look.ring);
+        pair(look.boxCenter, cx, cy);
+        pair(look.boxHalf, rx, ry);
+        gs_effect_set_float(look.lightReach, thickness);
+        color(look.lightColor, c, 1.0f);
+        gs_effect_set_float(look.lightStrength, strength);
+        const float m = 3.0f * thickness;
+        draw(cx - rx - m, cy - ry - m, cx + rx + m, cy + ry + m);
+    }
+
     /// The sparkles, kSparksPerDraw to a draw: each a star reaching its size, cut at the source's edges.
     void sparkles(const std::vector<Spark>& list)
     {
@@ -565,12 +718,12 @@ public:
             count = 0;
         };
         for (const auto& sp : list) {
-            const float b = sp.brightness(), r = sp.size;
-            const float x0 = std::max(sp.x - r, 0.0f), x1 = std::min(sp.x + r, width);
-            const float y0 = std::max(sp.y - r, 0.0f), y1 = std::min(sp.y + r, height);
+            const float b = sp.brightness(), r = sp.size, cx = sp.x + dx, cy = sp.y + dy;
+            const float x0 = std::max(cx - r, 0.0f), x1 = std::min(cx + r, width);
+            const float y0 = std::max(cy - r, 0.0f), y1 = std::min(cy + r, height);
             if (b <= 0.003f || r <= 0.5f || x1 <= x0 || y1 <= y0)
                 continue;
-            const float u0 = (x0 - sp.x) / r, u1 = (x1 - sp.x) / r, v0 = (y0 - sp.y) / r, v1 = (y1 - sp.y) / r;
+            const float u0 = (x0 - cx) / r, u1 = (x1 - cx) / r, v0 = (y0 - cy) / r, v1 = (y1 - cy) / r;
             const std::uint32_t c = vertexColor(sp.color);
             const float corners[6][4] = { { x0, y0, u0, v0 }, { x1, y0, u1, v0 }, { x0, y1, u0, v1 },
                                           { x1, y0, u1, v0 }, { x1, y1, u1, v1 }, { x0, y1, u0, v1 } };
@@ -646,15 +799,16 @@ private:
         gs_effect_set_vec4(param, &c);
     }
 
+    /// The quad (x0, y0)-(x1, y1), in the drawing's own pixels: moved by the offset, cut at the source's edges.
     void draw(float x0, float y0, float x1, float y1)
     {
-        x0 = std::max(x0, 0.0f);
-        y0 = std::max(y0, 0.0f);
-        x1 = std::min(x1, width);
-        y1 = std::min(y1, height);
+        x0 = std::max(x0 + dx, 0.0f);
+        y0 = std::max(y0 + dy, 0.0f);
+        x1 = std::min(x1 + dx, width);
+        y1 = std::min(y1 + dy, height);
         if (current == nullptr || x1 - x0 < 0.01f || y1 - y0 < 0.01f)
             return;
-        pair(look.quadOrigin, x0, y0);
+        pair(look.quadOrigin, x0 - dx, y0 - dy);
         pair(look.quadSize, x1 - x0, y1 - y0);
         pair(look.fadeBand, fadeNone, fadeWhole);
         gs_effect_set_float(look.time, now);
@@ -672,12 +826,14 @@ private:
     float width, height;
     bool linear;
     gs_technique_t* current = nullptr;
-    float fadeNone = -2.0f, fadeWhole = -1.0f, now = 0.0f;
+    float fadeNone = -2.0f, fadeWhole = -1.0f, now = 0.0f, dx = 0.0f, dy = 0.0f;
 };
 
 /// The notes: rounded bars rising from their keys, as long as they were held, at trailHeight per trailSeconds; a
 /// halo around each (added), then the bar (a gradient toward its hue, a pale rim, lit from the key while it is
-/// held), fading toward the top. The white keys' notes first, the black keys' (narrower) over them.
+/// held), fading toward the top. The white keys' notes first, the black keys' (narrower) over them. By the accent,
+/// a soft note thinner, deeper and more transparent, a strong one wider, with a white-hot core and a wider halo. A
+/// powerful chord's notes tied, at their tops, by a bar of light.
 void drawNotes(const Keyboard& k, const Settings& s, const Layout& l, Painter& p, float lights)
 {
     if (s.trailHeight <= 0)
@@ -685,8 +841,9 @@ void drawNotes(const Keyboard& k, const Settings& s, const Layout& l, Painter& p
     const double frame = k.frame, rate = k.rate > 0.0 ? k.rate : 48000.0;
     const double speed = s.trailHeight / std::max(0.5, s.trailSeconds); // pixels per second
     const float trailTop = l.top - (float) s.trailHeight;
+    const float accent = s.accent / 100.0f;
     struct Bar {
-        float x, y0, y1, w, velocity;
+        float x, y0, y1, w, strength;
         bool open, black;
         Tint tint;
     };
@@ -696,31 +853,36 @@ void drawNotes(const Keyboard& k, const Settings& s, const Layout& l, Painter& p
         if (n.key < kFirstKey || n.key > kLastKey)
             continue;
         const auto shape = keyShape(n.key, l.width);
-        const float w = shape.black ? shape.width * 0.92f : l.white * 0.78f;
+        const float st = strengthOf(n.velocity, s), base = shape.black ? shape.width * 0.92f : l.white * 0.78f;
+        const float w = std::min(shape.black ? shape.width : l.white * 0.92f, base * (1.0f + accent * (0.6f * st - 0.45f)));
         float y0 = (float) (l.top - (frame - (double) n.start) / rate * speed);
         const float y1 = n.open() ? l.top : (float) (l.top - (frame - (double) n.end) / rate * speed);
         y0 = std::min(y0, y1 - 0.6f * w); // a short note: a pill
         if (y1 <= trailTop || y0 >= l.top)
             continue;
-        bars.push_back({ shape.x + 0.5f * (shape.width - w), std::max(y0, trailTop - w), std::min(y1, l.top), w, n.velocity / 127.0f,
-                         n.open(), shape.black, tintOf(s, n.key, n.hand) });
+        bars.push_back({ shape.x + 0.5f * (shape.width - w), std::max(y0, trailTop - w), std::min(y1, l.top), w, st, n.open(),
+                         shape.black, tintOf(s, n.key, n.hand) });
     }
     p.fade(trailTop, trailTop + 0.3f * (float) s.trailHeight);
     if (lights > 0.0f) {
         p.add();
-        for (const auto& b : bars)
-            p.glow(b.x + 0.5f * b.w, 0.5f * (b.y0 + b.y1), 0.5f * b.w, 0.5f * (b.y1 - b.y0), 0.42f * b.w, 0.5f * l.white,
-                   b.tint.light, lights * (0.22f + 0.3f * b.velocity) * (b.open ? 1.0f : 0.6f));
+        for (const auto& b : bars) {
+            const float strong = 1.0f + accent * (0.4f + 1.2f * b.strength * b.strength - 1.0f);
+            p.glow(b.x + 0.5f * b.w, 0.5f * (b.y0 + b.y1), 0.5f * b.w, 0.5f * (b.y1 - b.y0), 0.42f * b.w,
+                   0.5f * l.white * (1.0f + accent * 0.6f * (b.strength - 0.5f)), b.tint.light,
+                   lights * (0.22f + 0.3f * b.strength) * (b.open ? 1.0f : 0.6f) * strong);
+        }
     }
     p.over();
     for (int pass = 0; pass < 2; ++pass)
         for (const auto& b : bars) {
             if (b.black != (pass == 1))
                 continue;
+            const double soft = accent * (1.0f - b.strength);
             BoxStyle st;
-            st.top = mixColor(b.tint.light, b.tint.pale, 0.35);
-            st.bottom = b.tint.main;
-            st.alpha = 0.62f + 0.38f * b.velocity;
+            st.top = mixColor(mixColor(b.tint.light, b.tint.pale, 0.35), b.tint.deep, 0.5 * soft);
+            st.bottom = mixColor(b.tint.main, b.tint.deep, 0.6 * soft);
+            st.alpha = (0.62f + 0.38f * b.strength) * (1.0f - accent) + (0.3f + 0.7f * b.strength) * accent;
             st.curve = 0.8f;
             st.rim = b.tint.pale;
             st.rimAlpha = 0.95f;
@@ -730,6 +892,38 @@ void drawNotes(const Keyboard& k, const Settings& s, const Layout& l, Painter& p
             st.lightFrom = 1.0f;
             st.radius = 0.42f * b.w;
             p.box(b.x, b.y0, b.w, b.y1 - b.y0, st);
+            const float hot = accent * std::pow(std::clamp((b.strength - 0.5f) / 0.5f, 0.0f, 1.0f), 1.5f) * 0.85f;
+            const float inset = 0.15f * b.w;
+            if (hot > 0.01f && b.y1 - b.y0 > 2.0f * inset + 2.0f) { // the white-hot core
+                BoxStyle core;
+                core.top = kWhite;
+                core.bottom = b.tint.pale;
+                core.alpha = hot;
+                core.radius = 0.19f * b.w;
+                p.box(b.x + 0.31f * b.w, b.y0 + inset, 0.38f * b.w, b.y1 - b.y0 - 2.0f * inset, core);
+            }
+        }
+    // The powerful chords' notes tied at their tops: a bar of light across each hand's notes.
+    if (s.chords && s.chordBracket)
+        for (const auto& c : k.chords) {
+            const float y = (float) (l.top - (frame - (double) c.hit.frame) / rate * speed), thick = std::max(2.0f, 0.14f * l.white);
+            if (y >= l.top - thick || y < trailTop - thick)
+                continue;
+            for (const auto& part : partsOf(c.hit, l)) {
+                if (part.count < 2)
+                    continue;
+                const Tint tint = tintOf(s, part.key, part.hand);
+                const float x0 = part.x0 + 0.1f * l.white, x1 = part.x1 - 0.1f * l.white;
+                p.add();
+                p.glow(0.5f * (x0 + x1), y, 0.5f * (x1 - x0), 0.5f * thick, 0.5f * thick, 0.4f * l.white, tint.light, 0.7f * c.power);
+                p.over();
+                BoxStyle bar;
+                bar.top = kWhite;
+                bar.bottom = tint.pale;
+                bar.alpha = std::min(1.0f, 0.4f + c.power);
+                bar.radius = 0.5f * thick;
+                p.box(x0, y - 0.5f * thick, x1 - x0, thick, bar);
+            }
         }
     p.noFade();
 }
@@ -746,6 +940,20 @@ void drawKeyboard(Keyboard& k, const Settings& s, const Layout& l, Painter& p)
     }
     p.time((float) std::fmod((double) os_gettime_ns() * 1e-9, 3600.0));
     p.noFade();
+    const float accent = s.accent / 100.0f;
+
+    // The powerful chords' light over the room, behind everything: rising from each hand's keys, in its hue.
+    if (s.chords && s.chordWash && l.top > 1.0f) {
+        p.add();
+        for (const auto& c : k.chords) {
+            const double u = (frame - (double) c.hit.frame) / rate / kWashSeconds;
+            if (u < 0.0 || u >= 1.0)
+                continue;
+            for (const auto& part : partsOf(c.hit, l))
+                p.glow(0.5f * (part.x0 + part.x1), l.top, 0.5f * (part.x1 - part.x0) + wk, 1.0f, 1.0f, 0.55f * l.top,
+                       tintOf(s, part.key, part.hand).light, c.power * 0.7f * (float) ((1.0 - u) * (1.0 - u)));
+        }
+    }
 
     // The beams, behind the notes: rising from each key lit, as high and as bright as it is.
     if (lights > 0.0f && l.top > 1.0f) {
@@ -877,6 +1085,43 @@ void drawKeyboard(Keyboard& k, const Settings& s, const Layout& l, Painter& p)
         }
     }
 
+    // A ripple of light from each key at its strike, as wide and bright as the strike is strong (by the accent).
+    if (accent > 0.0f)
+        for (int key = kFirstKey; key <= kLastKey; ++key) {
+            const auto& light = k.state.light(key);
+            if (!light.struck)
+                continue;
+            const double u = (frame - (double) light.pressed) / rate / kRippleSeconds;
+            const float st = strengthOf(light.lastVelocity, s), amp = accent * std::pow(st, 1.5f);
+            if (u < 0.0 || u >= 1.0 || amp < 0.02f)
+                continue;
+            const auto shape = keyShape(key, l.width);
+            const float grow = (float) (1.0 - (1.0 - u) * (1.0 - u)), rx = wk * (0.5f + (1.0f + 3.5f * st) * grow);
+            p.ring(shape.x + 0.5f * shape.width, l.keysTop, rx, 0.32f * rx, 1.2f + 1.8f * st, tints[(std::size_t) key].pale,
+                   amp * 0.9f * (float) ((1.0 - u) * (1.0 - u)));
+        }
+
+    // The powerful chords' wave: light running from the chord along the keys and the rail, both ways.
+    if (s.chords && s.chordWave)
+        for (const auto& c : k.chords) {
+            const double u = (frame - (double) c.hit.frame) / rate / kWaveSeconds;
+            if (u < 0.0 || u >= 1.0 || c.hit.notes.empty())
+                continue;
+            float cx = 0.0f;
+            for (const auto& n : c.hit.notes) {
+                const auto shape = keyShape(n.key, l.width);
+                cx += shape.x + 0.5f * shape.width;
+            }
+            cx /= (float) c.hit.notes.size();
+            const float d = std::max(cx, l.width - cx) * (float) (1.0 - (1.0 - u) * (1.0 - u)), fade = c.power * (float) std::pow(1.0 - u, 1.5);
+            const Tint tint = tintOf(s, c.hit.notes.front().key, c.hit.notes.front().hand);
+            for (float side : { -1.0f, 1.0f }) {
+                const float x = cx + side * d;
+                p.glow(x, l.keysTop + 0.35f * l.keysHeight, 0.9f * wk, 0.3f * l.keysHeight, 0.5f * wk, 0.7f * wk, tint.pale, 0.45f * fade);
+                p.glow(x, l.top + 0.5f * l.rail, 2.0f * wk, 0.5f, 0.5f, 2.5f, tint.pale, fade);
+            }
+        }
+
     // The pedals: soft, sostenuto, sustain (as on a grand, left to right), rounded, each filled as far as it is down.
     if (s.pedals) {
         const float g = std::max(3.0f, l.width * 0.006f), w = (l.width - 4.0f * g) / 3.0f;
@@ -984,6 +1229,18 @@ void render(void* data, gs_effect_t*)
     gs_blend_state_push();
     if (k->look.ready()) {
         Painter painter(k->look, l.width, l.height, linear);
+        if (s.chords && s.chordShake && k->rate > 0.0) { // a powerful chord shakes the keyboard, a few pixels, briefly
+            float x = 0.0f, y = 0.0f;
+            for (const auto& c : k->chords) {
+                const double t = (k->frame - (double) c.hit.frame) / k->rate;
+                if (t < 0.0 || t >= kShakeSeconds)
+                    continue;
+                const float a = l.white * 0.18f * c.power * (float) std::exp(-t / 0.07);
+                x += a * (float) std::sin(t * 6.2831853 * 23.0);
+                y += 0.6f * a * (float) std::sin(t * 6.2831853 * 31.0 + 1.3);
+            }
+            painter.offset(x, y);
+        }
         drawKeyboard(*k, s, l, painter);
     } else
         drawPlain(*k, s, l, linear);
@@ -1034,6 +1291,17 @@ void defaults(obs_data_t* settings)
     obs_data_set_default_int(settings, "afterglow_ms", s.afterglowMs);
     obs_data_set_default_bool(settings, "flash", s.flash);
     obs_data_set_default_double(settings, "offset_ms", s.offsetMs);
+    obs_data_set_default_int(settings, "velocity_accent", s.accent);
+    obs_data_set_default_int(settings, "velocity_top", s.velocityTop);
+    obs_data_set_default_bool(settings, "chords", s.chords);
+    obs_data_set_default_int(settings, "chord_notes", s.chordNotes);
+    obs_data_set_default_int(settings, "chord_threshold", s.chordThreshold);
+    obs_data_set_default_int(settings, "chord_intensity", s.chordIntensity);
+    obs_data_set_default_bool(settings, "chord_wave", s.chordWave);
+    obs_data_set_default_bool(settings, "chord_wash", s.chordWash);
+    obs_data_set_default_bool(settings, "chord_fireworks", s.chordFireworks);
+    obs_data_set_default_bool(settings, "chord_bracket", s.chordBracket);
+    obs_data_set_default_bool(settings, "chord_shake", s.chordShake);
 }
 
 void update(void* data, obs_data_t* settings)
@@ -1062,6 +1330,17 @@ void update(void* data, obs_data_t* settings)
     s.afterglowMs = (int) std::clamp<long long>(obs_data_get_int(settings, "afterglow_ms"), 0, 3000);
     s.flash = obs_data_get_bool(settings, "flash");
     s.offsetMs = std::clamp(obs_data_get_double(settings, "offset_ms"), -1000.0, 1000.0);
+    s.accent = (int) std::clamp<long long>(obs_data_get_int(settings, "velocity_accent"), 0, 100);
+    s.velocityTop = (int) std::clamp<long long>(obs_data_get_int(settings, "velocity_top"), 40, 127);
+    s.chords = obs_data_get_bool(settings, "chords");
+    s.chordNotes = (int) std::clamp<long long>(obs_data_get_int(settings, "chord_notes"), 2, 8);
+    s.chordThreshold = (int) std::clamp<long long>(obs_data_get_int(settings, "chord_threshold"), 0, 100);
+    s.chordIntensity = (int) std::clamp<long long>(obs_data_get_int(settings, "chord_intensity"), 0, 100);
+    s.chordWave = obs_data_get_bool(settings, "chord_wave");
+    s.chordWash = obs_data_get_bool(settings, "chord_wash");
+    s.chordFireworks = obs_data_get_bool(settings, "chord_fireworks");
+    s.chordBracket = obs_data_get_bool(settings, "chord_bracket");
+    s.chordShake = obs_data_get_bool(settings, "chord_shake");
     const std::lock_guard<std::mutex> guard(k->lock);
     k->settings = s;
 }
@@ -1084,6 +1363,20 @@ void destroy(void* data)
         obs_leave_graphics();
     }
     delete k;
+}
+
+/// The strongest velocity of the last minute becomes the keyboard's strongest.
+bool measureVelocity(obs_properties_t*, obs_property_t*, void* data)
+{
+    auto* k = static_cast<Keyboard*>(data);
+    const int strongest = k->strongest.load();
+    if (strongest <= 0)
+        return false;
+    obs_data_t* settings = obs_source_get_settings(k->source);
+    obs_data_set_int(settings, "velocity_top", std::max(40, strongest));
+    obs_source_update(k->source, settings);
+    obs_data_release(settings);
+    return true;
 }
 
 /// The hues shown for the mode chosen; the split, for a fixed one.
@@ -1172,6 +1465,32 @@ obs_properties_t* properties(void* data)
     obs_property_t* afterglow = obs_properties_add_int_slider(props, "afterglow_ms", text("Keyboard.Afterglow"), 0, 3000, 10);
     obs_property_int_set_suffix(afterglow, " ms");
     obs_property_set_long_description(afterglow, text("Keyboard.Afterglow.Description"));
+
+    obs_properties_t* velocity = obs_properties_create();
+    obs_property_t* accent = obs_properties_add_int_slider(velocity, "velocity_accent", text("Keyboard.Accent"), 0, 100, 1);
+    obs_property_int_set_suffix(accent, " %");
+    obs_property_set_long_description(accent, text("Keyboard.Accent.Description"));
+    obs_property_t* top = obs_properties_add_int_slider(velocity, "velocity_top", text("Keyboard.VelocityTop"), 40, 127, 1);
+    obs_property_set_long_description(top, text("Keyboard.VelocityTop.Description"));
+    obs_property_t* measure = obs_properties_add_button2(velocity, "velocity_measure", text("Keyboard.VelocityMeasure"), measureVelocity, k);
+    obs_property_set_long_description(measure, text("Keyboard.VelocityMeasure.Description"));
+    obs_properties_add_group(props, "velocity_group", text("Keyboard.Velocity"), OBS_GROUP_NORMAL, velocity);
+
+    obs_properties_t* chords = obs_properties_create();
+    obs_properties_add_int_slider(chords, "chord_notes", text("Keyboard.ChordNotes"), 2, 8, 1);
+    obs_property_t* threshold = obs_properties_add_int_slider(chords, "chord_threshold", text("Keyboard.ChordThreshold"), 0, 100, 1);
+    obs_property_int_set_suffix(threshold, " %");
+    obs_property_set_long_description(threshold, text("Keyboard.ChordThreshold.Description"));
+    obs_property_t* intensity = obs_properties_add_int_slider(chords, "chord_intensity", text("Keyboard.ChordIntensity"), 0, 100, 1);
+    obs_property_int_set_suffix(intensity, " %");
+    obs_properties_add_bool(chords, "chord_wave", text("Keyboard.ChordWave"));
+    obs_properties_add_bool(chords, "chord_wash", text("Keyboard.ChordWash"));
+    obs_properties_add_bool(chords, "chord_fireworks", text("Keyboard.ChordFireworks"));
+    obs_properties_add_bool(chords, "chord_bracket", text("Keyboard.ChordBracket"));
+    obs_properties_add_bool(chords, "chord_shake", text("Keyboard.ChordShake"));
+    obs_property_t* group = obs_properties_add_group(props, "chords", text("Keyboard.Chords"), OBS_GROUP_CHECKABLE, chords);
+    obs_property_set_long_description(group, text("Keyboard.Chords.Description"));
+
     obs_property_t* offset = obs_properties_add_float_slider(props, "offset_ms", text("Keyboard.Offset"), -1000.0, 1000.0, 1.0);
     obs_property_float_set_suffix(offset, " ms");
     obs_property_set_long_description(offset, text("Keyboard.Offset.Description"));

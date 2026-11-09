@@ -2,7 +2,7 @@
 
 // The overlays' logic, without OBS (tests: obs/tests/overlay_test.cpp): the keyboard's geometry, the keys and
 // pedals as the MIDI events of the feed leave them at a frame, the notes played (for the trails) and struck (for the
-// sparkles), the colours by hue, the sparkles, and the text source's template.
+// sparkles), the colours by hue, the sparkles and fireworks, the powerful chords, and the text source's template.
 
 #include <pianoforge/audio_feed.hpp>
 
@@ -374,6 +374,9 @@ private:
 struct Spark {
     float x = 0.0f, y = 0.0f, vx = 0.0f, vy = 0.0f, age = 0.0f, life = 1.0f, size = 1.0f, phase = 0.0f;
     std::uint32_t color = 0xFFFFFFFFu;
+    float gravity = 0.0f;                                // pixels per second per second, downward
+    int burst = 0;                                       // a rocket: the sparks it bursts into at the end of its life,
+    float burstRadius = 0.0f, burstLife = 0.0f, burstGravity = 0.0f; // how far they go, how long they live, how they fall
 
     /// How bright it is: nothing before it leaves, lit within a few hundredths of a second, going out toward its end.
     float brightness() const noexcept
@@ -426,7 +429,31 @@ public:
         }
     }
 
-    /// Moves them on by `dt` seconds; those gone out, or risen above `ceiling`, are gone.
+    /// A firework: a rocket rising `height` pixels from (x, y) in `life` seconds (leaving after `delay`), bursting there
+    /// into `count` sparks all around, which go `radius` pixels, droop by `gravity` and go out within `burstLife`.
+    void rocket(float x, float y, float height, float life, float delay, float size, std::uint32_t color, int count, float radius,
+                float burstLife, float gravity)
+    {
+        if (list.size() >= kMax)
+            return;
+        Spark s;
+        s.x = x;
+        s.y = y;
+        s.life = life;
+        s.vy = -kDrag * height / (1.0f - std::exp(-kDrag * life));
+        s.size = size;
+        s.phase = random();
+        s.age = -delay;
+        s.color = color;
+        s.burst = count;
+        s.burstRadius = radius;
+        s.burstLife = burstLife;
+        s.burstGravity = gravity;
+        list.push_back(s);
+    }
+
+    /// Moves them on by `dt` seconds; those gone out, or risen above `ceiling`, are gone (a rocket at the end of its
+    /// life bursts).
     void step(float dt, float ceiling)
     {
         const float drag = std::exp(-kDrag * dt);
@@ -438,11 +465,31 @@ public:
             s.x += (s.vx + std::sin(6.2831853f * (s.phase + 0.6f * s.age)) * 0.25f * s.size) * dt;
             s.y += s.vy * dt;
             s.vx *= drag;
-            s.vy *= drag;
+            s.vy = s.vy * drag + s.gravity * dt;
             s.age += dt;
         }
+        bursting.clear();
+        for (const auto& s : list)
+            if (s.burst > 0 && s.age >= s.life && s.y >= ceiling)
+                bursting.push_back(s);
         list.erase(std::remove_if(list.begin(), list.end(), [&](const Spark& s) { return s.age >= s.life || s.y < ceiling; }),
                    list.end());
+        for (const auto& r : bursting)
+            for (int i = 0; i < r.burst && list.size() < kMax; ++i) {
+                Spark c;
+                c.x = r.x;
+                c.y = r.y;
+                c.life = r.burstLife * (0.7f + 0.3f * random());
+                const float angle = 6.2831853f * ((float) i + random()) / (float) r.burst;
+                const float speed = kDrag * r.burstRadius * (0.25f + 0.75f * random()) / (1.0f - std::exp(-kDrag * c.life));
+                c.vx = speed * std::cos(angle);
+                c.vy = speed * std::sin(angle);
+                c.gravity = r.burstGravity;
+                c.size = r.size * (0.6f + 0.4f * random());
+                c.phase = random();
+                c.color = r.color;
+                list.push_back(c);
+            }
     }
 
     const std::vector<Spark>& sparks() const noexcept { return list; }
@@ -457,7 +504,93 @@ private:
     }
 
     std::uint32_t seed = 0x9E3779B9u;
-    std::vector<Spark> list;
+    std::vector<Spark> list, bursting;
+};
+
+/// A powerful chord: its notes (struck within the window of the first), its first note's frame, how strong they are
+/// together (the mean strength of their velocities, 0 to 1).
+struct ChordHit {
+    std::uint64_t frame = 0;
+    std::vector<PlayedNote> notes;
+    float strength = 0.0f;
+};
+
+/// Finds the powerful chords among the notes struck: at least `minNotes` struck within kWindowSeconds of the first,
+/// their mean strength at least `threshold`. A chord is known once its window has passed (all its notes in, a few
+/// hundredths of a second after the first); after one, another waits kRestSeconds (a fortissimo passage is not a
+/// firework at every chord).
+class ChordDetector {
+public:
+    static constexpr double kWindowSeconds = 0.035, kRestSeconds = 0.6;
+
+    void reset()
+    {
+        group.clear();
+        found.clear();
+        lastFired = std::numeric_limits<std::uint64_t>::max();
+    }
+    void setRate(double rate)
+    {
+        window = (std::uint64_t) std::max(1.0, kWindowSeconds * rate);
+        rest = (std::uint64_t) std::max(1.0, kRestSeconds * rate);
+    }
+    void configure(int notes, float strength)
+    {
+        minNotes = std::max(1, notes);
+        threshold = strength;
+    }
+
+    /// A note struck (in order), its strength (0 to 1).
+    void add(const PlayedNote& n, float strength)
+    {
+        if (!group.empty() && n.start > group.front().note.start + window)
+            close();
+        group.push_back({ n, strength });
+    }
+    /// The chord found once the frame shown is past its window, if any (`hit`).
+    bool poll(std::uint64_t frame, ChordHit& hit)
+    {
+        if (!group.empty() && frame > group.front().note.start + window)
+            close();
+        if (found.empty())
+            return false;
+        hit = std::move(found.front());
+        found.erase(found.begin());
+        return true;
+    }
+
+private:
+    struct Struck {
+        PlayedNote note;
+        float strength;
+    };
+
+    void close()
+    {
+        float sum = 0.0f;
+        for (const auto& g : group)
+            sum += g.strength;
+        const float mean = sum / (float) group.size();
+        const std::uint64_t first = group.front().note.start;
+        const bool rested = lastFired == std::numeric_limits<std::uint64_t>::max() || first >= lastFired + rest;
+        if ((int) group.size() >= minNotes && mean >= threshold && rested) {
+            ChordHit hit;
+            hit.frame = first;
+            hit.strength = mean;
+            for (const auto& g : group)
+                hit.notes.push_back(g.note);
+            found.push_back(std::move(hit));
+            lastFired = first;
+        }
+        group.clear();
+    }
+
+    std::vector<Struck> group;
+    std::vector<ChordHit> found;
+    std::uint64_t lastFired = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t window = 1680, rest = 28800; // at 48 kHz
+    int minNotes = 3;
+    float threshold = 0.75f;
 };
 
 /// The text source's template, its fields replaced: {file} the MIDI file, {state} playing or stopped, {preset} the
