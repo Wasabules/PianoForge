@@ -140,6 +140,78 @@ int main()
               "a key's light: pressed at its frame, released at its frame, its velocity kept");
     }
 
+    // Colours by hue: red, green, blue at full saturation; grey without; light and dark.
+    {
+        check(hslColor(0.0, 1.0, 0.5) == 0xFF0000FFu && hslColor(120.0, 1.0, 0.5) == 0xFF00FF00u && hslColor(240.0, 1.0, 0.5) == 0xFFFF0000u
+                  && hslColor(360.0, 1.0, 0.5) == 0xFF0000FFu && hslColor(-120.0, 1.0, 0.5) == 0xFFFF0000u,
+              "hues: 0 red, 120 green, 240 blue, around the circle both ways");
+        check(hslColor(200.0, 0.0, 0.5) == 0xFF808080u && hslColor(30.0, 1.0, 1.0) == 0xFFFFFFFFu && hslColor(30.0, 1.0, 0.0) == 0xFF000000u,
+              "no saturation: grey; full lightness white, none black");
+        const std::uint32_t orange = hslColor(25.0, 0.9, 0.55);
+        check((orange & 0xFF) > ((orange >> 8) & 0xFF) && ((orange >> 8) & 0xFF) > ((orange >> 16) & 0xFF),
+              "an orange: more red than green, more green than blue");
+        check(mixColor(0xFF000000u, 0xFFFFFFFFu, 0.5) == 0xFF808080u && mixColor(0xFF102030u, 0xFFFFFFFFu, 0.0) == 0xFF102030u,
+              "colours mixed");
+    }
+
+    // The strikes, for the sparkles: each note struck once, then gone from the list.
+    {
+        KeyboardState k;
+        k.reset();
+        k.add(event(100, 0x90, 60, 90));
+        k.add(event(110, 0x90, 64, 60));
+        k.add(event(300, 0x80, 60, 0));
+        k.advance(500, 100000);
+        std::vector<PlayedNote> struck;
+        k.takeStrikes(struck);
+        const bool first = struck.size() == 2 && struck[0].key == 60 && struck[0].velocity == 90 && struck[1].key == 64;
+        k.takeStrikes(struck);
+        check(first && struck.empty(), "the notes struck, each once");
+        for (int i = 0; i < 400; ++i)
+            k.add(event(1000 + (std::uint64_t) i, 0x90, 60 + i % 12, 80));
+        k.advance(2000, 100000);
+        k.takeStrikes(struck);
+        check(struck.size() == 256 && struck.back().start == 1399, "unread strikes: the newest kept");
+    }
+
+    // Sparkles: a burst rises, slows, goes out; no more than kMax.
+    {
+        Sparkles s;
+        s.burst(100.0f, 200.0f, 20.0f, 12, 300.0f, 10.0f, 1.0f, 0xFFFFFFFFu);
+        const bool born = s.sparks().size() == 12;
+        bool rising = true, inside = true;
+        for (const auto& p : s.sparks()) {
+            rising = rising && p.vy < -100.0f;
+            inside = inside && std::fabs(p.x - 100.0f) <= 10.0f && p.size <= 10.0f && p.life <= 1.0f;
+        }
+        float before = 0.0f;
+        for (const auto& p : s.sparks())
+            before += p.y;
+        s.step(0.1f, 20.0f, 0.0f);
+        float after = 0.0f, speed = 0.0f;
+        for (const auto& p : s.sparks()) {
+            after += p.y;
+            speed += -p.vy;
+        }
+        check(born && rising && inside && after < before - 12 * 10.0f && speed < 12 * 300.0f,
+              "a burst: its sparks rise from the key, spread across it, slowing");
+        for (int i = 0; i < 20; ++i)
+            s.step(0.05f, 20.0f, 0.0f);
+        check(s.sparks().empty(), "they go out within their life");
+        s.burst(100.0f, 200.0f, 20.0f, 12, 3000.0f, 10.0f, 5.0f, 0xFFFFFFFFu);
+        s.step(0.2f, 20.0f, 150.0f);
+        check(s.sparks().empty(), "risen above the ceiling: gone");
+        for (int i = 0; i < 100; ++i)
+            s.burst(100.0f, 200.0f, 20.0f, 12, 300.0f, 10.0f, 1.0f, 0xFFFFFFFFu);
+        Spark young;
+        young.life = 1.0f;
+        young.age = 0.02f;
+        Spark old = young;
+        old.age = 0.9f;
+        check(s.sparks().size() == Sparkles::kMax && young.brightness() > 0.4f && old.brightness() < 0.25f,
+              "no more than kMax at once; lit at once, going out at the end");
+    }
+
     // The text template.
     {
         pf::FeedInfo info;

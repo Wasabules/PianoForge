@@ -5,7 +5,7 @@ no system mixer in between, and the main audio output (ASIO) untouched.
 
 - **PianoForge** (audio): the application's sound, in the mix chosen, at the stream's own level.
 - **PianoForge keyboard** (video): the 88 keys as played, the pedals, and the notes rising from the keys as they
-  sound; it moves with the audio source's sound.
+  sound, with lights and sparkles; it moves with the audio source's sound.
 - **PianoForge text** (video): a template filled with the application's state (the MIDI file, the instrument
   preset, the room...), drawn by OBS's own text source.
 - **Chapter markers**: at each take saved, recording started or stopped and MIDI file played in PianoForge, a chapter
@@ -33,7 +33,10 @@ The texts are in English and French (`data/locale`).
 - Every start fades in, every planned stop fades out over 10 ms (a new mix, latency or format, the resync button,
   the application's audio stopping): no click in the stream. A limiter keeps the peaks under -1 dBFS.
 - **The keyboard** reads the events from the feed and shows the frame the audio source stamps at that instant (or,
-  without an audio source, the application's newest frame less 20 ms): the image meets the sound.
+  without an audio source, the application's newest frame less 20 ms): the image meets the sound. It is drawn by a
+  shader of its own (`data/pianoforge-keyboard.effect`, installed beside the locales): rounded boxes with a gradient,
+  a rim and a light within (keys, notes, pedals, shadows), halos and beams added over them, and the sparkles, many to
+  a draw. A busy image (fifteen notes, their lights, sparkles) takes about a millisecond of the graphics thread.
 - Each source says it reads the feed (a slot in it, every quarter of a second): PianoForge's Session card shows
   what OBS reads, and how late the sound is from the key to OBS.
 
@@ -70,12 +73,16 @@ Properties) so that it is not heard twice.
 - **Chapter markers in OBS recordings** (on by default).
 - **Let PianoForge's gestures control OBS** (on by default).
 
-**PianoForge keyboard**: width, trails above the keys (height, length in seconds; 0: the keyboard alone), the
-pedals; the colours: each hand's (estimated from the notes: where each hand plays, how far it stretches, chords too
-wide for one hand split at their widest interval; or a fixed split), with a shade for the black keys (blue and dark
-blue, orange and dark orange by default), one for the white keys and one for the black, or one colour; the light: a
-glow rising from the keys pressed, a flash toward white at the strike (by its velocity), an afterglow once a key is
-up; an offset against the sound.
+**PianoForge keyboard**: width; the notes above the keys (height, time to the top; 0: the keyboard alone), rounded
+bars with a bright rim and a halo, fading as they rise; the pedals. The keys have rounded fronts and a front edge
+that sinks as they go down; the black keys cast their shadow. The colours, chosen by hue (a slider in degrees) and
+saturation: each hand's (estimated from the notes: where each hand plays, how far it stretches, chords too wide for
+one hand split at their widest interval; or a fixed split; blue and orange by default), one for the white keys and
+one for the black, one for all, or the rainbow from the bass to the treble; the black keys take a deeper shade of
+their hue. The lights: beams rising from the keys held, halos, the keys lit from within (0 to 100 %); sparkles
+thrown up by each strike, the more and the higher the stronger it is, a few rising while a key is held (0 to
+100 %); a burst and a flare along the keyboard at the strike; an afterglow once a key is up; an offset against the
+sound.
 
 **PianoForge text**: the template (fields `{file}`, `{state}`, `{preset}`, `{room}`, `{engine}`, `{recording}`; a
 line whose fields are all empty disappears), then OBS's text properties (font, colours, outline, background...).
@@ -83,13 +90,15 @@ line whose fields are all empty disappears), then OBS's text properties (font, c
 ## Tests
 
 - `pianoforge-obs-overlay-test` (ctest `obs_overlay`): the keyboard's geometry, the keys and pedals at a frame, the
-  notes kept for the trails, the text template.
+  notes kept for the trails and struck for the sparkles, the colours by hue, the sparkles (a burst rises, slows and
+  goes out), the text template.
 - `pianoforge-obs-test` (ctest `obs_plugin`, about 45 s) loads the plugin into the installed libobs without the OBS
   application (audio, and video through OBS's Direct3D 11 module, offscreen; OBS's text source beside it), writes
   the feed as PianoForge does (three mixes of a 1 kHz sine, on a clock 200 ppm fast, the volume at -6 dB, MIDI
   events) and checks: the speakers mix by default at its own level; continuous audio and timestamps; the frequency
   on OBS's clock (within a few ppm); no glitch; the status and the key-to-OBS latency; a new latency, the resync
   button; another mix with the volume followed, through fades (no step); the readers the application sees; the
-  keyboard rendered (middle C lit, its trail, the sustain pedal); the text filled and resized; a mark logged while
-  OBS does not record. The test's feed has a name of its own (`PIANOFORGE_AUDIO_FEED`): it runs beside a PianoForge
+  keyboard rendered (each hand's colour, a key not lit, a note rising, the sustain pedal; a phrase played, its
+  images kept beside the report; sparkles after strikes and none when off; the rainbow; the time a busy image
+  takes; no word from Direct3D); the text filled and resized; a mark logged while OBS does not record. The test's feed has a name of its own (`PIANOFORGE_AUDIO_FEED`): it runs beside a PianoForge
   and an OBS in use.

@@ -1,8 +1,8 @@
 #pragma once
 
 // The overlays' logic, without OBS (tests: obs/tests/overlay_test.cpp): the keyboard's geometry, the keys and
-// pedals as the MIDI events of the feed leave them at a frame, the notes played (for the trails), and the text
-// source's template.
+// pedals as the MIDI events of the feed leave them at a frame, the notes played (for the trails) and struck (for the
+// sparkles), the colours by hue, the sparkles, and the text source's template.
 
 #include <pianoforge/audio_feed.hpp>
 
@@ -59,6 +59,37 @@ inline KeyShape keyShape(int key, float width) noexcept
     const float boundary = (float) whitesBefore(key) * w; // between the white key below and the one above
     s.x = boundary + (shift - 0.29f) * w;
     return s;
+}
+
+/// A colour from its hue (degrees), saturation and lightness (0 to 1), as OBS keeps colours (0xAABBGGRR), opaque.
+inline std::uint32_t hslColor(double hue, double saturation, double lightness) noexcept
+{
+    const double h = std::fmod(std::fmod(hue, 360.0) + 360.0, 360.0) / 60.0;
+    const double s = std::clamp(saturation, 0.0, 1.0), l = std::clamp(lightness, 0.0, 1.0);
+    const double c = (1.0 - std::fabs(2.0 * l - 1.0)) * s, x = c * (1.0 - std::fabs(std::fmod(h, 2.0) - 1.0)), m = l - 0.5 * c;
+    double r = 0.0, g = 0.0, b = 0.0;
+    switch ((int) h) {
+    case 0: r = c; g = x; break;
+    case 1: r = x; g = c; break;
+    case 2: g = c; b = x; break;
+    case 3: g = x; b = c; break;
+    case 4: r = x; b = c; break;
+    default: r = c; b = x; break;
+    }
+    auto byte = [m](double v) { return (std::uint32_t) std::lround(255.0 * std::clamp(v + m, 0.0, 1.0)); };
+    return 0xFF000000u | byte(b) << 16 | byte(g) << 8 | byte(r);
+}
+
+/// Between two colours (0xAABBGGRR), `t` of the way from `a` to `b`.
+inline std::uint32_t mixColor(std::uint32_t a, std::uint32_t b, double t) noexcept
+{
+    t = std::clamp(t, 0.0, 1.0);
+    std::uint32_t out = 0;
+    for (int c = 0; c < 32; c += 8) {
+        const double x = (double) ((a >> c) & 0xFF), y = (double) ((b >> c) & 0xFF);
+        out |= (std::uint32_t) std::lround(x + (y - x) * t) << c;
+    }
+    return out;
 }
 
 enum Hand : int { kNoHand = 0, kLeftHand = 1, kRightHand = 2 };
@@ -187,6 +218,7 @@ public:
     {
         pending.clear();
         played.clear();
+        strikes.clear();
         for (auto& l : lights)
             l = KeyLight {};
         open.fill(-1);
@@ -229,11 +261,18 @@ public:
     /// 0 the sustain pedal, 1 the sostenuto, 2 the soft pedal: 0 (up) to 1 (down).
     float pedal(int which) const noexcept { return which >= 0 && which < 3 ? pedals[(std::size_t) which] : 0.0f; }
     const std::vector<PlayedNote>& notes() const noexcept { return played; }
+    /// The notes struck since the last call (the newest kStrikesKept at most), into `out`.
+    void takeStrikes(std::vector<PlayedNote>& out)
+    {
+        out.clear();
+        out.swap(strikes);
+    }
     std::size_t waiting() const noexcept { return pending.size(); }
     const HandEstimator& estimator() const noexcept { return hands; }
 
 private:
     static constexpr double kTogetherSeconds = 0.035;
+    static constexpr std::size_t kStrikesKept = 256;
 
     static bool isNoteOn(const pf::FeedEvent& e) { return (e.status & 0xF0) == 0x90 && (e.data2 & 0x7F) > 0; }
 
@@ -278,6 +317,9 @@ private:
             n.start = e.frame;
             played.push_back(n);
             open[(std::size_t) key] = (int) played.size() - 1;
+            if (strikes.size() >= kStrikesKept)
+                strikes.erase(strikes.begin());
+            strikes.push_back(n);
         } else if (type == 0x80 || (type == 0x90 && value == 0)) {
             release(key, e.frame);
         } else if (type == 0xB0) {
@@ -313,7 +355,7 @@ private:
     }
 
     std::deque<pf::FeedEvent> pending;
-    std::vector<PlayedNote> played;
+    std::vector<PlayedNote> played, strikes;
     std::array<KeyLight, 128> lights {};
     std::array<int, 128> open = [] {
         std::array<int, 128> a {};
@@ -324,6 +366,78 @@ private:
     HandEstimator hands;
     std::uint64_t together = 1680; // 35 ms at 48 kHz
     std::vector<int> groupKeys, groupHands;
+};
+
+/// A spark: where it is and where it goes (pixels, pixels per second), how old it is and how long it lives (seconds),
+/// its size (pixels: its star's reach), its colour (0xAABBGGRR) and its phase (it twinkles in its own time).
+struct Spark {
+    float x = 0.0f, y = 0.0f, vx = 0.0f, vy = 0.0f, age = 0.0f, life = 1.0f, size = 1.0f, phase = 0.0f;
+    std::uint32_t color = 0xFFFFFFFFu;
+
+    /// How bright it is: lit at once, going out toward its end.
+    float brightness() const noexcept
+    {
+        const float t = age / life;
+        return std::clamp(age / 0.04f, 0.0f, 1.0f) * std::max(0.0f, 1.0f - t * t);
+    }
+};
+
+/// The sparkles thrown up by the keys: a burst at each strike (as many, as fast and as long-lived as the caller makes
+/// it, by the velocity), a few rising while a key is held. They slow down in the air, keep rising a little, sway,
+/// and go out.
+class Sparkles {
+public:
+    static constexpr std::size_t kMax = 800;
+
+    void clear() { list.clear(); }
+
+    /// `count` sparks from (x, y), spread over `spread` pixels across, rising at up to `speed` pixels per second, of
+    /// up to `size` pixels, living up to `life` seconds.
+    void burst(float x, float y, float spread, int count, float speed, float size, float life, std::uint32_t color)
+    {
+        for (int i = 0; i < count && list.size() < kMax; ++i) {
+            Spark s;
+            s.x = x + (random() - 0.5f) * spread;
+            s.y = y - 2.0f * random();
+            s.vy = -speed * (0.45f + 0.55f * random());
+            s.vx = (random() - 0.5f) * 0.6f * speed;
+            s.size = size * (0.55f + 0.45f * random());
+            s.life = life * (0.6f + 0.4f * random());
+            s.phase = random();
+            s.color = color;
+            list.push_back(s);
+        }
+    }
+
+    /// Moves them on by `dt` seconds: slowed by the air, rising by `lift` pixels per second per second, swaying; those
+    /// gone out, or risen above `ceiling`, are gone.
+    void step(float dt, float lift, float ceiling)
+    {
+        const float drag = std::exp(-2.4f * dt);
+        for (auto& s : list) {
+            s.vx *= drag;
+            s.vy = s.vy * drag - lift * dt;
+            s.x += (s.vx + std::sin(6.2831853f * (s.phase + 0.8f * s.age)) * 0.8f * s.size) * dt;
+            s.y += s.vy * dt;
+            s.age += dt;
+        }
+        list.erase(std::remove_if(list.begin(), list.end(), [&](const Spark& s) { return s.age >= s.life || s.y < ceiling; }),
+                   list.end());
+    }
+
+    const std::vector<Spark>& sparks() const noexcept { return list; }
+
+private:
+    float random() noexcept // xorshift: the same sparks for the same strikes
+    {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        return (float) (seed >> 8) * (1.0f / 16777216.0f);
+    }
+
+    std::uint32_t seed = 0x9E3779B9u;
+    std::vector<Spark> list;
 };
 
 /// The text source's template, its fields replaced: {file} the MIDI file, {state} playing or stopped, {preset} the

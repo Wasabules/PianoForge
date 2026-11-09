@@ -79,6 +79,7 @@ Source: "{#StageDir}\vst3\PianoForge.vst3\Plugin.ico"; DestDir: "{autocf64}\VST3
 Source: "{#StageDir}\obs\pianoforge-obs.dll"; DestDir: "{commonappdata}\obs-studio\plugins\pianoforge-obs\bin\64bit"; Flags: ignoreversion; Tasks: obsplugin; BeforeInstall: MovePluginAside
 Source: "{#StageDir}\obs\en-US.ini"; DestDir: "{commonappdata}\obs-studio\plugins\pianoforge-obs\data\locale"; Flags: ignoreversion; Tasks: obsplugin
 Source: "{#StageDir}\obs\fr-FR.ini"; DestDir: "{commonappdata}\obs-studio\plugins\pianoforge-obs\data\locale"; Flags: ignoreversion; Tasks: obsplugin
+Source: "{#StageDir}\obs\pianoforge-keyboard.effect"; DestDir: "{commonappdata}\obs-studio\plugins\pianoforge-obs\data"; Flags: ignoreversion; Tasks: obsplugin
 #endif
 
 [Icons]

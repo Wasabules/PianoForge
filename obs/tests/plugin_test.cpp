@@ -6,7 +6,8 @@
 //     timestamps that follow the frames, at 1 kHz on OBS's clock, clean; its status (latency, key to OBS); a new
 //     latency, the resync button; another mix with the volume followed, reached through fades (no click);
 //   - the readers the application sees (sound, keyboard, text, and the mix taken);
-//   - the keyboard: rendered, middle C lit, D not, the sustain pedal's bar full;
+//   - the keyboard: rendered, C2 lit blue (left hand), middle C orange, D not, a note rising, the sustain pedal; a
+//     phrase played (its images kept), sparkles thrown up by strikes, none when off;
 //   - the text: its template filled with the application's state, wider for a longer text;
 //   - the chapters: a mark while OBS does not record is said so in the log.
 // The feed has a name of its own (PIANOFORGE_AUDIO_FEED): the test runs beside a PianoForge and an OBS in use.
@@ -130,6 +131,7 @@ int main(int argc, char** argv)
     const std::string dataPath = std::filesystem::absolute(argv[2]).string();
     const std::filesystem::path obsDir = argv[4];
     FILE* report = std::fopen(std::filesystem::absolute(argv[3]).string().c_str(), "w");
+    const auto reportFolder = std::filesystem::absolute(argv[3]).parent_path(); // (before the folder changes, below)
     auto say = [&](const std::string& line) {
         std::printf("%s\n", line.c_str());
         std::fflush(stdout);
@@ -220,6 +222,12 @@ int main(int argc, char** argv)
     obs_source_add_audio_capture_callback(source, onAudio, &capture);
 
     std::atomic<bool> producing { true };
+    std::mutex playLock; // events the test plays, written with the next block
+    std::vector<pf::FeedEvent> played;
+    auto play = [&](std::initializer_list<pf::FeedEvent> events) {
+        const std::lock_guard<std::mutex> guard(playLock);
+        played.insert(played.end(), events.begin(), events.end());
+    };
     std::thread producer([&] {
 #if defined(_WIN32)
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL); // as an audio driver's callback runs
@@ -231,6 +239,8 @@ int main(int argc, char** argv)
         const float amplitude[3] = { 0.1f, 0.25f, 0.05f };
         long long produced = 0;
         bool struck = false;
+        std::vector<pf::FeedEvent> blockEvents;
+        blockEvents.reserve(64);
         const auto start = std::chrono::steady_clock::now();
         while (producing.load() && produced < (long long) ((seconds + 60.0) * rate)) {
             for (int k = 0; k < 128; ++k) {
@@ -246,11 +256,18 @@ int main(int argc, char** argv)
             b.frames = 128;
             b.volume = 0.5f;
             const pf::FeedEvent events[3] = { { 0, 0x90, 36, 100, 0, 0 }, { 0, 0x90, 60, 100, 0, 0 }, { 10, 0xB0, 64, 127, 0, 0 } };
+            blockEvents.clear();
             if (!struck && produced >= (long long) rate) {
-                b.events = events;
-                b.numEvents = 3;
+                blockEvents.assign(events, events + 3);
                 struck = true;
             }
+            {
+                const std::lock_guard<std::mutex> guard(playLock);
+                blockEvents.insert(blockEvents.end(), played.begin(), played.end());
+                played.clear();
+            }
+            b.events = blockEvents.data();
+            b.numEvents = (int) blockEvents.size();
             feed.write(b);
             produced += 128;
             std::this_thread::sleep_until(start + std::chrono::nanoseconds((long long) (1e9 * produced / (rate * clock))));
@@ -360,24 +377,12 @@ int main(int argc, char** argv)
     obs_properties_destroy(props);
 
     // The keyboard, its colours by hand (the default): C2 and middle C struck together, too far apart for one hand:
-    // C2 the left hand's (blue), middle C the right's (orange), D not lit, middle C's trail, the sustain pedal's bar.
+    // C2 the left hand's (blue), middle C the right's (orange), D not lit, middle C's note rising, the sustain pedal.
+    // Then a phrase played, its images kept (keyboard-1.bmp...); and sparkles thrown up by strikes, none when off.
     if (video && keyboard != nullptr) {
-        std::uint32_t w = 0, h = 0;
-        const auto px = renderSource(keyboard, w, h);
-        auto at = [&](int x, int y) {
-            const std::size_t i = ((std::size_t) y * w + (std::size_t) x) * 4;
-            return std::array<int, 3> { px[i + 2], px[i + 1], px[i] }; // r, g, b
-        };
-        const int keysTop = 100, keysHeight = 130;
-        const double t = 0.55 + 0.45 * 100.0 / 127.0;
-        auto lit = [&](int white, int color) { return (int) std::lround(white + (color - white) * t); };
-        auto matches = [](const std::array<int, 3>& c, int r, int g, int b) {
-            return std::abs(c[0] - r) <= 3 && std::abs(c[1] - g) <= 3 && std::abs(c[2] - b) <= 3;
-        };
-        bool ok = !px.empty() && w == 1040 && h == 100 + 130 + 16;
-        if (ok) { // the image, for the record (keyboard.bmp beside the report: 32-bit, bottom-up rows)
-            const auto bmp = std::filesystem::path(std::filesystem::absolute(argv[3])).replace_filename("keyboard.bmp");
-            if (FILE* f = std::fopen(bmp.string().c_str(), "wb")) {
+        auto save = [&](const std::vector<std::uint8_t>& px, std::uint32_t w, std::uint32_t h, const char* name) {
+            // 32-bit, bottom-up rows
+            if (FILE* f = std::fopen((reportFolder / name).string().c_str(), "wb")) {
                 const std::uint32_t size = 54 + w * h * 4;
                 const std::uint8_t header[54] = { 'B', 'M', (std::uint8_t) size, (std::uint8_t) (size >> 8), (std::uint8_t) (size >> 16),
                                                   (std::uint8_t) (size >> 24), 0, 0, 0, 0, 54, 0, 0, 0, 40, 0, 0, 0,
@@ -388,20 +393,136 @@ int main(int argc, char** argv)
                     std::fwrite(px.data() + (std::size_t) y * w * 4, 1, (std::size_t) w * 4, f);
                 std::fclose(f);
             }
-        }
+        };
+        std::uint32_t w = 0, h = 0;
+        auto px = renderSource(keyboard, w, h);
+        auto at = [&](int x, int y) {
+            const std::size_t i = ((std::size_t) y * w + (std::size_t) x) * 4;
+            return std::array<int, 3> { px[i + 2], px[i + 1], px[i] }; // r, g, b
+        };
+        auto show = [](const std::array<int, 3>& c) { return std::to_string(c[0]) + "," + std::to_string(c[1]) + "," + std::to_string(c[2]); };
+        // 1040 wide: white keys of 20 pixels; the band of keys 130 high (a rail of 7, the keys from 107 to 230), the
+        // pedals under it (16).
+        const int keysTop = 107, bottom = 230;
+        bool ok = !px.empty() && w == 1040 && h == 100 + 130 + 16;
         if (ok) {
-            const int y = keysTop + (int) (0.8 * keysHeight);
+            save(px, w, h, "keyboard.bmp");
+            const int y = keysTop + (int) (0.75 * (bottom - keysTop));
             const auto c2 = at(9 * 20 + 10, y), c4 = at(23 * 20 + 10, y), d4 = at(24 * 20 + 10, y);
-            const auto pedal = at(1040 - 20, keysTop + keysHeight + 8);
-            const auto trail = at(23 * 20 + 10, keysTop - 5);
-            auto show = [](const std::array<int, 3>& c) {
-                return std::to_string(c[0]) + "," + std::to_string(c[1]) + "," + std::to_string(c[2]);
-            };
-            say("        C2 " + show(c2) + "; middle C " + show(c4) + "; D " + show(d4) + "; pedal " + show(pedal) + "; trail " + show(trail));
-            ok = matches(c2, lit(0xF2, 0x3B), lit(0xF2, 0x82), lit(0xF2, 0xF6)) && matches(c4, lit(0xF2, 0xF9), lit(0xF2, 0x73), lit(0xF2, 0x16))
-                 && matches(d4, 0xF2, 0xF2, 0xF2) && matches(pedal, 0xF9, 0x73, 0x16) && trail[0] > 100 && trail[2] < 60;
+            const auto pedal = at(1040 - 20, bottom + 8), note = at(23 * 20 + 10, 60);
+            say("        C2 " + show(c2) + "; middle C " + show(c4) + "; D " + show(d4) + "; pedal " + show(pedal) + "; note " + show(note));
+            ok = c2[2] > c2[0] + 40 && c4[0] > c4[2] + 60 && c4[0] > 150 && d4[0] > 200 && d4[1] > 200 && d4[2] > 200
+                 && std::abs(d4[0] - d4[2]) < 15 && pedal[0] > pedal[2] + 40 && note[0] > note[2] + 40;
         }
-        check(ok, "the keyboard by hand: C2 to the left (blue), middle C to the right (orange), D not lit, a trail, the sustain pedal");
+        check(ok, "the keyboard by hand: C2 to the left (blue), middle C to the right (orange), D not lit, its note rising, the sustain pedal");
+
+        // A phrase: the keys up, then a rising arpeggio and a chord, struck harder and harder.
+        play({ { 0, 0x80, 36, 0, 0, 0 }, { 0, 0x80, 60, 0, 0, 0 }, { 0, 0xB0, 64, 0, 0, 0 } });
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        const int arpeggio[8] = { 48, 52, 55, 60, 64, 67, 72, 76 };
+        for (int i = 0; i < 8; ++i) {
+            play({ { 0, 0x90, (std::uint8_t) arpeggio[i], (std::uint8_t) (60 + 7 * i), 0, 0 } });
+            std::this_thread::sleep_for(std::chrono::milliseconds(110));
+        }
+        play({ { 0, 0xB0, 64, 127, 0, 0 } });
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        play({ { 0, 0x90, 36, 120, 0, 0 }, { 0, 0x90, 43, 115, 0, 0 }, { 0, 0x90, 79, 125, 0, 0 }, { 0, 0x90, 84, 127, 0, 0 },
+               { 0, 0x90, 88, 120, 0, 0 } });
+        const char* frames[3] = { "keyboard-1.bmp", "keyboard-2.bmp", "keyboard-3.bmp" };
+        const int waits[3] = { 90, 250, 600 };
+        bool rendered = true;
+        for (int i = 0; i < 3; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(waits[i]));
+            px = renderSource(keyboard, w, h);
+            rendered = rendered && !px.empty();
+            if (!px.empty())
+                save(px, w, h, frames[i]);
+        }
+        check(rendered, "a phrase played: its images kept (keyboard-1.bmp to keyboard-3.bmp)");
+        {   // What a busy image costs: the time to draw it (the CPU's part, the GPU running behind), over 40 draws.
+            obs_enter_graphics();
+            gs_texrender_t* target = gs_texrender_create(GS_BGRA, GS_ZS_NONE);
+            int drawn = 0;
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 40; ++i) {
+                gs_texrender_reset(target);
+                if (!gs_texrender_begin(target, w, h))
+                    continue;
+                vec4 clear;
+                vec4_zero(&clear);
+                gs_clear(GS_CLEAR_COLOR, &clear, 0.0f, 0);
+                gs_ortho(0.0f, (float) w, 0.0f, (float) h, -100.0f, 100.0f);
+                obs_source_video_render(keyboard);
+                gs_texrender_end(target);
+                ++drawn;
+            }
+            gs_flush();
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / std::max(1, drawn);
+            gs_texrender_destroy(target);
+            obs_leave_graphics();
+            check(drawn == 40 && ms < 5.0, "a busy image (15 notes, their lights, sparkles) drawn in " + std::to_string(ms) + " ms");
+        }
+
+        // Sparkles: above the keys, with nothing else drawn there (no notes, no lights), bright points after strikes;
+        // none when they are off.
+        auto sparkleTest = [&](int amount, int key) {
+            obs_data_t* s = obs_data_create();
+            obs_data_set_int(s, "trail_height", 0);
+            obs_data_set_int(s, "glow", 0);
+            obs_data_set_int(s, "sparkles", amount);
+            obs_source_update(keyboard, s);
+            obs_data_release(s);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            play({ { 0, 0x90, (std::uint8_t) key, 120, 0, 0 }, { 0, 0x90, (std::uint8_t) (key + 4), 120, 0, 0 },
+                   { 0, 0x90, (std::uint8_t) (key + 7), 120, 0, 0 } });
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            px = renderSource(keyboard, w, h);
+            const int top = (int) h - 130 - 16; // the room above the keys
+            int bright = 0;
+            for (int y = 0; y + 12 < top && !px.empty(); ++y)
+                for (int x = 0; x < (int) w; ++x) {
+                    const auto c = at(x, y);
+                    bright += c[0] + c[1] + c[2] > 180 ? 1 : 0;
+                }
+            play({ { 0, 0x80, (std::uint8_t) key, 0, 0, 0 }, { 0, 0x80, (std::uint8_t) (key + 4), 0, 0, 0 },
+                   { 0, 0x80, (std::uint8_t) (key + 7), 0, 0, 0 } });
+            return bright;
+        };
+        const int without = sparkleTest(0, 62), with = sparkleTest(100, 69);
+        if (!px.empty())
+            save(px, w, h, "keyboard-sparkles.bmp");
+        check(without == 0 && with > 30, "sparkles thrown up by strikes (" + std::to_string(with) + " bright pixels above the keys), none when off ("
+                                             + std::to_string(without) + ")");
+        {   // The rainbow: the bass warm (C2 toward orange), the treble cool (E6 toward blue); the hues in the properties.
+            obs_data_t* s = obs_data_create();
+            obs_data_set_int(s, "color_mode", 3);
+            obs_data_set_int(s, "trail_height", 100);
+            obs_data_set_int(s, "glow", 60);
+            obs_data_set_int(s, "sparkles", 50);
+            obs_source_update(keyboard, s);
+            obs_data_release(s);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            px = renderSource(keyboard, w, h);
+            bool rainbow = !px.empty() && h == 246;
+            if (rainbow) {
+                save(px, w, h, "keyboard-rainbow.bmp");
+                const auto low = at(9 * 20 + 10, keysTop + 90), high = at(39 * 20 + 10, keysTop + 90);
+                say("        rainbow: C2 " + show(low) + "; E6 " + show(high));
+                rainbow = low[0] > low[2] + 60 && high[2] > high[0] + 60;
+            }
+            obs_properties_t* props = obs_source_properties(keyboard);
+            for (const char* name : { "color_mode", "hue_left", "hue_right", "hue_white", "hue_black", "hue", "saturation", "glow", "sparkles" })
+                rainbow = rainbow && props != nullptr && obs_properties_get(props, name) != nullptr;
+            obs_properties_destroy(props);
+            check(rainbow, "the rainbow along the keyboard (the bass warm, the treble cool); hues, saturation, lights and sparkles in the properties");
+        }
+        {
+            const std::lock_guard<std::mutex> guard(logLock);
+            const auto at = logText.find("device_draw");
+            check(at == std::string::npos && logText.find("pianoforge-keyboard.effect") == std::string::npos,
+                  at == std::string::npos ? std::string("the keyboard drawn without a word from Direct3D or about its shader")
+                                          : "Direct3D: " + logText.substr(at, logText.find('\n', at) - at));
+        }
     } else {
         check(false, "the keyboard source exists and renders");
     }

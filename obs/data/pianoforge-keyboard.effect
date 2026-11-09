@@ -1,0 +1,167 @@
+// The PianoForge keyboard's drawing (obs/src/keyboard_source.cpp): rounded boxes with a gradient, a rim and a light
+// from within (keys, notes, pedals, shadows), and lights added over them (halos, beams, sparkles).
+//
+// Each shape but the sparkles is drawn on a quad, quad_origin and quad_size in the source's pixels, its texture coordinates running
+// from 0 to 1 across it: the shader works in the source's pixels, so a quad cut at the source's edge cuts the shape
+// and does not squeeze it. Boxes give straight alpha (blended over); lights give premultiplied colour (added).
+
+uniform float4x4 ViewProj;
+uniform float2 quad_origin;    // the quad, pixels
+uniform float2 quad_size;
+uniform float2 box_center;     // the shape: its centre and half size, pixels
+uniform float2 box_half;
+uniform float box_radius;      // a box's corners
+uniform float box_border;      // its rim's width (0: none)
+uniform float box_soft;        // how soft its edge is, pixels (1: sharp; a shadow: several)
+uniform float4 fill_top;       // its gradient, top to bottom (straight alpha)
+uniform float4 fill_bottom;
+uniform float fill_curve;      // the gradient's curve (1: even; below: it reaches the bottom's colour sooner)
+uniform float4 border_color;   // the rim (alpha: how much of it)
+uniform float4 light_color;    // a light: within a box, or the colour of a light added
+uniform float light_strength;
+uniform float light_from;      // within a box: 0 from its top, 1 from its bottom
+uniform float light_reach;     // a halo's reach beyond its box, pixels
+uniform float2 fade_band;      // from y = fade_band.x (nothing) to fade_band.y (whole): the shape fades upward
+uniform float time;            // seconds (shimmer, twinkle)
+uniform float seed;            // a shape's own phase
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+float2 pixel_of(VertData v_in)
+{
+	return quad_origin + v_in.uv * quad_size;
+}
+
+float fade_of(float y)
+{
+	return saturate((y - fade_band.x) / max(fade_band.y - fade_band.x, 0.001));
+}
+
+// Signed distance to a box of half size b with corners of radius r (negative inside).
+float rounded_box(float2 p, float2 b, float r)
+{
+	float2 q = abs(p) - b + float2(r, r);
+	return length(max(q, float2(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// A rounded box: its gradient, its rim, a light from its top or its bottom; its edge smoothed (soft: a shadow).
+float4 PSBox(VertData v_in) : TARGET
+{
+	float2 pix = pixel_of(v_in);
+	float2 p = pix - box_center;
+	float d = rounded_box(p, box_half, box_radius);
+	float cover = saturate(0.5 - d / max(box_soft, 1.0));
+	cover = cover * cover * (3.0 - 2.0 * cover);
+	float t = saturate(p.y / max(2.0 * box_half.y, 1.0) + 0.5);
+	float4 c = lerp(fill_top, fill_bottom, pow(t, max(fill_curve, 0.05)));
+	float rim = saturate(1.0 - abs(d + box_border * 0.5) / max(box_border * 0.5, 0.5)) * step(0.01, box_border);
+	c.rgb = lerp(c.rgb, border_color.rgb, rim * border_color.a);
+	float from = lerp((1.0 - t) * (1.0 - t), t * t, light_from);
+	c.rgb = c.rgb + light_color.rgb * light_strength * from;
+	return float4(saturate(c.rgb), c.a * cover * fade_of(pix.y));
+}
+
+// A halo around a rounded box (premultiplied, added): full within it, falling off over light_reach beyond it.
+float4 PSGlow(VertData v_in) : TARGET
+{
+	float2 pix = pixel_of(v_in);
+	float d = max(rounded_box(pix - box_center, box_half, box_radius), 0.0);
+	float r = d / max(light_reach, 1.0);
+	float k = light_strength * exp(-r * 1.6) * saturate(1.0 - r / 3.0) * fade_of(pix.y);
+	return float4(light_color.rgb * k, saturate(k));
+}
+
+// A beam rising from a key: brightest at its foot, soft at its sides, a white core, shimmering.
+float4 PSBeam(VertData v_in) : TARGET
+{
+	float2 pix = pixel_of(v_in);
+	float x = (pix.x - box_center.x) / max(box_half.x, 1.0);
+	float y = saturate((pix.y - box_center.y) / max(2.0 * box_half.y, 1.0) + 0.5); // 0 at its top, 1 at its foot
+	float side = exp(-x * x * 4.0);
+	float core = exp(-x * x * 50.0);
+	float rise = pow(y, 2.2);
+	float shimmer = 0.82 + 0.18 * sin(time * 5.0 + seed * 6.2832 + y * 9.0) * sin(time * 2.3 + seed * 3.1 - y * 4.0);
+	float k = light_strength * (side * 0.65 + core * 0.55) * rise * shimmer * saturate(1.0 - abs(x));
+	float3 c = lerp(light_color.rgb, float3(1.0, 1.0, 1.0), saturate(core * rise * 0.6));
+	return float4(c * k, saturate(k * 0.85));
+}
+
+// Sparkles, many in one draw: each on its own square (two triangles), its colour, brightness and phase in its
+// vertices, its texture coordinates running from -1 to 1 across it (a square cut at the source's edge, less far).
+struct SparkData {
+	float4 pos   : POSITION;
+	float4 color : COLOR;
+	float2 uv    : TEXCOORD0;
+	float4 spark : TEXCOORD1; // x: brightness, y: phase
+};
+
+SparkData VSSpark(SparkData v_in)
+{
+	SparkData v_out;
+	v_out.pos   = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	v_out.color = v_in.color;
+	v_out.uv    = v_in.uv;
+	v_out.spark = v_in.spark;
+	return v_out;
+}
+
+// A sparkle: a bright point in a soft halo, and a four-pointed star twinkling around it.
+float4 PSSpark(SparkData v_in) : TARGET
+{
+	float2 p = v_in.uv;
+	float r2 = dot(p, p);
+	float core = exp(-r2 * 40.0);
+	float halo = exp(-r2 * 7.0) * 0.3;
+	float twinkle = 0.55 + 0.45 * sin(time * 13.0 + v_in.spark.y * 6.2832);
+	float star = exp(-abs(p.x) * 22.0) * exp(-p.y * p.y * 3.0) + exp(-abs(p.y) * 22.0) * exp(-p.x * p.x * 3.0);
+	float k = v_in.spark.x * (core + halo + 0.7 * star * twinkle) * saturate(1.0 - r2);
+	float3 c = lerp(v_in.color.rgb, float3(1.0, 1.0, 1.0), saturate(core * 0.9));
+	return float4(c * k, saturate(k));
+}
+
+technique Box
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBox(v_in);
+	}
+}
+
+technique Glow
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSGlow(v_in);
+	}
+}
+
+technique Beam
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBeam(v_in);
+	}
+}
+
+technique Sparkles
+{
+	pass
+	{
+		vertex_shader = VSSpark(v_in);
+		pixel_shader  = PSSpark(v_in);
+	}
+}

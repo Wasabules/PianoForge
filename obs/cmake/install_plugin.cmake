@@ -1,4 +1,5 @@
-# Copies the plugin into OBS's plugin folder, OBS running or not (cmake -P, with DLL, LOCALES and DEST defined).
+# Copies the plugin into OBS's plugin folder, OBS running or not (cmake -P, with DLL, LOCALES and DEST defined): the
+# DLL, the locales, and the shaders beside the locales' folder.
 # Windows keeps a loaded DLL from being overwritten, not from being renamed: the one OBS uses moves aside (.old,
 # removed by a later install once OBS has let go of it) and the new one takes its place, for OBS's next start.
 cmake_minimum_required(VERSION 3.25)
@@ -13,6 +14,13 @@ file(GLOB locales "${LOCALES}/*.ini")
 foreach(locale IN LISTS locales)
     get_filename_component(name "${locale}" NAME)
     file(COPY_FILE "${locale}" "${DEST}/data/locale/${name}" ONLY_IF_DIFFERENT)
+endforeach()
+# The shaders (the keyboard's drawing), beside the locales' folder.
+get_filename_component(data "${LOCALES}" DIRECTORY)
+file(GLOB effects "${data}/*.effect")
+foreach(effect IN LISTS effects)
+    get_filename_component(name "${effect}" NAME)
+    file(COPY_FILE "${effect}" "${DEST}/data/${name}" ONLY_IF_DIFFERENT)
 endforeach()
 
 set(target "${bin}/pianoforge-obs.dll")
