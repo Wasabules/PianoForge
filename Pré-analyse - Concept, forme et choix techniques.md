@@ -1117,6 +1117,8 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - Tant que la note sonne, la traînée descend jusqu'aux touches, à peine resserrée.
     - Le trait orange au-dessus du clavier, pédale enfoncée, n'était pas réglable. Il a maintenant son propre curseur (30 % par défaut, 0 pour aucun), indépendant des traînées.
     - Dans la laque, chaque traînée se reflétait à la largeur de sa note, en pavé. La barre et la traînée s'y reflètent maintenant chacune à sa largeur.
+    - Le curseur de la ligne réglait aussi la lueur qui monte derrière elle. Ce halo a désormais son propre curseur (20 %).
+    - L'aurore (l'ambiance) se règle en intensité, en hauteur (80 % de la place), en vitesse d'ondulation (0 : immobile) et au repos : ce qui en reste quand rien ne sonne, de 0 (elle suit le son seul) à 100 (toujours pleine).
   - *Les touches affichées.*
     - Au choix : 88, 76, 61, 49 ou 37 touches, une plage d'une touche à une autre, ou le suivi du jeu.
     - La géométrie passe par une vue : la première touche blanche montrée et le nombre de touches blanches en travers. Les touches gardent les proportions d'un piano pour leur largeur.

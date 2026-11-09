@@ -30,6 +30,8 @@ uniform float4 line_points[64]; // a line's points (x, y: pixels; z: brightness)
 uniform float line_count;
 uniform float4 aurora_left;    // the ambiance's colours, left and right
 uniform float4 aurora_right;
+uniform float aurora_height;   // how high its curtains rise (1: up to 0.9 of the room)
+uniform float aurora_speed;    // how fast they sway (1: as made; 0: still)
 uniform texture2d image;       // a texture drawn (the keyboard's image, its glow)
 uniform float2 texel;          // a step across it (the blur: its direction too)
 uniform float bloom_gain;
@@ -158,9 +160,10 @@ float4 PSAurora(VertData v_in) : TARGET
 	float2 pix = pixel_of(v_in);
 	float2 size = max(2.0 * box_half, float2(1.0, 1.0));
 	float2 q = (pix - (box_center - box_half)) / size;
-	float curtain = 0.5 + 0.5 * sin(q.x * 8.0 + time * 0.55 + 2.2 * sin(q.x * 2.7 - time * 0.31));
-	float folds = 0.72 + 0.28 * sin(q.x * 47.0 + 3.5 * sin(q.x * 6.1 + time * 0.7));
-	float reach = 0.3 + 0.6 * curtain;
+	float t = time * aurora_speed;
+	float curtain = 0.5 + 0.5 * sin(q.x * 8.0 + t * 0.55 + 2.2 * sin(q.x * 2.7 - t * 0.31));
+	float folds = 0.72 + 0.28 * sin(q.x * 47.0 + 3.5 * sin(q.x * 6.1 + t * 0.7));
+	float reach = max((0.3 + 0.6 * curtain) * aurora_height, 0.02);
 	float v = saturate(1.0 - (1.0 - q.y) / reach);
 	float k = light_strength * (0.35 + 0.65 * curtain) * folds * v * v;
 	float3 c = lerp(aurora_left.rgb, aurora_right.rgb, smoothstep(0.2, 0.8, q.x));

@@ -94,6 +94,8 @@ struct Settings {
     bool pedalTails = true, decay = true, melody = true;
     int tailWidth = 35, tailOpacity = 50, tailFine = 80; // a pedal's tail: its width (% of its note's), opacity, end
     int pedalLine = 30;   // the line of light along the keyboard while the sustain pedal is down, %
+    int pedalGlow = 20;   // the soft light rising from it over the notes' feet, %
+    int auroraHeight = 80, auroraSpeed = 50, auroraRest = 0; // the ambiance's curtains: how high, how fast, when quiet
     int bloom = 40, reflection = 50, ambiance = 35; // %
 };
 
@@ -114,7 +116,8 @@ struct Drawing {
                 *boxBorder = nullptr, *boxSoft = nullptr, *fillTop = nullptr, *fillBottom = nullptr, *fillCurve = nullptr,
                 *borderColor = nullptr, *lightColor = nullptr, *lightStrength = nullptr, *lightFrom = nullptr, *boxTaper = nullptr,
                 *lightReach = nullptr, *fadeBand = nullptr, *time = nullptr, *seed = nullptr, *linePoints = nullptr,
-                *lineCount = nullptr, *auroraLeft = nullptr, *auroraRight = nullptr, *texture = nullptr, *texel = nullptr,
+                *lineCount = nullptr, *auroraLeft = nullptr, *auroraRight = nullptr, *auroraHeight = nullptr,
+                *auroraSpeed = nullptr, *texture = nullptr, *texel = nullptr,
                 *bloomGain = nullptr;
     bool failed = false;
 
@@ -124,7 +127,7 @@ struct Drawing {
                && quadOrigin && quadSize && boxCenter && boxHalf && boxRadius && boxBorder && boxSoft && fillTop
                && fillBottom && fillCurve && borderColor && lightColor && lightStrength && lightFrom && lightReach
                && fadeBand && time && seed && line && aurora && image && bright && blur && bloom && linePoints && lineCount
-               && auroraLeft && auroraRight && texture && texel && bloomGain && boxTaper;
+               && auroraLeft && auroraRight && auroraHeight && auroraSpeed && texture && texel && bloomGain && boxTaper;
     }
 };
 
@@ -695,6 +698,8 @@ void loadDrawing(Drawing& d)
         d.lineCount = param("line_count");
         d.auroraLeft = param("aurora_left");
         d.auroraRight = param("aurora_right");
+        d.auroraHeight = param("aurora_height");
+        d.auroraSpeed = param("aurora_speed");
         d.texture = param("image");
         d.texel = param("texel");
         d.bloomGain = param("bloom_gain");
@@ -878,8 +883,10 @@ public:
         draw(x0 - m, y0 - m, x1 + m, y1 + m);
     }
 
-    /// Curtains of light over the rectangle (x0, y0)-(x1, y1), rising from its bottom, `left` to `right` across.
-    void aurora(float x0, float y0, float x1, float y1, std::uint32_t left, std::uint32_t right, float strength)
+    /// Curtains of light over the rectangle (x0, y0)-(x1, y1), rising from its bottom, `left` to `right` across,
+    /// `height` of it high (1: up to 0.9), swaying at `speed` (1: as made).
+    void aurora(float x0, float y0, float x1, float y1, std::uint32_t left, std::uint32_t right, float strength, float height,
+                float speed)
     {
         if (strength <= 0.003f || x1 <= x0 || y1 <= y0)
             return;
@@ -889,6 +896,8 @@ public:
         color(look.auroraLeft, left, 1.0f);
         color(look.auroraRight, right, 1.0f);
         gs_effect_set_float(look.lightStrength, strength);
+        gs_effect_set_float(look.auroraHeight, height);
+        gs_effect_set_float(look.auroraSpeed, speed);
         draw(x0, y0, x1, y1);
     }
 
@@ -1275,10 +1284,12 @@ void drawKeyboard(Keyboard& k, const Settings& s, const Layout& l, Painter& p)
     barsOf(k, s, l, k.bars);
 
     // The ambiance, behind everything: curtains of light over the room, as strong as the playing is loud.
-    if (s.ambiance > 0 && k.level > 0.01f && l.top > 1.0f) {
+    // (at rest: the share of its strength it keeps when nothing sounds)
+    if (const float rest = s.auroraRest / 100.0f, level = rest + (1.0f - rest) * k.level; s.ambiance > 0 && level > 0.01f && l.top > 1.0f) {
         const auto [left, right] = ambianceColors(s);
         p.add();
-        p.aurora(0.0f, 0.0f, l.width, l.top, left, right, s.ambiance / 100.0f * k.level * 0.8f);
+        p.aurora(0.0f, 0.0f, l.width, l.top, left, right, s.ambiance / 100.0f * level * 0.8f, s.auroraHeight / 100.0f,
+                 s.auroraSpeed / 50.0f);
     }
 
     // The powerful chords' light over the room, behind everything: rising from each hand's keys, in its hue.
@@ -1378,12 +1389,13 @@ void drawKeyboard(Keyboard& k, const Settings& s, const Layout& l, Painter& p)
     BoxStyle felt;
     felt.top = felt.bottom = kFelt;
     p.box(0.0f, l.keysTop - feltHeight, l.width, feltHeight, felt);
-    // The sustain pedal down: a line of light along the keyboard's top, a faint light over the notes' feet.
-    if (const float down = k.state.pedal(0) * s.pedalLine / 100.0f; down > 0.0f) {
+    // The sustain pedal down: a line of light along the keyboard's top, and a soft light rising from it over the
+    // notes' feet (its halo), each its own strength.
+    if (const float down = k.state.pedal(0); down > 0.0f && (s.pedalLine > 0 || s.pedalGlow > 0)) {
         const Tint tint = pedalTint(s, 2);
         p.add();
-        p.glow(0.5f * l.width, l.top, 0.5f * l.width, 0.5f, 0.5f, 2.0f + 0.1f * l.rail, tint.light, 0.9f * down);
-        p.glow(0.5f * l.width, l.top, 0.5f * l.width, 0.5f, 0.5f, 0.1f * l.top + 4.0f, tint.light, 0.2f * down);
+        p.glow(0.5f * l.width, l.top, 0.5f * l.width, 0.5f, 0.5f, 0.12f * l.top + 4.0f, tint.light, 0.4f * down * s.pedalGlow / 100.0f);
+        p.glow(0.5f * l.width, l.top, 0.5f * l.width, 0.5f, 0.5f, 2.0f + 0.1f * l.rail, tint.light, 0.9f * down * s.pedalLine / 100.0f);
         p.over();
     }
 
@@ -1797,6 +1809,10 @@ void defaults(obs_data_t* settings)
     obs_data_set_default_int(settings, "tail_opacity", s.tailOpacity);
     obs_data_set_default_int(settings, "tail_fine", s.tailFine);
     obs_data_set_default_int(settings, "pedal_line", s.pedalLine);
+    obs_data_set_default_int(settings, "pedal_glow", s.pedalGlow);
+    obs_data_set_default_int(settings, "aurora_height", s.auroraHeight);
+    obs_data_set_default_int(settings, "aurora_speed", s.auroraSpeed);
+    obs_data_set_default_int(settings, "aurora_rest", s.auroraRest);
     obs_data_set_default_bool(settings, "note_decay", s.decay);
     obs_data_set_default_bool(settings, "melody", s.melody);
     obs_data_set_default_int(settings, "bloom", s.bloom);
@@ -1853,6 +1869,10 @@ void update(void* data, obs_data_t* settings)
     s.tailOpacity = (int) std::clamp<long long>(obs_data_get_int(settings, "tail_opacity"), 10, 100);
     s.tailFine = (int) std::clamp<long long>(obs_data_get_int(settings, "tail_fine"), 0, 100);
     s.pedalLine = (int) std::clamp<long long>(obs_data_get_int(settings, "pedal_line"), 0, 100);
+    s.pedalGlow = (int) std::clamp<long long>(obs_data_get_int(settings, "pedal_glow"), 0, 100);
+    s.auroraHeight = (int) std::clamp<long long>(obs_data_get_int(settings, "aurora_height"), 10, 100);
+    s.auroraSpeed = (int) std::clamp<long long>(obs_data_get_int(settings, "aurora_speed"), 0, 100);
+    s.auroraRest = (int) std::clamp<long long>(obs_data_get_int(settings, "aurora_rest"), 0, 100);
     s.decay = obs_data_get_bool(settings, "note_decay");
     s.melody = obs_data_get_bool(settings, "melody");
     s.bloom = (int) std::clamp<long long>(obs_data_get_int(settings, "bloom"), 0, 100);
@@ -1902,7 +1922,8 @@ constexpr const char* kLookKeys[] = { "color_mode", "hue_left", "hue_right", "hu
                                       "glow", "sparkles", "sparkle_height", "sparkle_spread", "sparkle_tilt", "afterglow_ms",
                                       "flash", "velocity_accent", "chords", "chord_intensity", "chord_wave", "chord_wash",
                                       "chord_fireworks", "chord_bracket", "chord_shake", "pedal_tails", "tail_width", "tail_opacity",
-                                      "tail_fine", "pedal_line", "note_decay", "melody",
+                                      "tail_fine", "pedal_line", "pedal_glow", "aurora_height", "aurora_speed",
+                                      "aurora_rest", "note_decay", "melody",
                                       "bloom", "reflection", "ambiance" };
 
 enum Style : int { kStyleCustom = 0, kStylePianoForge, kStyleConcert, kStyleNeon, kStyleGalaxy, kStyleRainbow, kStyleMinimal };
@@ -1926,6 +1947,8 @@ void applyStyle(obs_data_t* settings, int style)
         set("chord_intensity", 50);
         flag("chord_fireworks", false);
         set("pedal_line", 15);
+        set("pedal_glow", 10);
+        set("aurora_speed", 30);
         set("afterglow_ms", 600);
         set("bloom", 25);
         set("reflection", 60);
@@ -1942,6 +1965,8 @@ void applyStyle(obs_data_t* settings, int style)
         set("bloom", 80);
         set("ambiance", 50);
         set("pedal_line", 60);
+        set("pedal_glow", 40);
+        set("aurora_speed", 75);
         break;
     case kStyleGalaxy: // violet and turquoise, sparkles high, curtains of light
         set("hue_left", 265);
@@ -1955,6 +1980,8 @@ void applyStyle(obs_data_t* settings, int style)
         set("bloom", 60);
         set("reflection", 40);
         set("ambiance", 80);
+        set("aurora_height", 100);
+        set("aurora_rest", 30);
         break;
     case kStyleRainbow:
         set("color_mode", (long long) ColorMode::rainbow);
@@ -1980,6 +2007,7 @@ void applyStyle(obs_data_t* settings, int style)
         set("reflection", 0);
         set("ambiance", 0);
         set("pedal_line", 0);
+        set("pedal_glow", 0);
         set("tail_opacity", 35);
         break;
     default: // PianoForge: the defaults
@@ -2145,6 +2173,7 @@ obs_properties_t* properties(void* data)
     share("tail_opacity", "Keyboard.TailOpacity", "Keyboard.TailOpacity.Description", 10);
     share("tail_fine", "Keyboard.TailFine", "Keyboard.TailFine.Description", 0);
     share("pedal_line", "Keyboard.PedalLine", "Keyboard.PedalLine.Description", 0);
+    share("pedal_glow", "Keyboard.PedalGlow", "Keyboard.PedalGlow.Description", 0);
     obs_property_t* decay = obs_properties_add_bool(notes, "note_decay", text("Keyboard.NoteDecay"));
     obs_property_set_long_description(decay, text("Keyboard.NoteDecay.Description"));
     obs_property_t* melody = obs_properties_add_bool(notes, "melody", text("Keyboard.Melody"));
@@ -2163,6 +2192,11 @@ obs_properties_t* properties(void* data)
     percent(lights, "bloom", "Keyboard.Bloom", "Keyboard.Bloom.Description");
     percent(lights, "reflection", "Keyboard.Reflection", "Keyboard.Reflection.Description");
     percent(lights, "ambiance", "Keyboard.Ambiance", "Keyboard.Ambiance.Description");
+    obs_property_t* auroraHeight = obs_properties_add_int_slider(lights, "aurora_height", text("Keyboard.AuroraHeight"), 10, 100, 1);
+    obs_property_int_set_suffix(auroraHeight, " %");
+    obs_property_set_long_description(auroraHeight, text("Keyboard.AuroraHeight.Description"));
+    percent(lights, "aurora_speed", "Keyboard.AuroraSpeed", "Keyboard.AuroraSpeed.Description");
+    percent(lights, "aurora_rest", "Keyboard.AuroraRest", "Keyboard.AuroraRest.Description");
     obs_property_t* flash = obs_properties_add_bool(lights, "flash", text("Keyboard.Flash"));
     obs_property_set_long_description(flash, text("Keyboard.Flash.Description"));
     obs_property_t* afterglow = obs_properties_add_int_slider(lights, "afterglow_ms", text("Keyboard.Afterglow"), 0, 3000, 10);

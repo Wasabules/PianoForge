@@ -626,10 +626,9 @@ int main(int argc, char** argv)
         {
             auto quiet = [&](bool tails) {
                 look({ { "color_mode", 2 }, { "trail_height", 100 }, { "glow", 0 }, { "sparkles", 0 }, { "bloom", 0 }, { "reflection", 0 },
-                       { "ambiance", 0 }, { "velocity_accent", 0 }, { "pedal_line", tails ? 100 : 0 } },
+                       { "ambiance", 0 }, { "velocity_accent", 0 }, { "pedal_line", 0 }, { "pedal_glow", 0 } },
                      { { "chords", false }, { "melody", false }, { "pedal_tails", tails }, { "note_decay", false } });
             };
-            std::array<int, 3> lineOn {}, lineOff {};
             int widthTop = 0, widthEnd = 99, fadeTop = 0, fadeEnd = 255;
             auto alpha = [&](int x, int y) { return (int) px[((std::size_t) y * w + (std::size_t) x) * 4 + 3]; };
             auto across = [&](int y) { // how many pixels wide the tail is at row y (around E4's centre)
@@ -649,11 +648,9 @@ int main(int argc, char** argv)
                 if (!px.empty() && tails) {
                     held = alpha(510, 96); // under the bar: the tail
                     bar = alpha(510, 84);
-                    lineOn = at(300, 100); // the pedal's line along the keyboard's top
                     save(px, w, h, "keyboard-pedal.bmp");
                 } else if (!px.empty()) {
                     without = alpha(510, 96);
-                    lineOff = at(300, 100);
                 }
                 play({ { 0, 0xB0, 64, 0, 0, 0 } });
                 std::this_thread::sleep_for(std::chrono::milliseconds(400));
@@ -675,8 +672,29 @@ int main(int argc, char** argv)
             check(widthTop >= 3 && widthEnd < widthTop && fadeEnd * 2 < fadeTop,
                   "the tail's end once the pedal is up, drawn in and faded: " + std::to_string(widthTop) + " px wide under its note ("
                       + std::to_string(fadeTop) + "), " + std::to_string(widthEnd) + " near its end (" + std::to_string(fadeEnd) + ")");
-            check(lineOn[0] > lineOn[2] + 40 && std::abs(lineOff[0] - lineOff[2]) < 20,
-                  "the pedal's line: orange at 100 % (" + show(lineOn) + "), none at 0 (" + show(lineOff) + ")");
+        }
+
+        // The sustain pedal's line along the keyboard's top and its halo above it, each its own.
+        {
+            auto pedalLight = [&](int line, int halo) {
+                look({ { "color_mode", 2 }, { "trail_height", 100 }, { "glow", 0 }, { "sparkles", 0 }, { "bloom", 0 }, { "reflection", 0 },
+                       { "ambiance", 0 }, { "pedal_line", line }, { "pedal_glow", halo } },
+                     { { "chords", false }, { "melody", false } });
+                play({ { 0, 0xB0, 64, 127, 0, 0 } });
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                px = renderSource(keyboard, w, h);
+                std::pair<std::array<int, 3>, std::array<int, 3>> out {}; // on the line, 10 px above it
+                if (!px.empty())
+                    out = { at(300, 100), at(300, 90) };
+                play({ { 0, 0xB0, 64, 0, 0, 0 } });
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                return out;
+            };
+            const auto none = pedalLight(0, 0), line = pedalLight(100, 0), halo = pedalLight(0, 100);
+            check(std::abs(none.first[0] - none.first[2]) < 20 && line.first[0] > line.first[2] + 40
+                      && line.second[0] - line.second[2] < 8 && halo.second[0] > halo.second[2] + 15,
+                  "the pedal's line (" + show(line.first) + ", nothing above it: " + show(line.second) + ") and its halo above it ("
+                      + show(halo.second) + "), each its own; neither at 0 (" + show(none.first) + ")");
         }
 
         // The melody: a line of light between the right hand's notes; none without it.
@@ -808,8 +826,25 @@ int main(int argc, char** argv)
                 }
             if (!px.empty())
                 save(px, w, h, "keyboard-ambiance.bmp");
-            look({ { "ambiance", 0 } }, {});
+            auto upper = [&] { // the light in the room's upper half
+                long long sum = 0;
+                for (int y = 0; y < 39 && !px.empty(); ++y)
+                    for (int x = 0; x < (int) w; x += 2) {
+                        const auto c = at(x, y);
+                        sum += c[0] + c[1] + c[2];
+                    }
+                return sum;
+            };
+            look({ { "aurora_height", 100 } }, {});
+            px = renderSource(keyboard, w, h);
+            const long long high = upper();
+            look({ { "aurora_height", 30 } }, {});
+            px = renderSource(keyboard, w, h);
+            const long long low = upper();
+            look({ { "ambiance", 0 }, { "aurora_height", 80 } }, {});
             const std::uint32_t without = obs_source_get_height(keyboard);
+            check(high > 2 * low + 1000, "the aurora's height: the room's upper half " + std::to_string(high) + " at 100 %, "
+                                              + std::to_string(low) + " at 30 %");
             check(light > 100000 && h == 78 + 146 && without == 146,
                   "the ambiance: light over the room as the sound plays (" + std::to_string(light) + "); at 0, no room above the keys ("
                       + std::to_string(without) + " px high)");
@@ -893,7 +928,7 @@ int main(int argc, char** argv)
             for (const char* name : { "color_mode", "hue_left", "hue_right", "hue_white", "hue_black", "hue", "saturation", "glow", "sparkles",
                                      "sparkle_height", "sparkle_spread", "sparkle_tilt", "velocity_accent", "velocity_top", "velocity_measure",
                                      "chords", "chord_notes", "chord_threshold", "chord_intensity", "chord_fireworks", "style", "reset", "range",
-                                     "range_first", "follow_octaves", "pedal_tails", "tail_width", "tail_fine", "pedal_line", "note_decay", "melody", "bloom", "reflection",
+                                     "range_first", "follow_octaves", "pedal_tails", "tail_width", "tail_fine", "pedal_line", "pedal_glow", "aurora_height", "aurora_speed", "aurora_rest", "note_decay", "melody", "bloom", "reflection",
                                      "ambiance" })
                 rainbow = rainbow && props != nullptr && obs_properties_get(props, name) != nullptr;
             obs_properties_destroy(props);

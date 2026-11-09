@@ -84,13 +84,14 @@ while the playing stays inside it); the keys keep a piano's proportions for thei
 
 The notes: they last as the sound does (a note whose key is up but a pedal still holds, sustain or sostenuto, goes on
 as a fainter tail until the pedal lets it go or the key is struck again, then its end draws in and fades out: the
-tails' width, opacity and fine end are set; a line of light along the keyboard while the sustain pedal is down, its
-strength set, 0 for none); along its bar a note dims as a string dies away (slowly in the bass, quickly in the treble);
+tails' width, opacity and fine end are set; while the sustain pedal is down, a line of light along the keyboard and
+a soft halo rising from it, each its own strength, 0 for none); along its bar a note dims as a string dies away (slowly in the bass, quickly in the treble);
 the melody (the right hand's top notes) is a line of light through them.
 
 The lights also: a bloom (the keyboard drawn into an image, its bright coloured parts, not the white keys, blurred
 at a quarter of its size and added over it), a reflection (the band over the keys a black lacquer mirroring the
-notes and lights above it), an ambiance (curtains of light over the room, as strong as PianoForge's sound is loud).
+notes and lights above it), an aurora (curtains of light over the room, as strong as PianoForge's sound is loud: its
+strength, height, swaying speed, and what stays of it when nothing sounds).
 
 Width; the notes above the keys (height, time to the top; 0: the keyboard alone), rounded
 bars with a bright rim and a halo, fading as they rise; the pedals. The keys have rounded fronts and a front edge
