@@ -8,6 +8,7 @@
 #include "SampleBank.h"
 #include "TakeRecorder.h"
 #include "VelocityCurveEditor.h"
+#include "ui/GestureKeyboard.h"
 #include "ui/GesturesPanel.h"
 #include "ui/AudioPanel.h"
 #include "ui/EnginePanel.h"
@@ -69,11 +70,12 @@ private:
     // Actions.
     void selectEngine(bool modal);
     bool modalSelected() const { return engines.selected.load() == 1; }
-    void toggleRecording();
+    void toggleRecording(std::int64_t notesFrom = -1);
     void finishRecording(std::int64_t at = -1);
     void saveLastTake(std::int64_t before = std::numeric_limits<std::int64_t>::max());
     void runGesture(int action, double start); // a piano gesture recognized (Keyboard > Piano gestures)
     juce::String gesturesHelp() const;
+    void refreshGestureKeys(); // the gestures marked on the on-screen keyboard
     void chooseCorpus();
     void loadCorpus(const juce::File& folder);
     void loadModalProfile();
@@ -197,7 +199,8 @@ private:
 
     // Dashboard, keyboard, status bar.
     InfoCard engineCard { "Engine" }, noteCard { "Last note" }, audioCard { "Audio" }, sessionCard { "Session" };
-    juce::MidiKeyboardComponent keyboard { host.keyboardState, juce::KeyboardComponentBase::horizontalKeyboard };
+    GestureKeyboard keyboard { host.keyboardState }; // the piano gestures marked on its keys
+    juce::TooltipWindow tooltips { nullptr, 500 };    // the tooltips, in every window of the application
     juce::Label hint, statusLeft, statusRight;
     double loadProgress = 0.0;
     juce::ProgressBar progressBar { loadProgress };

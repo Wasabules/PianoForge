@@ -11,6 +11,8 @@ GesturesPanel::GesturesPanel(KeyboardInput& in, juce::PropertiesFile& s) : input
         input.gesturesOn = enabled.getToggleState();
         settings.setValue("gesturesOn", enabled.getToggleState());
         settings.saveIfNeeded();
+        if (onChanged)
+            onChanged();
     };
     intro.setText("Keys struck together that no piece asks for, or one key struck twice quickly, played on the MIDI keyboard, "
                   "do what is chosen here. Their notes sound as any others; a recording stopped by a gesture ends before them, "
@@ -55,6 +57,8 @@ void GesturesPanel::reload()
         input.setGesture(a, pf::PianoGesture::parse(text.toStdString()));
     }
     refresh();
+    if (onChanged)
+        onChanged();
 }
 
 void GesturesPanel::assign(int action, const pf::PianoGesture& g)
@@ -69,6 +73,8 @@ void GesturesPanel::assign(int action, const pf::PianoGesture& g)
     settings.setValue(juce::String("gesture.") + pianoActions()[(std::size_t) action].key, juce::String(g.text()));
     settings.saveIfNeeded();
     refresh();
+    if (onChanged)
+        onChanged();
 }
 
 void GesturesPanel::startLearning(int action)

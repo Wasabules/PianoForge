@@ -58,7 +58,7 @@ void LiveRecorder::push(const float* const* outputs, int numChannels, int numSam
 void LiveRecorder::noteOn(std::int64_t position) noexcept
 {
     const int s = state.load(std::memory_order_acquire);
-    if (!atFirst || (s != kRequested && s != kRecording))
+    if (!atFirst || (s != kRequested && s != kRecording) || position < notesFrom.load(std::memory_order_acquire))
         return;
     std::int64_t none = -1;
     trigger.compare_exchange_strong(none, position, std::memory_order_acq_rel);
@@ -86,7 +86,7 @@ double LiveRecorder::seconds() const noexcept
 }
 
 juce::Result LiveRecorder::start(const juce::File& wav, double sampleRate, std::uint32_t sessionSegment,
-                                 const juce::String& description, bool atFirstNote)
+                                 const juce::String& description, bool atFirstNote, std::int64_t notesFromPosition)
 {
     if (armed)
         return juce::Result::fail("already recording");
@@ -100,6 +100,7 @@ juce::Result LiveRecorder::start(const juce::File& wav, double sampleRate, std::
     dropped = 0;
     trigger = -1;
     endAt = -1;
+    notesFrom = notesFromPosition;
     atFirst = atFirstNote;
     preroll = atFirstNote ? (std::int64_t) std::llround(kPrerollSeconds * rate) : 0;
     hold = (std::int64_t) std::llround(kHoldSeconds * rate);

@@ -10,6 +10,8 @@ namespace pf::app {
 namespace {
 
 constexpr int kLayoutAzerty = 1, kLayoutQwerty = 2;
+// A gesture's notes still on their way to the engine when it is recognized: an armed recording ignores them.
+constexpr double kGestureTailSeconds = 0.1;
 
 enum MenuId {
     // File
@@ -140,6 +142,7 @@ MainComponent::MainComponent()
     roomPanel = std::make_unique<RoomPanel>(host.room, *settings);
     gesturesPanel = std::make_unique<GesturesPanel>(keyboardInput, *settings);
     gesturesPanel->onMessage = [this](const juce::String& text) { showMessage(text, theme::good); };
+    gesturesPanel->onChanged = [this] { refreshGestureKeys(); };
     keyboardInput.onGesture = [safe = juce::Component::SafePointer<MainComponent>(this)](int action, double start) {
         if (safe != nullptr)
             safe->runGesture(action, start);
@@ -218,6 +221,7 @@ MainComponent::MainComponent()
     keyboard.setWantsKeyboardFocus(true);
     keyboard.addKeyListener(this);
     addAndMakeVisible(keyboard);
+    refreshGestureKeys();
     setKeyLayout(settings->getIntValue("keyLayout", kLayoutAzerty));
 
     // Status bar.
@@ -526,6 +530,16 @@ void MainComponent::showShortcuts()
             + "\nThe mouse plays too: lower on a key is louder.");
 }
 
+void MainComponent::refreshGestureKeys()
+{
+    std::vector<GestureKeyboard::Entry> entries;
+    if (keyboardInput.gesturesOn.load())
+        for (int a = 0; a < (int) PianoAction::count; ++a)
+            if (const auto g = keyboardInput.gesture(a); !g.empty())
+                entries.push_back({ g, pianoActions()[(std::size_t) a].name });
+    keyboard.setGestures(std::move(entries));
+}
+
 juce::String MainComponent::gesturesHelp() const
 {
     juce::String out;
@@ -750,7 +764,8 @@ void MainComponent::setKeyLayout(int layout)
     keyboard.setKeyPressBaseOctave(octave + 1); // JUCE: octave n -> C = 12 * n; C4 (60) = octave 5
     hint.setText(juce::String("Computer keyboard from C") + juce::String(octave) + ": "
                      + (keyLayout == kLayoutAzerty ? "Q Z S E D F T G Y H U J K...   W / X octave" : "A W S E D F T G Y H U J K...   Z / X octave")
-                     + "   C / V velocity   Space pedal   B sostenuto   N soft   Ctrl+R record   F1 all the shortcuts",
+                     + "   C / V velocity   Space pedal   B sostenuto   N soft   Ctrl+R record   F1 all the shortcuts"
+                     + "   Dots: piano gestures (mouse over)",
                  juce::dontSendNotification);
     saveSettings();
 }
@@ -1121,7 +1136,7 @@ void MainComponent::showMessage(const juce::String& text, juce::Colour colour)
     messageUntil = juce::Time::getMillisecondCounterHiRes() + 12000.0;
 }
 
-void MainComponent::toggleRecording()
+void MainComponent::toggleRecording(std::int64_t notesFrom)
 {
     if (host.live.recording()) {
         finishRecording();
@@ -1142,7 +1157,7 @@ void MainComponent::toggleRecording()
                          : recordingsFolder().getChildFile(recordingStem + (recordsFormat(SoundFormat::wavFloat) ? ".wav" : ".master.wav"));
     const auto engineName = modalSelected() ? juce::String("modal engine") : juce::String("reference player");
     if (const auto started = host.live.start(wavFile, host.currentRate(), host.currentSegment(),
-                                             "PianoForge live recording (" + engineName + ")", recordAtFirstNote);
+                                             "PianoForge live recording (" + engineName + ")", recordAtFirstNote, notesFrom);
         started.failed()) {
         showMessage("Cannot record: " + started.getErrorMessage(), theme::bad);
         return;
@@ -1262,7 +1277,9 @@ void MainComponent::runGesture(int action, double start)
         if (host.live.recording()) {
             finishRecording(host.live.waiting() ? -1 : before);
         } else {
-            toggleRecording();
+            // Armed by the gesture: its own notes (the last one still on its way to the engine) do not start it.
+            const auto now = host.positionAt(juce::Time::getMillisecondCounterHiRes() * 0.001);
+            toggleRecording(now + (std::int64_t) std::llround(kGestureTailSeconds * host.currentRate()));
             if (host.live.recording())
                 showMessage("Gesture " + gesture + ": " + (recordAtFirstNote ? juce::String("recording armed, it starts with the first note")
                                                                               : juce::String("recording")),

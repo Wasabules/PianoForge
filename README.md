@@ -79,7 +79,8 @@ Keyboard > Piano gestures: keys struck together that no piece asks for, or one k
 the MIDI keyboard, do what is chosen there (learned by playing them): arm or stop a recording (A0 + A#0 + B0 by
 default; stopped so, it ends before the gesture's notes), save the last take (C8 twice, without the gesture), play or
 pause the MIDI file (A0 twice), and in OBS through the plugin: start or stop the recording (A#7 + B7 + C8), the
-stream, add a chapter marker, change scene.
+stream, add a chapter marker, change scene. The on-screen keyboard marks the gestures' keys (a dot, two for a key
+struck twice); the mouse over one says what it does.
 
 File > Takes and recordings (Ctrl+T) lists the takes (Ctrl+S) and the recordings together, with their date, length,
 notes and files. Listen to one (Space), or to two in A/B from the same instant (A and B switch between them with a

@@ -48,10 +48,11 @@ public:
     void deviceStopped() noexcept;
 
     // Message thread.
-    /// Starts a recording with the next audio block, or at the first note (atFirstNote). `wav` empty: positions
-    /// only (MIDI recording).
+    /// Starts a recording with the next audio block, or at the first note (atFirstNote) from `notesFrom` on (a device
+    /// session position: the notes of a gesture that armed it, still on their way to the engine, do not start it).
+    /// `wav` empty: positions only (MIDI recording).
     juce::Result start(const juce::File& wav, double sampleRate, std::uint32_t segment, const juce::String& description,
-                       bool atFirstNote = false);
+                       bool atFirstNote = false, std::int64_t notesFrom = -1);
     /// Ends the recording (at `at`, a device session position, if it is earlier than where it is now: kHoldSeconds
     /// back at most), finishes the WAV file and returns the span recorded. Armed and no note yet: nothing recorded.
     Span stop(std::int64_t at = -1);
@@ -80,6 +81,7 @@ private:
     std::atomic<std::int64_t> firstSample { 0 }, endSample { 0 }, pushed { 0 }, dropped { 0 };
     std::atomic<std::int64_t> trigger { -1 }; // the first note's position (-1: none yet), or the first block's
     std::atomic<std::int64_t> endAt { -1 };   // an end asked for before the last block (-1: none)
+    std::atomic<std::int64_t> notesFrom { -1 }; // armed: the notes before this position do not start it
     bool withAudio = false;                   // set before arming, read by the audio thread after it
     bool atFirst = false;
     std::int64_t preroll = 0, hold = 0;

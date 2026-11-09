@@ -565,14 +565,43 @@ int runSelfTest(const juce::StringArray& arguments)
         LiveRecorder::Span none;
         std::thread([&] { none = host.live.stop(); }).join();
         wav.deleteFile();
+        // Armed by a gesture: its notes still on their way (before notesFrom) do not start it, the next one does.
+        std::int64_t blockAt = 0;
+        bool ignored = false, startedByNext = false;
+        {
+            // Positions here are the blocks', run by hand: the gesture's note in the first block, the window 10 blocks.
+            host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, block, {});
+            blockAt = host.positionAt(juce::Time::getMillisecondCounterHiRes() * 0.001);
+            host.live.start(wav, fs, host.currentSegment(), "self-test armed by a gesture", true, blockAt + 10 * block);
+            host.send(juce::MidiMessage::noteOn(1, 21, (juce::uint8) 80));
+            for (int k = 0; k < 5; ++k)
+                host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, block, {});
+            host.send(juce::MidiMessage::noteOff(1, 21));
+            for (int k = 0; k < 10; ++k)
+                host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, block, {});
+            ignored = host.live.waiting();
+            host.send(juce::MidiMessage::noteOn(1, 60, (juce::uint8) 80));
+            for (int k = 0; k < 3; ++k)
+                host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, block, {});
+            startedByNext = !host.live.waiting();
+            host.send(juce::MidiMessage::noteOff(1, 60));
+            std::thread stopper2([&] { host.live.stop(); });
+            while (host.live.recording() && !host.live.stopPending())
+                std::this_thread::yield();
+            host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, block, {});
+            stopper2.join();
+            wav.deleteFile();
+        }
         r.check(waitedBefore && startedAfter && span.valid && span.start == firstNote - preroll && span.end == at
                     && frames == (int) (span.end - span.start) && wavError == 0.0f && before < 1e-6f && !none.valid
-                    && none.error == "no note was played",
+                    && none.error == "no note was played" && ignored && startedByNext,
                 "recording armed at the first note: waiting, then started by it, from " + juce::String((double) (firstNote - span.start) / fs, 3)
                     + " s before it; stopped at an earlier position, " + juce::String((double) (span.end - span.start) / fs, 3)
                     + " s recorded (expected 0.85), the WAV " + (wavError == 0.0f ? juce::String("identical to the audio sent")
                                                                                    : "off by " + juce::String(wavError))
-                    + "; armed with no note: " + (none.valid ? juce::String("a recording") : none.error));
+                    + "; armed with no note: " + (none.valid ? juce::String("a recording") : none.error)
+                    + "; armed by a gesture: its note " + (ignored ? "ignored" : "STARTED IT") + ", the next one "
+                    + (startedByNext ? "starts it" : "does NOT start it"));
     }
 
     // 8c. Stream output: two devices on their own clocks (and rates). Over two minutes, a 1 kHz sine must come out

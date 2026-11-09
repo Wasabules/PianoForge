@@ -56,6 +56,8 @@ public:
     void reload();
     /// A short message for the status bar (a gesture learned, moved...).
     std::function<void(const juce::String&)> onMessage;
+    /// The gestures changed (or were turned on or off).
+    std::function<void()> onChanged;
 
     void paint(juce::Graphics&) override;
     void resized() override;
