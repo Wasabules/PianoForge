@@ -7,7 +7,7 @@
 //     latency, the resync button; another mix with the volume followed, reached through fades (no click);
 //   - the readers the application sees (sound, keyboard, text, and the mix taken);
 //   - the keyboard: rendered, C2 lit blue (left hand), middle C orange, D not, a note rising, the sustain pedal; a
-//     phrase played (its images kept), sparkles thrown up by strikes, none when off;
+//     phrase played (its images kept), sparkles thrown up by strikes (leaning as asked), none when off;
 //   - the text: its template filled with the application's state, wider for a longer text;
 //   - the chapters: a mark while OBS does not record is said so in the log.
 // The feed has a name of its own (PIANOFORGE_AUDIO_FEED): the test runs beside a PianoForge and an OBS in use.
@@ -465,43 +465,75 @@ int main(int argc, char** argv)
 
         // Sparkles: above the keys, with nothing else drawn there (no notes, no lights), bright points after strikes;
         // none when they are off.
-        auto sparkleTest = [&](int amount, int key) {
-            obs_data_t* s = obs_data_create();
-            obs_data_set_int(s, "trail_height", 0);
-            obs_data_set_int(s, "glow", 0);
-            obs_data_set_int(s, "sparkles", amount);
-            obs_source_update(keyboard, s);
-            obs_data_release(s);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // Every key up first (the phrase's held ones would throw sparkles of their own).
+        {
+            std::vector<pf::FeedEvent> up;
+            for (int key = 21; key <= 108; ++key)
+                up.push_back({ 0, 0x80, (std::uint8_t) key, 0, 0, 0 });
+            up.push_back({ 0, 0xB0, 64, 0, 0, 0 });
+            const std::lock_guard<std::mutex> guard(playLock);
+            played.insert(played.end(), up.begin(), up.end());
+        }
+        struct Sparkled {
+            int bright = 0;
+            double meanX = 0.0;
+        };
+        auto sparkleTest = [&](int amount, int key, int tilt) {
+            auto set = [&](int sparkles) {
+                obs_data_t* s = obs_data_create();
+                obs_data_set_int(s, "trail_height", 0);
+                obs_data_set_int(s, "glow", 0);
+                obs_data_set_int(s, "sparkles", sparkles);
+                obs_data_set_int(s, "sparkle_spread", 10);
+                obs_data_set_int(s, "sparkle_tilt", tilt);
+                obs_source_update(keyboard, s);
+                obs_data_release(s);
+                std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            };
+            set(0); // the sparks of a test before gone
+            set(amount);
             play({ { 0, 0x90, (std::uint8_t) key, 120, 0, 0 }, { 0, 0x90, (std::uint8_t) (key + 4), 120, 0, 0 },
                    { 0, 0x90, (std::uint8_t) (key + 7), 120, 0, 0 } });
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            std::this_thread::sleep_for(std::chrono::milliseconds(600));
             px = renderSource(keyboard, w, h);
             const int top = (int) h - 130 - 16; // the room above the keys
-            int bright = 0;
+            Sparkled out;
             for (int y = 0; y + 12 < top && !px.empty(); ++y)
                 for (int x = 0; x < (int) w; ++x) {
                     const auto c = at(x, y);
-                    bright += c[0] + c[1] + c[2] > 180 ? 1 : 0;
+                    if (c[0] + c[1] + c[2] > 180) {
+                        ++out.bright;
+                        out.meanX += x;
+                    }
                 }
+            out.meanX /= std::max(1, out.bright);
             play({ { 0, 0x80, (std::uint8_t) key, 0, 0, 0 }, { 0, 0x80, (std::uint8_t) (key + 4), 0, 0, 0 },
                    { 0, 0x80, (std::uint8_t) (key + 7), 0, 0, 0 } });
-            return bright;
+            return out;
         };
-        const int without = sparkleTest(0, 62), with = sparkleTest(100, 69);
+        const auto without = sparkleTest(0, 69, 0), with = sparkleTest(100, 69, 0);
         if (!px.empty())
             save(px, w, h, "keyboard-sparkles.bmp");
-        check(without == 0 && with > 30, "sparkles thrown up by strikes (" + std::to_string(with) + " bright pixels above the keys), none when off ("
-                                             + std::to_string(without) + ")");
+        const auto leaning = sparkleTest(100, 69, 40);
+        if (!px.empty())
+            save(px, w, h, "keyboard-sparkles-tilted.bmp");
+        check(without.bright == 0 && with.bright > 30, "sparkles thrown up by strikes (" + std::to_string(with.bright)
+                                                           + " bright pixels above the keys), none when off ("
+                                                           + std::to_string(without.bright) + ")");
+        check(leaning.bright > 30 && leaning.meanX > with.meanX + 4.0,
+              "sparkles leaning to the right: around x " + std::to_string((int) leaning.meanX) + ", straight up around x "
+                  + std::to_string((int) with.meanX));
         {   // The rainbow: the bass warm (C2 toward orange), the treble cool (E6 toward blue); the hues in the properties.
             obs_data_t* s = obs_data_create();
             obs_data_set_int(s, "color_mode", 3);
             obs_data_set_int(s, "trail_height", 100);
             obs_data_set_int(s, "glow", 60);
             obs_data_set_int(s, "sparkles", 50);
+            obs_data_set_int(s, "sparkle_tilt", 0);
             obs_source_update(keyboard, s);
             obs_data_release(s);
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            play({ { 0, 0x90, 36, 110, 0, 0 }, { 0, 0x90, 88, 110, 0, 0 } }); // C2 and E6 held
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
             px = renderSource(keyboard, w, h);
             bool rainbow = !px.empty() && h == 246;
             if (rainbow) {
@@ -511,7 +543,8 @@ int main(int argc, char** argv)
                 rainbow = low[0] > low[2] + 60 && high[2] > high[0] + 60;
             }
             obs_properties_t* props = obs_source_properties(keyboard);
-            for (const char* name : { "color_mode", "hue_left", "hue_right", "hue_white", "hue_black", "hue", "saturation", "glow", "sparkles" })
+            for (const char* name : { "color_mode", "hue_left", "hue_right", "hue_white", "hue_black", "hue", "saturation", "glow", "sparkles",
+                                     "sparkle_height", "sparkle_spread", "sparkle_tilt" })
                 rainbow = rainbow && props != nullptr && obs_properties_get(props, name) != nullptr;
             obs_properties_destroy(props);
             check(rainbow, "the rainbow along the keyboard (the bass warm, the treble cool); hues, saturation, lights and sparkles in the properties");

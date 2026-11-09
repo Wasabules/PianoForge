@@ -368,57 +368,77 @@ private:
     std::vector<int> groupKeys, groupHands;
 };
 
-/// A spark: where it is and where it goes (pixels, pixels per second), how old it is and how long it lives (seconds),
-/// its size (pixels: its star's reach), its colour (0xAABBGGRR) and its phase (it twinkles in its own time).
+/// A spark: where it is and where it goes (pixels, pixels per second), how old it is (seconds; below 0 it has not
+/// left yet) and how long it lives, its size (pixels: its star's reach), its colour (0xAABBGGRR) and its phase (it
+/// twinkles in its own time).
 struct Spark {
     float x = 0.0f, y = 0.0f, vx = 0.0f, vy = 0.0f, age = 0.0f, life = 1.0f, size = 1.0f, phase = 0.0f;
     std::uint32_t color = 0xFFFFFFFFu;
 
-    /// How bright it is: lit at once, going out toward its end.
+    /// How bright it is: nothing before it leaves, lit within a few hundredths of a second, going out toward its end.
     float brightness() const noexcept
     {
+        if (age < 0.0f)
+            return 0.0f;
         const float t = age / life;
-        return std::clamp(age / 0.04f, 0.0f, 1.0f) * std::max(0.0f, 1.0f - t * t);
+        return std::clamp(age / 0.06f, 0.0f, 1.0f) * std::max(0.0f, 1.0f - t * t);
     }
 };
 
-/// The sparkles thrown up by the keys: a burst at each strike (as many, as fast and as long-lived as the caller makes
-/// it, by the velocity), a few rising while a key is held. They slow down in the air, keep rising a little, sway,
-/// and go out.
+/// How a strike throws its sparks: `count` of them from (x, y), spread over `width` pixels across, leaving one after
+/// another over `stagger` seconds (a stream, not an explosion). Each rises up to `height` pixels by the end of its
+/// life (up to `life` seconds), within a cone of half-angle `spread` leaning `tilt` from the vertical (radians,
+/// positive to the right); up to `size` pixels, in `color`.
+struct SparkBurst {
+    float x = 0.0f, y = 0.0f, width = 0.0f;
+    int count = 0;
+    float height = 100.0f, tilt = 0.0f, spread = 0.35f, stagger = 0.25f, size = 10.0f, life = 1.2f;
+    std::uint32_t color = 0xFFFFFFFFu;
+};
+
+/// The sparkles thrown up by the keys: a stream at each strike (as many, as high and as long-lived as the caller makes
+/// it, by the velocity), a few rising while a key is held. Each leaves just fast enough to reach its height as it goes
+/// out, slowing down in the air, swaying a little.
 class Sparkles {
 public:
     static constexpr std::size_t kMax = 800;
+    static constexpr float kDrag = 1.6f; // how fast they slow down, per second
 
     void clear() { list.clear(); }
 
-    /// `count` sparks from (x, y), spread over `spread` pixels across, rising at up to `speed` pixels per second, of
-    /// up to `size` pixels, living up to `life` seconds.
-    void burst(float x, float y, float spread, int count, float speed, float size, float life, std::uint32_t color)
+    void burst(const SparkBurst& b)
     {
-        for (int i = 0; i < count && list.size() < kMax; ++i) {
+        for (int i = 0; i < b.count && list.size() < kMax; ++i) {
             Spark s;
-            s.x = x + (random() - 0.5f) * spread;
-            s.y = y - 2.0f * random();
-            s.vy = -speed * (0.45f + 0.55f * random());
-            s.vx = (random() - 0.5f) * 0.6f * speed;
-            s.size = size * (0.55f + 0.45f * random());
-            s.life = life * (0.6f + 0.4f * random());
+            s.x = b.x + (random() - 0.5f) * b.width;
+            s.y = b.y;
+            s.life = b.life * (0.65f + 0.35f * random());
+            const float rise = b.height * (0.5f + 0.5f * random()); // the way it goes, by the end of its life
+            const float speed = kDrag * rise / (1.0f - std::exp(-kDrag * s.life));
+            const float angle = b.tilt + (2.0f * random() - 1.0f) * b.spread;
+            s.vx = speed * std::sin(angle);
+            s.vy = -speed * std::cos(angle);
+            s.size = b.size * (0.55f + 0.45f * random());
             s.phase = random();
-            s.color = color;
+            s.age = -b.stagger * random();
+            s.color = b.color;
             list.push_back(s);
         }
     }
 
-    /// Moves them on by `dt` seconds: slowed by the air, rising by `lift` pixels per second per second, swaying; those
-    /// gone out, or risen above `ceiling`, are gone.
-    void step(float dt, float lift, float ceiling)
+    /// Moves them on by `dt` seconds; those gone out, or risen above `ceiling`, are gone.
+    void step(float dt, float ceiling)
     {
-        const float drag = std::exp(-2.4f * dt);
+        const float drag = std::exp(-kDrag * dt);
         for (auto& s : list) {
-            s.vx *= drag;
-            s.vy = s.vy * drag - lift * dt;
-            s.x += (s.vx + std::sin(6.2831853f * (s.phase + 0.8f * s.age)) * 0.8f * s.size) * dt;
+            if (s.age < 0.0f) { // not left yet
+                s.age += dt;
+                continue;
+            }
+            s.x += (s.vx + std::sin(6.2831853f * (s.phase + 0.6f * s.age)) * 0.25f * s.size) * dt;
             s.y += s.vy * dt;
+            s.vx *= drag;
+            s.vy *= drag;
             s.age += dt;
         }
         list.erase(std::remove_if(list.begin(), list.end(), [&](const Spark& s) { return s.age >= s.life || s.y < ceiling; }),

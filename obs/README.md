@@ -80,9 +80,10 @@ saturation: each hand's (estimated from the notes: where each hand plays, how fa
 one hand split at their widest interval; or a fixed split; blue and orange by default), one for the white keys and
 one for the black, one for all, or the rainbow from the bass to the treble; the black keys take a deeper shade of
 their hue. The lights: beams rising from the keys held, halos, the keys lit from within (0 to 100 %); sparkles
-thrown up by each strike, the more and the higher the stronger it is, a few rising while a key is held (0 to
-100 %); a burst and a flare along the keyboard at the strike; an afterglow once a key is up; an offset against the
-sound.
+thrown up by each strike in a short stream, the more and the higher the stronger it is, a few rising while a key is
+held (0 to 100 %), their height (a share of the room above the keys), spread (0: a thread straight up, 90 degrees: a
+wide fountain) and direction (leaning left or right); a burst and a flare along the keyboard at the strike; an
+afterglow once a key is up; an offset against the sound.
 
 **PianoForge text**: the template (fields `{file}`, `{state}`, `{preset}`, `{room}`, `{engine}`, `{recording}`; a
 line whose fields are all empty disappears), then OBS's text properties (font, colours, outline, background...).
@@ -99,6 +100,6 @@ line whose fields are all empty disappears), then OBS's text properties (font, c
   on OBS's clock (within a few ppm); no glitch; the status and the key-to-OBS latency; a new latency, the resync
   button; another mix with the volume followed, through fades (no step); the readers the application sees; the
   keyboard rendered (each hand's colour, a key not lit, a note rising, the sustain pedal; a phrase played, its
-  images kept beside the report; sparkles after strikes and none when off; the rainbow; the time a busy image
-  takes; no word from Direct3D); the text filled and resized; a mark logged while OBS does not record. The test's feed has a name of its own (`PIANOFORGE_AUDIO_FEED`): it runs beside a PianoForge
-  and an OBS in use.
+  images kept beside the report; sparkles after strikes, leaning as asked, and none when off; the rainbow; the time
+  a busy image takes; no word from Direct3D); the text filled and resized; a mark logged while OBS does not record.
+  The test's feed has a name of its own (`PIANOFORGE_AUDIO_FEED`): it runs beside a PianoForge and an OBS in use.

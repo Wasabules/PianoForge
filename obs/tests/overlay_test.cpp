@@ -174,38 +174,90 @@ int main()
         check(struck.size() == 256 && struck.back().start == 1399, "unread strikes: the newest kept");
     }
 
-    // Sparkles: a burst rises, slows, goes out; no more than kMax.
+    // Sparkles: a stream rises from the key, no higher than asked, in the direction asked, and goes out.
     {
+        SparkBurst b;
+        b.x = 100.0f;
+        b.y = 200.0f;
+        b.width = 20.0f;
+        b.count = 12;
+        b.height = 80.0f;
+        b.tilt = 0.0f;
+        b.spread = 0.0f;
+        b.stagger = 0.0f;
+        b.size = 10.0f;
+        b.life = 1.0f;
         Sparkles s;
-        s.burst(100.0f, 200.0f, 20.0f, 12, 300.0f, 10.0f, 1.0f, 0xFFFFFFFFu);
-        const bool born = s.sparks().size() == 12;
-        bool rising = true, inside = true;
-        for (const auto& p : s.sparks()) {
-            rising = rising && p.vy < -100.0f;
-            inside = inside && std::fabs(p.x - 100.0f) <= 10.0f && p.size <= 10.0f && p.life <= 1.0f;
-        }
-        float before = 0.0f;
+        s.burst(b);
+        bool upright = s.sparks().size() == 12;
         for (const auto& p : s.sparks())
-            before += p.y;
-        s.step(0.1f, 20.0f, 0.0f);
-        float after = 0.0f, speed = 0.0f;
-        for (const auto& p : s.sparks()) {
-            after += p.y;
-            speed += -p.vy;
+            upright = upright && p.vy < 0.0f && std::fabs(p.vx) < 1e-3f && std::fabs(p.x - 100.0f) <= 10.0f && p.life <= 1.0f;
+        float highest = 200.0f, widest = 0.0f;
+        int steps = 0;
+        while (!s.sparks().empty() && steps < 200) {
+            s.step(0.01f, 0.0f);
+            ++steps;
+            for (const auto& p : s.sparks()) {
+                highest = std::min(highest, p.y);
+                widest = std::max(widest, std::fabs(p.x - 100.0f));
+            }
         }
-        check(born && rising && inside && after < before - 12 * 10.0f && speed < 12 * 300.0f,
-              "a burst: its sparks rise from the key, spread across it, slowing");
-        for (int i = 0; i < 20; ++i)
-            s.step(0.05f, 20.0f, 0.0f);
-        check(s.sparks().empty(), "they go out within their life");
-        s.burst(100.0f, 200.0f, 20.0f, 12, 3000.0f, 10.0f, 5.0f, 0xFFFFFFFFu);
-        s.step(0.2f, 20.0f, 150.0f);
-        check(s.sparks().empty(), "risen above the ceiling: gone");
+        check(upright && widest < 10.0f + 2.0f, "straight up: the sparks leave upward, within the key's width");
+        check(highest < 200.0f - 0.5f * 80.0f * 0.8f && highest > 200.0f - 80.0f * 1.02f - 1.0f,
+              "they rise toward the height asked, never above it");
+        check(s.sparks().empty() && steps <= 101, "they go out within their life");
+
+        b.tilt = 0.5f; // leaning to the right
+        b.spread = 0.1f;
+        s.burst(b);
+        bool right = !s.sparks().empty();
+        for (const auto& p : s.sparks())
+            right = right && p.vx > 0.0f && p.vy < 0.0f;
+        s.clear();
+        b.tilt = 0.0f;
+        b.spread = 1.2f; // a wide fountain: both ways
+        s.burst(b);
+        bool left = false, rightToo = false;
+        for (const auto& p : s.sparks()) {
+            left = left || p.vx < 0.0f;
+            rightToo = rightToo || p.vx > 0.0f;
+        }
+        check(right && left && rightToo, "a tilt leans them all one way; a wide spread throws them both ways");
+
+        s.clear();
+        b.spread = 0.0f;
+        b.stagger = 0.5f;
+        s.burst(b);
+        s.step(0.25f, 0.0f);
+        s.step(0.01f, 0.0f);
+        int moved = 0, waiting = 0;
+        bool unseen = true;
+        for (const auto& p : s.sparks()) {
+            if (p.y < 200.0f) {
+                ++moved;
+            } else {
+                ++waiting;
+                unseen = unseen && (p.age >= 0.0f || p.brightness() == 0.0f);
+            }
+        }
+        check(moved > 0 && waiting > 0 && unseen && moved + waiting == 12,
+              "staggered: some have left, the others wait, unseen, at the key");
+
+        s.clear();
+        b.stagger = 0.0f;
+        b.height = 300.0f;
+        b.life = 5.0f;
+        s.burst(b);
         for (int i = 0; i < 100; ++i)
-            s.burst(100.0f, 200.0f, 20.0f, 12, 300.0f, 10.0f, 1.0f, 0xFFFFFFFFu);
+            s.step(0.02f, 150.0f);
+        check(s.sparks().empty(), "risen above the ceiling: gone");
+        b.height = 80.0f;
+        b.life = 1.0f;
+        for (int i = 0; i < 100; ++i)
+            s.burst(b);
         Spark young;
         young.life = 1.0f;
-        young.age = 0.02f;
+        young.age = 0.03f;
         Spark old = young;
         old.age = 0.9f;
         check(s.sparks().size() == Sparkles::kMax && young.brightness() > 0.4f && old.brightness() < 0.25f,

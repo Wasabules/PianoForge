@@ -6,10 +6,10 @@
 // The drawing is a shader of the plugin's own (data/pianoforge-keyboard.effect): keys with rounded fronts, gradients
 // and rims, a front edge that sinks as the key goes down, black keys casting their shadow; notes as rounded bars with
 // a bright rim and a halo, fading as they rise. Light is added over them: beams rising from the keys held, a burst
-// and a flare at the strike, the keys lit from within; and sparkles thrown up by each strike, as many and as high as
-// it is strong, a few more rising while a key is held. Colours are chosen by hue: each hand's (estimated from the
-// notes: overlay.hpp), the white and the black keys', one for all, or the rainbow along the keyboard; the black keys
-// take a deeper shade of theirs.
+// and a flare at the strike, the keys lit from within; and sparkles thrown up by each strike in a short stream, as
+// many and as high as it is strong (their height, spread and direction chosen), a few more rising while a key is
+// held. Colours are chosen by hue: each hand's (estimated from the notes: overlay.hpp), the white and the black
+// keys', one for all, or the rainbow along the keyboard; the black keys take a deeper shade of theirs.
 #include "common.hpp"
 #include "overlay.hpp"
 
@@ -55,7 +55,10 @@ struct Settings {
     bool adaptive = true; // the hands followed; else a fixed split
     int split = 60;
     int glow = 60;     // the lights, %
-    int sparkles = 50; // %
+    int sparkles = 50;      // %
+    int sparkleHeight = 70; // % of the room above the keys
+    int sparkleSpread = 20; // degrees each side of their direction
+    int sparkleTilt = 0;    // degrees from the vertical, positive to the right
     int afterglowMs = 400;
     bool flash = true;
 };
@@ -286,7 +289,8 @@ void tick(void* data, float seconds)
     const auto keep = (std::uint64_t) std::max(0.0, (s.trailSeconds + 0.5) * k->rate);
     k->state.advance((std::uint64_t) std::max(0.0, k->frame), keep);
 
-    // The sparkles: a burst at each strike, a few rising from the keys held; they move on.
+    // The sparkles: a stream at each strike, a few rising from the keys held, as high and in the direction chosen;
+    // they move on.
     const Layout l = layoutOf(s);
     const float amount = s.sparkles / 100.0f, dt = std::clamp(seconds, 0.0f, 0.1f);
     k->state.takeStrikes(k->strikes);
@@ -295,17 +299,31 @@ void tick(void* data, float seconds)
         k->sparksWidth = s.width;
     }
     if (amount > 0.0f && l.top > 4.0f && k->rate > 0.0) {
-        const float reach = std::max(l.top, 40.0f);
+        constexpr float radians = 3.14159265f / 180.0f;
+        const float height = s.sparkleHeight / 100.0f * l.top, tilt = s.sparkleTilt * radians, spread = s.sparkleSpread * radians;
         for (const auto& n : k->strikes) {
             if (n.key < kFirstKey || n.key > kLastKey || (k->frame - (double) n.start) / k->rate > kRecentStrike)
                 continue;
             const auto shape = keyShape(n.key, l.width);
             const Tint tint = tintOf(s, n.key, n.hand);
-            const float v = n.velocity / 127.0f, x = shape.x + 0.5f * shape.width, speed = reach * (0.9f + 1.6f * v);
-            const float size = l.white * (0.45f + 0.4f * v), life = 0.7f + 0.9f * v;
+            const float v = n.velocity / 127.0f;
+            SparkBurst b;
+            b.x = shape.x + 0.5f * shape.width;
+            b.y = l.top;
+            b.width = shape.width * 0.8f;
+            b.height = height * (0.55f + 0.45f * v); // a soft note's lower
+            b.tilt = tilt;
+            b.spread = spread;
+            b.stagger = 0.25f;
+            b.size = l.white * (0.4f + 0.35f * v);
+            b.life = 1.0f + 0.8f * v;
             const int count = (int) std::lround(amount * (3.0f + 15.0f * v));
-            k->sparkles.burst(x, l.top, shape.width * 0.9f, count / 2, speed, size, life, tint.light); // half in the hue,
-            k->sparkles.burst(x, l.top, shape.width * 0.9f, count - count / 2, speed, size, life, tint.pale); // half paler
+            b.count = count / 2; // half in the hue,
+            b.color = tint.light;
+            k->sparkles.burst(b);
+            b.count = count - count / 2; // half paler
+            b.color = tint.pale;
+            k->sparkles.burst(b);
         }
         for (int key = kFirstKey; key <= kLastKey; ++key) {
             const auto& light = k->state.light(key);
@@ -315,12 +333,25 @@ void tick(void* data, float seconds)
                 continue;
             }
             owed += dt * amount * (0.8f + 2.5f * light.velocity / 127.0f);
+            if (owed < 1.0f)
+                continue;
             const auto shape = keyShape(key, l.width);
-            for (; owed >= 1.0f; owed -= 1.0f)
-                k->sparkles.burst(shape.x + 0.5f * shape.width, l.top, shape.width * 0.8f, 1, reach * 0.5f, l.white * 0.35f, 0.9f,
-                                  tintOf(s, key, light.hand).light);
+            SparkBurst b;
+            b.x = shape.x + 0.5f * shape.width;
+            b.y = l.top;
+            b.width = shape.width * 0.7f;
+            b.count = (int) owed;
+            b.height = 0.4f * height;
+            b.tilt = tilt;
+            b.spread = 0.6f * spread;
+            b.stagger = 0.0f;
+            b.size = l.white * 0.3f;
+            b.life = 1.1f;
+            b.color = tintOf(s, key, light.hand).light;
+            k->sparkles.burst(b);
+            owed -= (float) b.count;
         }
-        k->sparkles.step(dt, 0.15f * reach, 0.3f * l.white);
+        k->sparkles.step(dt, 0.3f * l.white);
     }
     if (now - k->lastBeat > (std::uint64_t) (kBeatSeconds * 1e9)) {
         k->feed.heartbeat(pf::FeedMix::heard, 0.0f);
@@ -997,6 +1028,9 @@ void defaults(obs_data_t* settings)
     obs_data_set_default_int(settings, "hand_split", s.split);
     obs_data_set_default_int(settings, "glow", s.glow);
     obs_data_set_default_int(settings, "sparkles", s.sparkles);
+    obs_data_set_default_int(settings, "sparkle_height", s.sparkleHeight);
+    obs_data_set_default_int(settings, "sparkle_spread", s.sparkleSpread);
+    obs_data_set_default_int(settings, "sparkle_tilt", s.sparkleTilt);
     obs_data_set_default_int(settings, "afterglow_ms", s.afterglowMs);
     obs_data_set_default_bool(settings, "flash", s.flash);
     obs_data_set_default_double(settings, "offset_ms", s.offsetMs);
@@ -1022,6 +1056,9 @@ void update(void* data, obs_data_t* settings)
     s.split = (int) std::clamp<long long>(obs_data_get_int(settings, "hand_split"), kFirstKey, kLastKey);
     s.glow = (int) std::clamp<long long>(obs_data_get_int(settings, "glow"), 0, 100);
     s.sparkles = (int) std::clamp<long long>(obs_data_get_int(settings, "sparkles"), 0, 100);
+    s.sparkleHeight = (int) std::clamp<long long>(obs_data_get_int(settings, "sparkle_height"), 10, 100);
+    s.sparkleSpread = (int) std::clamp<long long>(obs_data_get_int(settings, "sparkle_spread"), 0, 90);
+    s.sparkleTilt = (int) std::clamp<long long>(obs_data_get_int(settings, "sparkle_tilt"), -45, 45);
     s.afterglowMs = (int) std::clamp<long long>(obs_data_get_int(settings, "afterglow_ms"), 0, 3000);
     s.flash = obs_data_get_bool(settings, "flash");
     s.offsetMs = std::clamp(obs_data_get_double(settings, "offset_ms"), -1000.0, 1000.0);
@@ -1121,6 +1158,15 @@ obs_properties_t* properties(void* data)
     obs_property_t* sparkles = obs_properties_add_int_slider(props, "sparkles", text("Keyboard.Sparkles"), 0, 100, 1);
     obs_property_int_set_suffix(sparkles, " %");
     obs_property_set_long_description(sparkles, text("Keyboard.Sparkles.Description"));
+    obs_property_t* sparkleHeight = obs_properties_add_int_slider(props, "sparkle_height", text("Keyboard.SparkleHeight"), 10, 100, 1);
+    obs_property_int_set_suffix(sparkleHeight, " %");
+    obs_property_set_long_description(sparkleHeight, text("Keyboard.SparkleHeight.Description"));
+    obs_property_t* sparkleSpread = obs_properties_add_int_slider(props, "sparkle_spread", text("Keyboard.SparkleSpread"), 0, 90, 1);
+    obs_property_int_set_suffix(sparkleSpread, "\xC2\xB0");
+    obs_property_set_long_description(sparkleSpread, text("Keyboard.SparkleSpread.Description"));
+    obs_property_t* sparkleTilt = obs_properties_add_int_slider(props, "sparkle_tilt", text("Keyboard.SparkleTilt"), -45, 45, 1);
+    obs_property_int_set_suffix(sparkleTilt, "\xC2\xB0");
+    obs_property_set_long_description(sparkleTilt, text("Keyboard.SparkleTilt.Description"));
     obs_property_t* flash = obs_properties_add_bool(props, "flash", text("Keyboard.Flash"));
     obs_property_set_long_description(flash, text("Keyboard.Flash.Description"));
     obs_property_t* afterglow = obs_properties_add_int_slider(props, "afterglow_ms", text("Keyboard.Afterglow"), 0, 3000, 10);
