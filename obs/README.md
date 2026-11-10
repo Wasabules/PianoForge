@@ -10,6 +10,8 @@ no system mixer in between, and the main audio output (ASIO) untouched.
   preset, the room...), drawn by OBS's own text source.
 - **Chapter markers**: at each take saved, recording started or stopped and MIDI file played in PianoForge, a chapter
   in OBS's recording (OBS 30.2 and later, recordings in Hybrid MP4).
+- **The stream look** in PianoForge (Audio > Stream look): the keyboard's settings there and here, kept the same both
+  ways, with the keyboard's preview as OBS renders it.
 - **Piano gestures**: gestures played on PianoForge's keyboard (chosen in PianoForge, Keyboard > Piano gestures)
   start or stop OBS's recording or stream, add a chapter marker, or move to the next or previous scene, if the audio
   source lets them (on by default).
@@ -39,6 +41,14 @@ The texts are in English and French (`data/locale`).
   a draw. A busy image (fifteen notes, their lights, sparkles) takes about a millisecond of the graphics thread.
 - Each source says it reads the feed (a slot in it, every quarter of a second): PianoForge's Session card shows
   what OBS reads, and how late the sound is from the key to OBS.
+- **The stream look** goes through a shared memory of its own (`pianoforge/look_channel.hpp`, "PianoForgeFeedLook",
+  either side creating it): each side's look as `key=value` lines (`pianoforge/stream_look.hpp`, the table both sides
+  build their settings from: keys, ranges, defaults, pages, styles), with the wall-clock instant of its edit. Each
+  side takes the other's when it is newer (at a tie, OBS's), and sends its own when it changes; the plugin brings
+  every keyboard source synchronised with PianoForge ("Synchronised with PianoForge", on by default: they share one
+  look) to it, and an open properties window shows it. While PianoForge's window asks for the preview, a private
+  keyboard source (in no scene) is rendered after OBS's main view, at most 30 times a second and as large as the
+  window shows it, staged on the GPU one frame and read back the next, and its frames written to the channel.
 
 ## Build and install (Windows)
 
@@ -121,6 +131,8 @@ line whose fields are all empty disappears), then OBS's text properties (font, c
 
 ## Tests
 
+- `stream_look_test` (ctest `stream_look`): the settings' table, their text read back, the styles; the channel
+  (each side's look, once; the preview's request and frames).
 - `pianoforge-obs-overlay-test` (ctest `obs_overlay`): the keyboard's geometry, the keys and pedals at a frame, the
   notes kept for the trails and struck for the sparkles, the colours by hue, the sparkles (a stream rises, slows and
   goes out; fireworks burst), the powerful chords (found once their window has passed; not a soft chord, an arpeggio

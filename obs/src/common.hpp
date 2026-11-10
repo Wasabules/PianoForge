@@ -5,6 +5,7 @@
 // chapter markers, and the locale's texts.
 
 #include <obs-module.h>
+#include <pianoforge/stream_look.hpp>
 #include <util/platform.h>
 
 #include <algorithm>
@@ -91,5 +92,14 @@ void registerKeyboardSource();
 void registerTextSource();
 void startChapters();
 void stopChapters();
+/// The keyboard sources' look shared with PianoForge's "Stream look" window, and its preview (look_sync.cpp).
+void startLookSync();
+void stopLookSync();
+/// A keyboard source's settings as it is created (`loading`: as saved) or edited: shared with PianoForge if the
+/// source is synchronised with it.
+void lookChanged(obs_data_t* settings, bool loading);
+/// A keyboard source's look from its settings, and into settings (all of it, or only what a style sets).
+pf::look::Values lookOf(obs_data_t* settings);
+void writeLook(obs_data_t* settings, const pf::look::Values& values, bool lookOnly);
 
 } // namespace pfobs

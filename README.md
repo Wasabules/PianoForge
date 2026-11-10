@@ -82,6 +82,12 @@ pause the MIDI file (A0 twice), and in OBS through the plugin: start or stop the
 stream, add a chapter marker, change scene. The on-screen keyboard marks the gestures' keys (a dot, two for a key
 struck twice); the mouse over one says what it does.
 
+Audio > Stream look (OBS keyboard): the look of the OBS plugin's keyboard, set here as in OBS's properties, in tabs
+(keyboard, colours, notes, lights, sparkles, velocity, powerful chords) with the styles and a way back to the defaults,
+and its preview as OBS renders it (while OBS runs with the plugin). Each side follows the other: an edit here reaches
+every keyboard synchronised in OBS, one there comes here, the newest wins; a look set while OBS is closed reaches it
+when it starts.
+
 File > Takes and recordings (Ctrl+T) lists the takes (Ctrl+S) and the recordings together, with their date, length,
 notes and files. Listen to one (Space), or to two in A/B from the same instant (A and B switch between them with a
 10 ms crossfade); play one again through the engine from its MIDI, or render it again with the settings heard now (a

@@ -22,7 +22,7 @@
 // lights above it; curtains of light over the room follow how loud the playing is; the whole can glow (a bloom: the
 // keyboard drawn into an image, its bright coloured parts blurred and added over it). The keys shown: all 88, a
 // smaller keyboard's, a range of one's own, or following the playing (gliding to the keys played lately). Styles set
-// the whole look at once.
+// the whole look at once. The look is shared with PianoForge's "Stream look" window (look_sync.cpp).
 #include "common.hpp"
 #include "overlay.hpp"
 
@@ -162,6 +162,7 @@ struct Keyboard {
     int sparksWidth = 0; // the width the sparks were thrown over
     Drawing look;
     std::atomic<bool> following { false }, connected { false }; // (read by the properties)
+    bool loading = false; // created: its settings as saved
 };
 
 /// The keys the settings show: a smaller keyboard's (76: E1 to G7, 61: C2 to C7, 49: C2 to C6, 37: C3 to C6), a range
@@ -1767,59 +1768,23 @@ const char* name(void*)
 
 void defaults(obs_data_t* settings)
 {
-    const Settings s;
-    obs_data_set_default_int(settings, "width", s.width);
-    obs_data_set_default_int(settings, "trail_height", s.trailHeight);
-    obs_data_set_default_double(settings, "trail_seconds", s.trailSeconds);
-    obs_data_set_default_bool(settings, "pedals", s.pedals);
-    obs_data_set_default_int(settings, "color_mode", (int) s.mode);
-    obs_data_set_default_int(settings, "hue_left", s.hueLeft);
-    obs_data_set_default_int(settings, "hue_right", s.hueRight);
-    obs_data_set_default_int(settings, "hue_white", s.hueWhite);
-    obs_data_set_default_int(settings, "hue_black", s.hueBlack);
-    obs_data_set_default_int(settings, "hue", s.hue);
-    obs_data_set_default_int(settings, "saturation", s.saturation);
-    obs_data_set_default_bool(settings, "hand_adaptive", s.adaptive);
-    obs_data_set_default_int(settings, "hand_split", s.split);
-    obs_data_set_default_int(settings, "glow", s.glow);
-    obs_data_set_default_int(settings, "sparkles", s.sparkles);
-    obs_data_set_default_int(settings, "sparkle_height", s.sparkleHeight);
-    obs_data_set_default_int(settings, "sparkle_spread", s.sparkleSpread);
-    obs_data_set_default_int(settings, "sparkle_tilt", s.sparkleTilt);
-    obs_data_set_default_int(settings, "afterglow_ms", s.afterglowMs);
-    obs_data_set_default_bool(settings, "flash", s.flash);
-    obs_data_set_default_double(settings, "offset_ms", s.offsetMs);
-    obs_data_set_default_int(settings, "velocity_accent", s.accent);
-    obs_data_set_default_int(settings, "velocity_top", s.velocityTop);
-    obs_data_set_default_bool(settings, "chords", s.chords);
-    obs_data_set_default_int(settings, "chord_notes", s.chordNotes);
-    obs_data_set_default_int(settings, "chord_threshold", s.chordThreshold);
-    obs_data_set_default_int(settings, "chord_intensity", s.chordIntensity);
-    obs_data_set_default_bool(settings, "chord_wave", s.chordWave);
-    obs_data_set_default_bool(settings, "chord_wash", s.chordWash);
-    obs_data_set_default_bool(settings, "chord_fireworks", s.chordFireworks);
-    obs_data_set_default_bool(settings, "chord_bracket", s.chordBracket);
-    obs_data_set_default_bool(settings, "chord_shake", s.chordShake);
-    obs_data_set_default_int(settings, "range", s.range);
-    obs_data_set_default_int(settings, "range_first", s.rangeFirst);
-    obs_data_set_default_int(settings, "range_last", s.rangeLast);
-    obs_data_set_default_int(settings, "follow_octaves", s.followOctaves);
-    obs_data_set_default_bool(settings, "pedal_tails", s.pedalTails);
-    obs_data_set_default_int(settings, "tail_width", s.tailWidth);
-    obs_data_set_default_int(settings, "tail_opacity", s.tailOpacity);
-    obs_data_set_default_int(settings, "tail_fine", s.tailFine);
-    obs_data_set_default_int(settings, "pedal_line", s.pedalLine);
-    obs_data_set_default_int(settings, "pedal_glow", s.pedalGlow);
-    obs_data_set_default_int(settings, "aurora_height", s.auroraHeight);
-    obs_data_set_default_int(settings, "aurora_speed", s.auroraSpeed);
-    obs_data_set_default_int(settings, "aurora_rest", s.auroraRest);
-    obs_data_set_default_bool(settings, "note_decay", s.decay);
-    obs_data_set_default_bool(settings, "melody", s.melody);
-    obs_data_set_default_int(settings, "bloom", s.bloom);
-    obs_data_set_default_int(settings, "reflection", s.reflection);
-    obs_data_set_default_int(settings, "ambiance", s.ambiance);
+    for (const auto& e : pf::look::entries()) // the table shared with PianoForge's window
+        switch (e.kind) {
+        case pf::look::Kind::toggle:
+            obs_data_set_default_bool(settings, e.key, e.def >= 0.5);
+            break;
+        case pf::look::Kind::real:
+            obs_data_set_default_double(settings, e.key, e.def);
+            break;
+        default:
+            obs_data_set_default_int(settings, e.key, std::lround(e.def));
+            break;
+        }
     obs_data_set_default_int(settings, "style", 0);
     obs_data_set_default_int(settings, "style_applied", 0);
+    obs_data_set_default_bool(settings, "sync_app", true);
+    obs_data_set_default_int(settings, "sync_changed", 0);
+    obs_data_set_default_bool(settings, "sync_preview", false);
 }
 
 void update(void* data, obs_data_t* settings)
@@ -1878,8 +1843,11 @@ void update(void* data, obs_data_t* settings)
     s.bloom = (int) std::clamp<long long>(obs_data_get_int(settings, "bloom"), 0, 100);
     s.reflection = (int) std::clamp<long long>(obs_data_get_int(settings, "reflection"), 0, 100);
     s.ambiance = (int) std::clamp<long long>(obs_data_get_int(settings, "ambiance"), 0, 100);
-    const std::lock_guard<std::mutex> guard(k->lock);
-    k->settings = s;
+    {
+        const std::lock_guard<std::mutex> guard(k->lock);
+        k->settings = s;
+    }
+    lookChanged(settings, k->loading); // shared with PianoForge's window
 }
 
 void* create(obs_data_t* settings, obs_source_t* source)
@@ -1887,7 +1855,9 @@ void* create(obs_data_t* settings, obs_source_t* source)
     auto* k = new Keyboard;
     k->source = source;
     k->state.reset();
+    k->loading = true;
     update(k, settings);
+    k->loading = false;
     return k;
 }
 
@@ -1917,102 +1887,13 @@ bool measureVelocity(obs_properties_t*, obs_property_t*, void* data)
     return true;
 }
 
-/// The settings of the look (what a style sets; the size, range, timing and velocity scale are not).
-constexpr const char* kLookKeys[] = { "color_mode", "hue_left", "hue_right", "hue_white", "hue_black", "hue", "saturation",
-                                      "glow", "sparkles", "sparkle_height", "sparkle_spread", "sparkle_tilt", "afterglow_ms",
-                                      "flash", "velocity_accent", "chords", "chord_intensity", "chord_wave", "chord_wash",
-                                      "chord_fireworks", "chord_bracket", "chord_shake", "pedal_tails", "tail_width", "tail_opacity",
-                                      "tail_fine", "pedal_line", "pedal_glow", "aurora_height", "aurora_speed",
-                                      "aurora_rest", "note_decay", "melody",
-                                      "bloom", "reflection", "ambiance" };
-
-enum Style : int { kStyleCustom = 0, kStylePianoForge, kStyleConcert, kStyleNeon, kStyleGalaxy, kStyleRainbow, kStyleMinimal };
-
-/// A style: the look back to the defaults, then its own values.
+/// A style (pianoforge/stream_look.hpp's, the same as in PianoForge's window): the look back to its defaults, then
+/// the style's own values.
 void applyStyle(obs_data_t* settings, int style)
 {
-    for (const char* key : kLookKeys)
-        obs_data_unset_user_value(settings, key);
-    auto set = [&](const char* key, long long value) { obs_data_set_int(settings, key, value); };
-    auto flag = [&](const char* key, bool value) { obs_data_set_bool(settings, key, value); };
-    switch (style) {
-    case kStyleConcert: // sober: softer colours and lights, few sparkles, no fireworks
-        set("hue_left", 210);
-        set("hue_right", 35);
-        set("saturation", 55);
-        set("glow", 35);
-        set("sparkles", 15);
-        set("sparkle_height", 50);
-        set("velocity_accent", 50);
-        set("chord_intensity", 50);
-        flag("chord_fireworks", false);
-        set("pedal_line", 15);
-        set("pedal_glow", 10);
-        set("aurora_speed", 30);
-        set("afterglow_ms", 600);
-        set("bloom", 25);
-        set("reflection", 60);
-        set("ambiance", 15);
-        break;
-    case kStyleNeon: // cyan and magenta, everything bright
-        set("hue_left", 190);
-        set("hue_right", 320);
-        set("saturation", 100);
-        set("glow", 90);
-        set("sparkles", 70);
-        set("velocity_accent", 80);
-        set("chord_intensity", 100);
-        set("bloom", 80);
-        set("ambiance", 50);
-        set("pedal_line", 60);
-        set("pedal_glow", 40);
-        set("aurora_speed", 75);
-        break;
-    case kStyleGalaxy: // violet and turquoise, sparkles high, curtains of light
-        set("hue_left", 265);
-        set("hue_right", 185);
-        set("saturation", 80);
-        set("glow", 70);
-        set("sparkles", 85);
-        set("sparkle_height", 90);
-        set("sparkle_spread", 35);
-        set("chord_intensity", 90);
-        set("bloom", 60);
-        set("reflection", 40);
-        set("ambiance", 80);
-        set("aurora_height", 100);
-        set("aurora_rest", 30);
-        break;
-    case kStyleRainbow:
-        set("color_mode", (long long) ColorMode::rainbow);
-        set("saturation", 85);
-        set("glow", 70);
-        set("sparkles", 60);
-        set("bloom", 50);
-        set("ambiance", 40);
-        break;
-    case kStyleMinimal: // the keys and their notes, nothing more
-        set("color_mode", (long long) ColorMode::single);
-        set("hue", 205);
-        set("saturation", 60);
-        set("glow", 0);
-        set("sparkles", 0);
-        set("velocity_accent", 40);
-        flag("chords", false);
-        flag("flash", false);
-        set("afterglow_ms", 250);
-        flag("note_decay", false);
-        flag("melody", false);
-        set("bloom", 0);
-        set("reflection", 0);
-        set("ambiance", 0);
-        set("pedal_line", 0);
-        set("pedal_glow", 0);
-        set("tail_opacity", 35);
-        break;
-    default: // PianoForge: the defaults
-        break;
-    }
+    pf::look::Values values = lookOf(settings);
+    pf::look::applyStyle(values, style);
+    writeLook(settings, values, true);
 }
 
 bool modeChanged(obs_properties_t* props, obs_property_t*, obs_data_t* settings);
@@ -2024,7 +1905,7 @@ bool styleChanged(obs_properties_t* props, obs_property_t*, obs_data_t* settings
     if (style == obs_data_get_int(settings, "style_applied"))
         return false;
     obs_data_set_int(settings, "style_applied", style);
-    if (style != kStyleCustom)
+    if (style != pf::look::kCustom)
         applyStyle(settings, (int) style);
     modeChanged(props, nullptr, settings);
     return true;
@@ -2080,15 +1961,17 @@ obs_properties_t* properties(void* data)
                          : k->following ? text("Keyboard.Status.Following") : text("Keyboard.Status.Alone");
     obs_property_t* info = obs_properties_add_text(props, "status", status, OBS_TEXT_INFO);
     obs_property_text_set_info_word_wrap(info, true);
+    obs_property_t* synced = obs_properties_add_bool(props, "sync_app", text("Keyboard.Sync"));
+    obs_property_set_long_description(synced, text("Keyboard.Sync.Description"));
 
     obs_property_t* style = obs_properties_add_list(props, "style", text("Keyboard.Style"), OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
-    obs_property_list_add_int(style, text("Keyboard.Style.Custom"), kStyleCustom);
-    obs_property_list_add_int(style, text("Keyboard.Style.PianoForge"), kStylePianoForge);
-    obs_property_list_add_int(style, text("Keyboard.Style.Concert"), kStyleConcert);
-    obs_property_list_add_int(style, text("Keyboard.Style.Neon"), kStyleNeon);
-    obs_property_list_add_int(style, text("Keyboard.Style.Galaxy"), kStyleGalaxy);
-    obs_property_list_add_int(style, text("Keyboard.Style.Rainbow"), kStyleRainbow);
-    obs_property_list_add_int(style, text("Keyboard.Style.Minimal"), kStyleMinimal);
+    obs_property_list_add_int(style, text("Keyboard.Style.Custom"), pf::look::kCustom);
+    obs_property_list_add_int(style, text("Keyboard.Style.PianoForge"), pf::look::kPianoForge);
+    obs_property_list_add_int(style, text("Keyboard.Style.Concert"), pf::look::kConcert);
+    obs_property_list_add_int(style, text("Keyboard.Style.Neon"), pf::look::kNeon);
+    obs_property_list_add_int(style, text("Keyboard.Style.Galaxy"), pf::look::kGalaxy);
+    obs_property_list_add_int(style, text("Keyboard.Style.Rainbow"), pf::look::kRainbow);
+    obs_property_list_add_int(style, text("Keyboard.Style.Minimal"), pf::look::kMinimal);
     obs_property_set_long_description(style, text("Keyboard.Style.Description"));
     obs_property_set_modified_callback(style, styleChanged);
     obs_property_t* reset = obs_properties_add_button2(props, "reset", text("Keyboard.Reset"), resetAll, k);

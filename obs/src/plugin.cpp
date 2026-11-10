@@ -1,6 +1,7 @@
 // The PianoForge plugin for OBS Studio: the application's sound (audio source), its keyboard as played (video
 // source), its state as text (text source), and chapter markers in OBS's recordings at PianoForge's marks. All of it
-// read from the application's feed (shared memory, pianoforge/audio_feed.hpp): no virtual cable, no system mixer.
+// read from the application's feed (shared memory, pianoforge/audio_feed.hpp): no virtual cable, no system mixer. The
+// keyboard's look is shared with PianoForge's "Stream look" window, which shows its preview (look_sync.cpp).
 #include "common.hpp"
 
 #include <mutex>
@@ -51,11 +52,13 @@ bool obs_module_load(void)
     pfobs::registerKeyboardSource();
     pfobs::registerTextSource();
     pfobs::startChapters();
+    pfobs::startLookSync();
     blog(LOG_INFO, "[pianoforge] the PianoForge sources are available (audio, keyboard, text)");
     return true;
 }
 
 void obs_module_unload(void)
 {
+    pfobs::stopLookSync();
     pfobs::stopChapters();
 }

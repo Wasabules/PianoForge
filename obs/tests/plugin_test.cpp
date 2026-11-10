@@ -10,6 +10,9 @@
 //     phrase played (its images kept), sparkles thrown up by strikes (leaning as asked), none when off; the velocity
 //     (a soft note thinner and duller than a strong one); a powerful chord (the room lit, fireworks; nothing for a
 //     soft chord, nor with them off);
+//   - the stream look shared with PianoForge's window (the test on the application's side of the channel): OBS's
+//     look reaches it, a newer one from it reaches the keyboard source, an edit in OBS comes back; the preview's
+//     frames while it asks for them;
 //   - the text: its template filled with the application's state, wider for a longer text;
 //   - the chapters: a mark while OBS does not record is said so in the log.
 // The feed has a name of its own (PIANOFORGE_AUDIO_FEED): the test runs beside a PianoForge and an OBS in use.
@@ -33,6 +36,8 @@
 #include <util/base.h>
 
 #include <pianoforge/audio_feed.hpp>
+#include <pianoforge/look_channel.hpp>
+#include <pianoforge/stream_look.hpp>
 
 #include <array>
 #include <atomic>
@@ -933,6 +938,72 @@ int main(int argc, char** argv)
                 rainbow = rainbow && props != nullptr && obs_properties_get(props, name) != nullptr;
             obs_properties_destroy(props);
             check(rainbow, "the rainbow along the keyboard (the bass warm, the treble cool); hues, saturation, lights and sparkles in the properties");
+        }
+        // The stream look, from PianoForge's side of the channel: OBS's look arrives; a newer one sent from here reaches
+        // the keyboard source; an edit in OBS comes back; the preview's frames, while asked for.
+        {
+            pf::LookChannel app;
+            const bool opened = app.open(pf::LookChannel::Side::app);
+            std::uint64_t serial = 0, changed = 0;
+            std::string text;
+            auto wait = [&](auto done) { // (done() asked once a turn: a frame read is not read again)
+                for (int i = 0; i < 40; ++i) {
+                    if (done())
+                        return true;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                return false;
+            };
+            // (the source's settings changed many times above: the newest is there)
+            const bool arrived = opened && wait([&] {
+                                     while (app.other(serial, text, changed)) {
+                                     }
+                                     return text.find("width=1040\n") != std::string::npos;
+                                 });
+            pf::look::Values look;
+            look.read(text);
+            look.set("sparkles", 77);
+            look.set("hue_right", 140);
+            app.publish(look.text(), changed + 1000);
+            auto setting = [&](const char* key) {
+                obs_data_t* settings = obs_source_get_settings(keyboard);
+                const long long value = obs_data_get_int(settings, key);
+                obs_data_release(settings);
+                return value;
+            };
+            const bool applied = wait([&] { return setting("sparkles") == 77 && setting("hue_right") == 140; });
+            const std::uint64_t before = changed;
+            obs_data_t* edit = obs_data_create();
+            obs_data_set_int(edit, "bloom", 13);
+            obs_source_update(keyboard, edit);
+            obs_data_release(edit);
+            const bool back = wait([&] {
+                while (app.other(serial, text, changed)) {
+                }
+                return text.find("bloom=13\n") != std::string::npos && text.find("sparkles=77\n") != std::string::npos;
+            });
+            check(arrived && applied && back && changed > before + 1000,
+                  "the stream look: OBS's reaches PianoForge, a newer one from PianoForge reaches the keyboard, an edit in OBS comes back");
+
+            app.wantPreview(pf::feedClockNs() + 3'000'000'000ull, 520, 400);
+            std::uint64_t frameSerial = 0, made = 0;
+            std::vector<std::uint8_t> frame;
+            std::uint32_t fw = 0, fh = 0;
+            const bool framed = wait([&] { return app.frame(frameSerial, frame, fw, fh, made); });
+            const std::uint32_t sw = obs_source_get_width(keyboard), sh = obs_source_get_height(keyboard);
+            int lit = 0;
+            for (std::size_t i = 0; i + 3 < frame.size(); i += 4)
+                lit += frame[i + 3] > 128 ? 1 : 0;
+            const std::uint64_t first = frameSerial;
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            app.frame(frameSerial, frame, fw, fh, made);
+            const bool flowing = frameSerial > first + 3;
+            if (framed && fw > 0 && fh > 0)
+                save(frame, fw, fh, "keyboard-preview.bmp");
+            app.wantPreview(0, 520, 400);
+            check(framed && flowing && fw == 520 && std::abs((double) fh / fw - (double) sh / sw) < 0.02 && lit > (int) (fw * fh / 4),
+                  "the preview: frames while asked for, " + std::to_string(fw) + " by " + std::to_string(fh) + " (the keyboard's "
+                      + std::to_string(sw) + " by " + std::to_string(sh) + " scaled), the keys in them");
         }
         {
             const std::lock_guard<std::mutex> guard(logLock);

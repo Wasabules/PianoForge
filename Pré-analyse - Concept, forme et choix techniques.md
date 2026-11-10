@@ -1129,6 +1129,24 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - dans libobs : une traîne sous la note tenue, absente sans l'option et finie au lever de la pédale ; la ligne mélodique entre deux notes ; 61 touches (do2 au bord gauche, clavier plus haut) et le suivi ; le bloom autour d'une note éclairée, sans toucher les touches blanches ; le reflet de la teinte dans la laque ; l'ambiance pendant que le son joue ; les styles appliqués une seule fois et la remise à zéro ; des images du rendu par défaut ;
     - les tests ciblés coupent bloom, reflet et ambiance pour rester isolés.
 
+**La fenêtre « Rendu pour le stream » dans PianoForge (10 novembre 2026).** Les propriétés de la source clavier dans OBS devenaient trop longues, et OBS n'a ni onglets ni groupes repliables : rien que des cadres, dont certains à cocher. L'utilisateur a demandé une fenêtre dans PianoForge, avec onglets et aperçu, réglable des deux côtés.
+  - *Une table partagée* (`pianoforge/stream_look.hpp`). Chaque réglage y a sa clé dans OBS, sa nature, ses bornes, son pas, sa valeur par défaut, son onglet, son libellé, son aide et ses conditions d'affichage ; les styles y sont aussi. Le plugin en tire ses valeurs par défaut et ses styles, et la fenêtre de PianoForge ses onglets. Une seule source, donc les deux côtés ne peuvent pas diverger.
+  - *Un canal à part* (`pianoforge/look_channel.hpp`, mémoire partagée « PianoForgeFeedLook »). Il est séparé du flux audio : un plugin récent pourrait ainsi encore ouvrir le flux d'une application plus ancienne. Chaque côté y publie son rendu (des lignes `clé=valeur`) avec l'instant de sa modification, sous un compteur de séquence. Le plus récent l'emporte, des deux côtés ; à égalité, celui d'OBS, pour qu'un rendu réglé dans OBS avant l'arrivée de la fenêtre soit gardé. L'instant est conservé : dans les réglages de la source pour OBS (« sync_changed »), dans ceux de l'application pour PianoForge. Ainsi un rendu réglé OBS fermé lui parvient au démarrage.
+  - *Côté plugin* (`obs/src/look_sync.cpp`), un fil interroge le canal dix fois par seconde. Les sources clavier « Synchronisées avec PianoForge » (case cochée par défaut) partagent un même rendu : une modification de l'une est publiée et appliquée aux autres, et une fenêtre de propriétés ouverte se met à jour. Chaque source se compare au rendu partagé et ne publie que s'il diffère, donc rien ne revient en écho.
+  - *L'aperçu* est le rendu même d'OBS.
+    - Tant que la fenêtre le demande (une échéance renouvelée, une taille maximale), une source clavier privée, présente dans aucune scène, est rendue après la vue principale d'OBS (`obs_add_main_rendered_callback`), au plus 30 fois par seconde et à la taille de la fenêtre.
+    - L'image est copiée sur le GPU, puis relue l'image suivante, sans attendre la carte, et écrite dans le canal. PianoForge l'affiche sur un fond sombre.
+    - Sans OBS, la fenêtre l'indique, et les réglages partent dès qu'OBS démarre.
+    - La source privée est relâchée dix secondes après la dernière demande, et au déchargement du module (libobs arrête la vidéo, décharge les modules, puis libère les sources).
+  - *La fenêtre* (Audio > Stream look) : les styles, le retour aux réglages par défaut, l'état d'OBS (« en phase, aperçu en direct »), l'aperçu, puis sept onglets générés depuis la table, avec les aides en infobulle et les réglages qui ne s'appliquent pas masqués. Un réglage modifié à la main affiche le style « My own ». Les réglages sont écrits sur le disque au rythme de la synchronisation, pas à chaque mouvement de curseur.
+  - *Tests* :
+    - `stream_look` : la table, le texte relu, les styles, le canal dans les deux sens, l'aperçu ;
+    - dans libobs, le test joue le rôle de PianoForge : le rendu d'OBS arrive, un rendu plus récent est appliqué à la source, une modification dans OBS revient, et les images d'aperçu arrivent à la taille demandée ;
+    - dans l'autotest de l'application : un rendu plus récent venu d'OBS est adopté, une modification locale est publiée, un rendu plus ancien d'OBS reçoit le nôtre en réponse, et le tout est gardé dans les réglages. L'autotest enregistre aussi une image de la fenêtre.
+  - *Les cas qui piègent* :
+    - dans le test, une fonction d'attente rappelait la condition une dernière fois en sortie de boucle, ce qui consommait l'image d'aperçu déjà reçue ;
+    - les mesures audio du test du plugin varient quand la machine est chargée (96 % au moment du test).
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

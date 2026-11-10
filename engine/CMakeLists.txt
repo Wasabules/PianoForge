@@ -4,9 +4,9 @@ add_library(pianoforge_engine STATIC
     src/modal_engine.cpp
     src/midi_sequence.cpp
     src/room.cpp)
-# Not in a browser: the profile from a file, and the OBS plugin's shared memory.
+# Not in a browser: the profile from a file, and the OBS plugin's shared memories (the feed, the stream look's channel).
 if(NOT EMSCRIPTEN)
-    target_sources(pianoforge_engine PRIVATE src/modal_profile_file.cpp src/audio_feed.cpp)
+    target_sources(pianoforge_engine PRIVATE src/modal_profile_file.cpp src/audio_feed.cpp src/look_channel.cpp)
 endif()
 add_library(pianoforge::engine ALIAS pianoforge_engine)
 target_include_directories(pianoforge_engine PUBLIC include)
@@ -50,6 +50,9 @@ if(BUILD_TESTING)
         add_executable(audio_feed_test tests/audio_feed_test.cpp)
         target_link_libraries(audio_feed_test PRIVATE pianoforge::engine)
         add_test(NAME audio_feed COMMAND audio_feed_test)
+        add_executable(stream_look_test tests/stream_look_test.cpp)
+        target_link_libraries(stream_look_test PRIVATE pianoforge::engine)
+        add_test(NAME stream_look COMMAND stream_look_test)
     endif()
     add_executable(room_test tests/room_test.cpp)
     target_link_libraries(room_test PRIVATE pianoforge::engine)

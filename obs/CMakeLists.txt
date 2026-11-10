@@ -18,7 +18,9 @@ add_library(pianoforge-obs MODULE
     src/keyboard_source.cpp
     src/text_source.cpp
     src/chapters.cpp
-    ${PROJECT_SOURCE_DIR}/engine/src/audio_feed.cpp) # built here, without the engine's AVX2 flags
+    src/look_sync.cpp
+    ${PROJECT_SOURCE_DIR}/engine/src/audio_feed.cpp  # built here, without the engine's AVX2 flags
+    ${PROJECT_SOURCE_DIR}/engine/src/look_channel.cpp)
 target_include_directories(pianoforge-obs PRIVATE ${PROJECT_SOURCE_DIR}/engine/include)
 target_compile_features(pianoforge-obs PRIVATE cxx_std_20)
 set_target_properties(pianoforge-obs PROPERTIES PREFIX "" OUTPUT_NAME "pianoforge-obs")
@@ -102,7 +104,8 @@ endif()
 # The plugin inside the installed libobs, without the OBS application (obs/tests/plugin_test.cpp): audio, and video
 # through OBS's Direct3D 11 module (offscreen), with OBS's text source loaded beside it.
 if(WIN32 AND BUILD_TESTING)
-    add_executable(pianoforge-obs-test tests/plugin_test.cpp ${PROJECT_SOURCE_DIR}/engine/src/audio_feed.cpp)
+    add_executable(pianoforge-obs-test tests/plugin_test.cpp ${PROJECT_SOURCE_DIR}/engine/src/audio_feed.cpp
+                                      ${PROJECT_SOURCE_DIR}/engine/src/look_channel.cpp)
     target_include_directories(pianoforge-obs-test PRIVATE ${PROJECT_SOURCE_DIR}/engine/include)
     target_include_directories(pianoforge-obs-test SYSTEM PRIVATE ${obs_includes})
     target_link_libraries(pianoforge-obs-test PRIVATE "${obs_lib}")

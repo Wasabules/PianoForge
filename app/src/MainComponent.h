@@ -10,6 +10,8 @@
 #include "VelocityCurveEditor.h"
 #include "ui/GestureKeyboard.h"
 #include "ui/GesturesPanel.h"
+#include "ui/StreamLookPanel.h"
+#include "StreamLook.h"
 #include "ui/AudioPanel.h"
 #include "ui/EnginePanel.h"
 #include "ui/Meters.h"
@@ -144,8 +146,11 @@ private:
     std::unique_ptr<AudioPanel> audioPanel;
     PerformancePanel performancePanel;
     std::unique_ptr<RoomPanel> roomPanel;
-    std::unique_ptr<ToolWindow> engineWindow, audioWindow, performanceWindow, roomWindow, takesWindow, gesturesWindow;
+    std::unique_ptr<ToolWindow> engineWindow, audioWindow, performanceWindow, roomWindow, takesWindow, gesturesWindow, streamLookWindow;
     std::unique_ptr<GesturesPanel> gesturesPanel;
+    std::unique_ptr<StreamLook> streamLook;           // the OBS keyboard's look, shared with OBS
+    std::unique_ptr<StreamLookPanel> streamLookPanel; // its window's content
+    int streamLookTicks = 0;
     std::unique_ptr<TakesPanel> takesPanel;
     void openTakes();
     void toggleHeadphones();

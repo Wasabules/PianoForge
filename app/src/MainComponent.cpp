@@ -21,7 +21,7 @@ enum MenuId {
     // Engine
     kEngineReference = 20, kEngineModal, kEngineOption = 30, kEngineSettings = 50, kRoomToggle, kRoomSettings, kHeadphones,
     // Audio
-    kAudioSettings = 60, kPerformance, kResetDropouts,
+    kAudioSettings = 60, kPerformance, kResetDropouts, kStreamLook,
     // Keyboard
     kVelocityCurve = 70, kAzerty, kQwerty, kOctaveDown, kOctaveUp, kVelocityDown, kVelocityUp, kPedalCurve, kGestures,
     // Help
@@ -141,6 +141,9 @@ MainComponent::MainComponent()
     };
     roomPanel = std::make_unique<RoomPanel>(host.room, *settings);
     gesturesPanel = std::make_unique<GesturesPanel>(keyboardInput, *settings);
+    streamLook = std::make_unique<StreamLook>(*settings);
+    streamLookPanel = std::make_unique<StreamLookPanel>(*streamLook);
+    streamLook->onChanged = [this] { streamLookPanel->refresh(); };
     gesturesPanel->onMessage = [this](const juce::String& text) { showMessage(text, theme::good); };
     gesturesPanel->onChanged = [this] { refreshGestureKeys(); };
     keyboardInput.onGesture = [safe = juce::Component::SafePointer<MainComponent>(this)](int action, double start) {
@@ -266,6 +269,8 @@ MainComponent::~MainComponent()
     takesWindow.reset();
     takesPanel.reset();
     host.playback.release();
+    streamLookWindow.reset();
+    streamLookPanel.reset();
     engineWindow.reset();
     audioWindow.reset();
     performanceWindow.reset();
@@ -395,6 +400,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
     case 4:
         menu.addItem(item(kAudioSettings, "Audio, MIDI and streaming...", "Ctrl+,"));
         menu.addItem(item(kPerformance, "Performance...", "Ctrl+P"));
+        menu.addItem(item(kStreamLook, "Stream look (OBS keyboard)..."));
         menu.addSeparator();
         menu.addItem(item(kResetDropouts, "Reset the dropout counters"));
         break;
@@ -492,6 +498,7 @@ void MainComponent::menuItemSelected(int id, int)
     case kVelocityCurve: openVelocityCurve(); break;
     case kPedalCurve: openPedalCurve(); break;
     case kGestures: showWindow(gesturesWindow, "Piano gestures", *gesturesPanel); break;
+    case kStreamLook: showWindow(streamLookWindow, "Stream look", *streamLookPanel); break;
     case kAzerty: setKeyLayout(kLayoutAzerty); break;
     case kQwerty: setKeyLayout(kLayoutQwerty); break;
     case kOctaveDown: shiftOctave(-1); break;
@@ -1858,6 +1865,8 @@ void MainComponent::timerCallback()
         && (audioRetries < kQuickAudioRetries || silentForRetry()))
         retryWantedAudio();
 
+    if (streamLook != nullptr && ++streamLookTicks % 2 == 0) // the stream look, with OBS, ten times a second
+        streamLook->poll();
     drained.clear(); // take capture: move what reached the engine into the session record
     host.drainRecorded(drained);
     takes.add(drained, host.currentSegment(), host.currentRate());

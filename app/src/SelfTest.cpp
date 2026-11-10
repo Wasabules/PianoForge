@@ -10,8 +10,10 @@
 #include "OfflineRender.h"
 #include "ui/EnginePanel.h"
 #include "ui/RoomPanel.h"
+#include "ui/StreamLookPanel.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
+#include "StreamLook.h"
 #include "TakeRecorder.h"
 
 #include <pianoforge/modal_engine.hpp>
@@ -1331,6 +1333,52 @@ int runSelfTest(const juce::StringArray& arguments)
         }
     } else {
         r.line("[----]  modal engine: no modal-profile.bin next to the corpus passes (forge export)");
+    }
+
+    // 9. The stream look shared with OBS (the test on OBS's side of the channel, the window's model on the other): a
+    // newer look from OBS taken, an edit here sent with a newer instant, an older one from OBS answered with ours, the
+    // look kept in the settings.
+    {
+        const juce::File file = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("pianoforge-selftest-look.settings");
+        file.deleteFile();
+        juce::PropertiesFile settings(file, juce::PropertiesFile::Options());
+        pf::app::StreamLook look(settings);
+        pf::LookChannel obs;
+        const bool opened = obs.open(pf::LookChannel::Side::obs);
+        std::uint64_t serial = 0, changed = 0, edited = 0;
+        std::string text;
+        const bool told = obs.other(serial, text, changed) && changed == 0; // the window's look, never edited yet
+        int notified = 0;
+        look.onChanged = [&] { ++notified; };
+        pf::look::Values theirs;
+        theirs.set("sparkles", 9);
+        obs.publish(theirs.text(), pf::LookChannel::nowMs());
+        look.poll();
+        const bool taken = look.values().get("sparkles") == 9 && notified == 1;
+        look.set((std::size_t) pf::look::indexOf("bloom"), 12);
+        const bool sent = obs.other(serial, text, edited) && text.find("bloom=12\n") != std::string::npos && edited == look.changedMs();
+        pf::look::Values older;
+        older.set("sparkles", 1);
+        obs.publish(older.text(), 5); // an older edit from OBS: ours is sent again
+        look.poll();
+        const bool kept = look.values().get("sparkles") == 9 && obs.other(serial, text, edited) && text.find("bloom=12\n") != std::string::npos;
+        look.poll(); // (the settings written)
+        pf::app::StreamLook again(settings);
+        r.check(opened && told && taken && sent && kept && again.values().get("bloom") == 12 && again.values().get("sparkles") == 9,
+                "stream look with OBS: a newer look from OBS taken, an edit here sent, an older one from OBS answered with ours, "
+                "kept in the settings");
+        { // the window, for the record (stream-look.png beside the report)
+            StreamLookPanel panel(again);
+            panel.setSize(940, 820);
+            const juce::Image shot = panel.createComponentSnapshot(panel.getLocalBounds());
+            juce::FileOutputStream out(reportFile.getSiblingFile("stream-look.png"));
+            if (out.openedOk()) {
+                out.setPosition(0);
+                out.truncate();
+                juce::PNGImageFormat().writeImageToStream(shot, out);
+            }
+        }
+        file.deleteFile();
     }
 
     r.line(r.passed ? "RESULT: every check passes" : "RESULT: at least one check fails");
