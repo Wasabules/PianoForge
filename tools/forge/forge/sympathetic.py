@@ -321,11 +321,28 @@ def run(corpus: Path, interactions: Path | None = None, jobs: int = 0, decays_fr
         raise SystemExit(f"no pedal-down / pedal-up pair in {interactions}")
     nb = len(BANDS) - 1
 
+    modes_file = corpus / f"modes-v{SYMPATHETIC_VELOCITY:03d}.json"
+
     def measure(configs):
+        """The responses of every pair to these configurations; kept in the state's folder (sympathetic-cache-*.pkl)
+        and read back while the takes, the strings' modes and the configurations are the same (fitting again then
+        costs seconds, not the half hour of the responses)."""
+        import hashlib
+        import pickle
+
+        key = hashlib.sha256(repr((
+            [(str(d), d.stat().st_mtime, str(u), u.stat().st_mtime) for d, u in pairs], modes_file.stat().st_mtime,
+            [(np.asarray(c[0]).round(9).tolist(), c[1], c[2]) for c in configs])).encode()).hexdigest()[:16]
+        cache = corpus / f"sympathetic-cache-{key}.pkl"
+        if cache.exists():
+            print(f"  responses read back from {cache.name}")
+            return pickle.loads(cache.read_bytes())
         with ProcessPoolExecutor(max_workers=jobs or None) as pool:
-            return list(progress.track(pool.map(_measure_task, [(str(d), str(u), res_by_note, configs)
-                                                                for d, u in pairs]), len(pairs), "pairs",
-                                       "responses of the free strings"))
+            out = list(progress.track(pool.map(_measure_task, [(str(d), str(u), res_by_note, configs)
+                                                               for d, u in pairs]), len(pairs), "pairs",
+                                      "responses of the free strings"))
+        cache.write_bytes(pickle.dumps(out))
+        return out
 
     if calibration_from is not None:
         return [transfer(corpus, calibration_from, res_by_note)]
@@ -377,15 +394,89 @@ def assess(measures: list[dict], shapes_of: list[int]) -> dict:
             "median": float(np.median(a)), "p90": float(np.percentile(a, 90)), "by_register": by_register}
 
 
+def _fill_smooth_fast(values: np.ndarray) -> np.ndarray:
+    """_fill_smooth without its loop: the same interpolation, and the median over three bands (two at the ends)."""
+    known = np.flatnonzero(np.isfinite(values))
+    if len(known) == 0:
+        raise SystemExit("no band of the library's resonance could be measured")
+    v = np.interp(np.arange(len(values)), known, values[known])
+    if len(v) < 3:
+        return _fill_smooth(values)
+    out = np.empty_like(v)
+    a, b, c = v[:-2], v[1:-1], v[2:]
+    out[1:-1] = a + b + c - np.maximum(np.maximum(a, b), c) - np.minimum(np.minimum(a, b), c)
+    out[0], out[-1] = 0.5 * (v[0] + v[1]), 0.5 * (v[-2] + v[-1])
+    return out
+
+
+class _Tables:
+    """The measures as arrays (takes x configurations x windows x bands), for scoring the combinations of shapes
+    quickly: assess() in numpy, its 90th percentile and median only (choose() tries 25^3 combinations; assess()
+    itself took 70 ms each, this a millisecond)."""
+
+    def __init__(self, measures: list[dict]):
+        self.model = np.stack([m["model"] for m in measures])            # T x C x W x B
+        self.library = np.stack([m["library"] for m in measures])        # T x W x B
+        self.velocity = np.array([m["velocity"] for m in measures], dtype=np.float64)
+        self.register = np.array([register_of(m["note"]) for m in measures])
+        by_note: dict[int, list[int]] = {}
+        for t, m in enumerate(measures):
+            by_note.setdefault(m["note"], []).append(t)
+        lo, hi = [], []
+        for takes in by_note.values():  # fit_exponent's pairs: two takes of a note, by velocity
+            if len(takes) == 2:
+                a, b = sorted(takes, key=lambda t: measures[t]["velocity"])
+                lo.append(a)
+                hi.append(b)
+        self.lo, self.hi = np.array(lo, dtype=int), np.array(hi, dtype=int)
+        self.span = 20 * np.log10(self.velocity[self.lo] / self.velocity[self.hi]) if lo else np.zeros(0)
+        self.measured = self.library > FLOOR                             # T x W x B
+        self.positive = self.model > 0                                   # T x C x W x B, and its level in dB:
+        self.model_db = 10 * np.log10(np.where(self.positive, self.model, 1.0))  # computed once, not per combination
+        self.library_db = 10 * np.log10(np.where(self.measured, self.library, 1.0))
+        self.library_total = self.library.sum(axis=2)                    # T x W
+
+    def score(self, shapes_of: list[int]) -> tuple[float, float]:
+        """(90th percentile, median) of assess()'s absolute errors for this combination."""
+        pick = (np.arange(len(self.register)), np.asarray(shapes_of)[self.register])
+        model, positive, model_db = self.model[pick], self.positive[pick], self.model_db[pick]  # T x W x B
+        # fit_exponent
+        exponent = 0.0
+        if len(self.lo):
+            ok = positive[self.lo] & positive[self.hi] & self.measured[self.lo] & self.measured[self.hi]
+            d = (self.library_db[self.lo] - model_db[self.lo]) - (self.library_db[self.hi] - model_db[self.hi])
+            slopes = (d / self.span[:, None, None])[ok]
+            exponent = float(np.clip(np.median(slopes), 0.0, 2.0)) if slopes.size else 0.0
+        scale = (self.velocity / REFERENCE_VELOCITY) ** (2 * exponent)   # T
+        # fit_gains
+        ratio = self.library_db - (model_db + 10 * np.log10(scale)[:, None, None])
+        ok = positive & self.measured
+        nb = model.shape[2]
+        flat = np.sort(np.where(ok, ratio, np.inf).reshape(-1, nb), axis=0)  # each band's values first, sorted
+        counts = ok.reshape(-1, nb).sum(axis=0)
+        cols = np.arange(nb)
+        middle = 0.5 * (flat[np.maximum(counts - 1, 0) // 2, cols] + flat[counts // 2, cols])  # np.median's
+        gains_db = np.where(counts >= MIN_SAMPLES, middle, np.nan)
+        gains = 10 ** (_fill_smooth_fast(gains_db) / 20)
+        # the check: total power per take and window, rounded as assess() reports it
+        model_total = np.sum(model * gains[None, None, :] ** 2, axis=2) * scale[:, None]
+        errors = (np.round(10 * np.log10(model_total + 1e-30), 2)
+                  - np.round(10 * np.log10(self.library_total + 1e-30), 2))[self.library_total > FLOOR]
+        a = np.abs(errors)
+        return float(np.percentile(a, 90)), float(np.median(a))
+
+
 def choose(measures: list[dict], shapes: list[tuple[float, float]]) -> tuple[list[int], dict]:
     """The shape of each register: every combination, the one whose check has the smallest 90th percentile of the
-    absolute error (then median). The gain scatter, used before, follows the check poorly."""
+    absolute error (then median). The gain scatter, used before, follows the check poorly. The combinations are
+    scored on arrays (_Tables); the one kept is assessed in full."""
+    tables = _Tables(measures)
     best = None
     for combo in itertools.product(range(len(shapes)), repeat=len(REGISTERS)):
-        r = assess(measures, list(combo))
-        if best is None or (r["p90"], r["median"]) < (best[1]["p90"], best[1]["median"]):
-            best = (list(combo), r)
-    return best
+        score = tables.score(list(combo))
+        if best is None or score < best[1]:
+            best = (list(combo), score)
+    return best[0], assess(measures, best[0])
 
 
 def fit_notes(measures: list[dict], shapes: list, gains: np.ndarray, exponent: float) -> dict[int, dict]:
