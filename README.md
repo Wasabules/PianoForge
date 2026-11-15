@@ -276,6 +276,7 @@ the reference and the fallback (`PIANOFORGE_FORGE_NATIVE=0`), and the tests chec
 | Variable projection of a partial's modes (Kaufman's Jacobian) | modes | 59 s a bass note | 10 s |
 | Sum of damped sinusoids (the modes, the body) | soundboard, export | 16 s a note | 1.3 s |
 | Bank of one-pole resonators (the free strings) | sympathetic | 64 s a pedal pair | 4.9 s |
+| Three-string unison (coupled strings, closed-form cubic) | export | 88 s a layer | 2.9 s |
 
 With them (and one BLAS thread per worker: the pipeline sets it), a velocity layer's modes take about 3 minutes
 instead of half an hour. A few ill-conditioned partials depend on the order of floating-point sums: their modes

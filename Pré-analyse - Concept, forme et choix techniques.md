@@ -1186,6 +1186,22 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - **Étouffoirs** : ceux de Piano in 162 ne sont que l'enveloppe du SFZ, une même décroissance de 1,1 s sur toutes les notes, même dans l'aigu où un piano n'en a pas. Salamander a la même enveloppe, mais aussi de vrais relâchements de cordes enregistrés. Noire reste la seule mesure réelle des trois.
   - *Licences.* Un profil tiré de Salamander peut être publié en citant Alexander Holm et SFZ Instruments. Pour Piano in 162, aucun texte ne précise ce qui dérive de la banque : avant de publier un profil qui en vient, on demandera l'accord d'Ivy Audio.
 
+**Forge accélérée, profils des banques libres (15 novembre 2026).** Les deux banques libres ont maintenant leur profil modal, mesuré par la même forge que Noire. Il a fallu pour cela corriger une erreur de mesure et rendre la forge bien plus rapide.
+  - *Les échantillons coupés.* Les banques arrêtent souvent leurs échantillons avant la fin du son. Dans Piano in 162, 1 207 des 1 408 notes tenues s'arrêtent avant le relâchement, sans fondu : C4 en nuance piano est coupé à 11,3 s, encore à −42 dB. La forge ajustait des décroissances sur ce silence soudain : 3 à 14 dB d'erreur d'enveloppe contre environ 1 dB pour Noire. Le banc note désormais où un échantillon coupe une note qui sonne encore (`sound_end_sample`), et la forge ne lit pas au-delà : fenêtres des modes, table d'harmonie, fondus de l'export, rapports des étouffoirs, bruit de relâchement. L'erreur tombe à 0,9–1,2 dB dans le grave. Au-delà de la coupure, le moteur prolonge naturellement les modes mesurés.
+  - *Des noyaux C++ pour les boucles lourdes* (`tools/forge/native`, chargés par la forge Python quand ils sont construits). Le code Python reste la référence et la solution de repli, et les tests comparent les deux.
+    - **Les modes d'un partiel** (projection variable, jacobien de Kaufman) : 59 s → 10 s pour une note grave. À réglage BLAS égal, les modes sont identiques à ceux de Python.
+    - **Les sommes de sinusoïdes amorties** (les modes, le corps de la table) : 16 s → 1,3 s par note pour `soundboard`.
+    - **Le banc de résonateurs** des cordes libres (`sympathetic`) : 64 s → 4,9 s par paire.
+    - **L'unisson à trois cordes** : 88 s → 2,9 s par couche. Ce problème peut avoir plusieurs solutions exactes. Les deux versions gardent désormais la première qui est physique par ordre de coût, au lieu de la seule moins coûteuse, qui pouvait faire rejeter un partiel.
+    - **Un constat en chemin** : quelques partiels mal conditionnés changent avec l'ordre des sommes d'un BLAS multithread. La forge tourne donc avec un fil BLAS par processus, ce qui la rend aussi reproductible d'une machine à l'autre.
+  - *Pipeline et suivi.* `forge pipeline` enchaîne les étapes d'un état dans l'ordre, avec un journal et un `progress.json`. Il accepte les couches à mesurer, les étapes à sauter, et reprend où il s'était arrêté. Le *forge monitor* (`tools/forge/monitor`, JUCE) affiche chaque pipeline : ses étapes, celle en cours, le temps restant et la fin du journal. Une couche de modes prend 1 à 3 minutes au lieu d'une demi-heure. Le profil complet de Salamander (16 couches) a pris 52 minutes, en partageant la machine avec celui de Piano in 162.
+  - *Résultats.*
+    - **Piano in 162** : 88 notes × 5 couches (une par vraie couche d'échantillons), 36 356 modes, 22 Mo.
+    - **Salamander** : 88 notes × 16 couches, 113 815 modes, 64 Mo.
+    - **Autotest de l'application** : les deux passent. C4 v64 reste à 0,3 dB près de la référence par fenêtre, et 64 notes pédale enfoncée tournent à 8,6–8,9 fois le temps réel.
+    - **Une phrase musicale rendue en A/B** (`studies/ab_phrase.py <état>`) : le moteur sort au même niveau que Salamander, et 1,1 dB sous Piano in 162.
+  - *Ce qui reste.* La résonance sympathique des banques libres. Salamander n'a pas d'échantillon pédale enfoncée ; ceux de Piano in 162 sont d'autres frappes, alors que la forge isole la résonance en soustrayant deux prises de la même frappe (le cas de Noire). Il faudra une variante par différence de puissance par bande.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

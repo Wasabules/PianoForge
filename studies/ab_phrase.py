@@ -7,8 +7,9 @@ A/B file is written: reference, silence, modal, with one gain for both (peak at 
 The phrase exercises what single notes do not: chords and the shared soundboard, the sustain pedal, the dampers
 (detached notes), re-strikes, and velocities between the layers.
 
-Usage: .venv/Scripts/python studies/ab_phrase.py
-Writes corpus/spikes/engine/phrase.mid, phrase_reference.wav, phrase_modal.wav, phrase_AB_reference-modal.flac.
+Usage: .venv/Scripts/python studies/ab_phrase.py [state]   (default: noire-dry; salamander-dry, in162-close...)
+Writes corpus/spikes/engine/phrase.mid and, per state, phrase_<state>_reference.wav, phrase_<state>_modal.wav,
+phrase_<state>_AB.flac (Noire keeps its former names).
 """
 import struct
 import subprocess
@@ -19,8 +20,10 @@ import numpy as np
 import soundfile as sf
 
 APP = Path("build/windows-msvc/app/PianoForgeApp_artefacts/Release/PianoForge.exe")
-CORPUS = Path("corpus/reference/noire-dry/single-notes")
+STATE = sys.argv[1] if len(sys.argv) > 1 else "noire-dry"
+CORPUS = Path("corpus/reference") / STATE / "single-notes"
 OUT = Path("corpus/spikes/engine")
+TAG = "" if STATE == "noire-dry" else f"_{STATE}"
 PPQ, TEMPO = 480, 500_000  # 120 bpm: one beat = 0.5 s
 
 
@@ -86,15 +89,16 @@ if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     midi = OUT / "phrase.mid"
     write_midi(midi, phrase())
-    ref, fs = render(midi, OUT / "phrase_reference.wav", False)
-    mod, _ = render(midi, OUT / "phrase_modal.wav", True)
+    ref, fs = render(midi, OUT / f"phrase{TAG}_reference.wav", False)
+    mod, _ = render(midi, OUT / f"phrase{TAG}_modal.wav", True)
     n = max(len(ref), len(mod))
     gap = np.zeros((int(1.0 * fs), 2))
     pad = lambda x: np.vstack([x, np.zeros((n - len(x), 2))])
     ab = np.vstack([pad(ref), gap, pad(mod)])
     ab *= 10 ** (-3 / 20) / max(np.max(np.abs(ab)), 1e-9)
-    sf.write(OUT / "phrase_AB_reference-modal.flac", ab, fs, subtype="PCM_24")
+    ab_path = OUT / (f"phrase{TAG}_AB.flac" if TAG else "phrase_AB_reference-modal.flac")
+    sf.write(ab_path, ab, fs, subtype="PCM_24")
     rms = lambda x: 20 * np.log10(np.sqrt(np.mean(x ** 2)) + 1e-12)
     print(f"Levels: reference {rms(ref):.1f} dB, modal {rms(mod):.1f} dB (RMS over the phrase)")
-    print(f"Written {OUT / 'phrase_AB_reference-modal.flac'}")
+    print(f"Written {ab_path}")
     sys.exit(0)
