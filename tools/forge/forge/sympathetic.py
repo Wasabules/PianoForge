@@ -43,7 +43,9 @@ The strings are those of the layer nearest SYMPATHETIC_VELOCITY: a free string r
 the strike that measured them.
 
 The library's resonance of a pair is the pedal-down take minus the pedal-up take when both hold the same strike (a
-deterministic library: Noire; their difference over the first window is then more than 30 dB under the note).
+deterministic library: Noire; their difference over the attack, the first 30 ms, is then more than 30 dB under the
+note: -50 dB at most on Noire's 176 pairs, where two strikes differ by about as much as the note, +1 dB in the median
+on Piano in 162's; the first window, 30-200 ms, would not tell them apart: Noire's resonance reaches -21 dB there).
 Banks recorded with the pedal up and down hold two strikes (Piano in 162): the resonance's power per band and window
 is then estimated as P(down) - g P(up), g the ratio of the two strikes' powers in the band over the first window
 (which carries no measurement then). On Noire, where both are known, the estimate finds the subtraction's power within
@@ -171,7 +173,8 @@ def _pair(down: Path) -> tuple[Path, Path] | None:
     return (down, up) if up is not None else None
 
 
-SAME_STRIKE_DB = -30.0  # a pair holds one strike when its difference over the first window is this far under it
+SAME_STRIKE_DB = -30.0  # a pair holds one strike when its difference over the attack is this far under it
+ATTACK_S = 0.03          # the attack: before any resonance builds up
 
 
 def _library(down: Path, up: Path) -> tuple[np.ndarray, float, int, list[np.ndarray], str]:
@@ -185,8 +188,7 @@ def _library(down: Path, up: Path) -> tuple[np.ndarray, float, int, list[np.ndar
     d = xd[md["note_on_sample"]:md["note_on_sample"] + n].T
     u = xu[mu["note_on_sample"]:mu["note_on_sample"] + n].T
     dec = lambda x: decimate(x, 4, ftype="fir", zero_phase=True, axis=1)
-    a0, b0 = WINDOWS_S[0]
-    if power(d - u, fs, a0, b0) <= power(u, fs, a0, b0) * 10 ** (SAME_STRIKE_DB / 10):
+    if power(d - u, fs, 0.0, ATTACK_S) <= power(u, fs, 0.0, ATTACK_S) * 10 ** (SAME_STRIKE_DB / 10):
         d4 = dec(d - u)
         library, method = [band_powers(d4, fs / 4, a, b) for a, b in WINDOWS_S], "difference"
     else:
@@ -201,6 +203,12 @@ def _library(down: Path, up: Path) -> tuple[np.ndarray, float, int, list[np.ndar
         if ends and min(ends) < b * fs:
             library[w] = np.zeros_like(library[w])
     return u.mean(axis=0), float(fs), md["note"], library, method
+
+
+def _library_task(args) -> tuple[list[np.ndarray], str]:
+    """The library's resonance of one pair and how it was measured (for responses read back from the cache)."""
+    _, _, _, library, method = _library(Path(args[0]), Path(args[1]))
+    return library, method
 
 
 def onset_envelope(n: int, fs: float, onset: float, decay: float = 0.0) -> np.ndarray:
@@ -334,9 +342,14 @@ def run(corpus: Path, interactions: Path | None = None, jobs: int = 0, decays_fr
             [(str(d), d.stat().st_mtime, str(u), u.stat().st_mtime) for d, u in pairs], modes_file.stat().st_mtime,
             [(np.asarray(c[0]).round(9).tolist(), c[1], c[2]) for c in configs])).encode()).hexdigest()[:16]
         cache = corpus / f"sympathetic-cache-{key}.pkl"
-        if cache.exists():
-            print(f"  responses read back from {cache.name}")
-            return pickle.loads(cache.read_bytes())
+        if cache.exists():  # the model's responses; the library's side is measured again (cheap, and its method may
+            print(f"  responses read back from {cache.name}")  # have changed)
+            out = pickle.loads(cache.read_bytes())
+            with ProcessPoolExecutor(max_workers=jobs or None) as pool:
+                libraries = list(pool.map(_library_task, [(str(d), str(u)) for d, u in pairs]))
+            for m, (library, method) in zip(out, libraries):
+                m["library"], m["method"] = np.asarray(library), method
+            return out
         with ProcessPoolExecutor(max_workers=jobs or None) as pool:
             out = list(progress.track(pool.map(_measure_task, [(str(d), str(u), res_by_note, configs)
                                                                for d, u in pairs]), len(pairs), "pairs",

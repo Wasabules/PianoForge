@@ -1200,7 +1200,22 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - **Salamander** : 88 notes × 16 couches, 113 815 modes, 64 Mo.
     - **Autotest de l'application** : les deux passent. C4 v64 reste à 0,3 dB près de la référence par fenêtre, et 64 notes pédale enfoncée tournent à 8,6–8,9 fois le temps réel.
     - **Une phrase musicale rendue en A/B** (`studies/ab_phrase.py <état>`) : le moteur sort au même niveau que Salamander, et 1,1 dB sous Piano in 162.
-  - *Ce qui reste.* La résonance sympathique des banques libres. Salamander n'a pas d'échantillon pédale enfoncée ; ceux de Piano in 162 sont d'autres frappes, alors que la forge isole la résonance en soustrayant deux prises de la même frappe (le cas de Noire). Il faudra une variante par différence de puissance par bande.
+  - *Ce qui restait : la résonance sympathique des banques libres* (fait le même soir).
+    - **Le problème.** Salamander n'a aucun échantillon pédale enfoncée. Ceux de Piano in 162 sont d'autres frappes, alors que la forge isolait la résonance en soustrayant deux prises de la même frappe.
+    - **La méthode.** Pour deux frappes, la forge estime désormais la puissance de la résonance par bande et par fenêtre : P(enfoncée) − g·P(levée), où g est le rapport des deux frappes dans la première fenêtre. Elle choisit seule, paire par paire : même frappe, soustraction ; deux frappes, puissance.
+    - **Les vérifications.**
+      - Sur Noire, où la vraie résonance est connue, l'estimation la retrouve à 0,1 dB près (médiane) après 1,5 s, et à 0,6 dB entre 0,5 et 1,5 s.
+      - Entre les deux round robins pédale levée de Piano in 162, qui n'ont aucune résonance, elle est centrée sur zéro. Ses vraies paires montrent au contraire la pédale ajoutant environ 40 % de puissance.
+      - Ajustée séparément sur les notes paires et impaires, la calibration concorde à 0,6 dB par bande.
+    - **Résultat sur Piano in 162** : le modèle tient la moitié des prises et fenêtres à 4,8 dB, et 2,3 dB avec l'ajustement par note (90 % à 7,3 dB), comme Noire en son temps.
+    - **Salamander** prend cette calibration sur ses propres cordes (`--sympathetic-from`).
+    - **Accélérations en chemin.**
+      - Le choix des formes d'excitation essayait 15 625 combinaisons à 432 ms chacune, près de deux heures. Calculé sur des tableaux, il prend 54 s, avec les mêmes critères.
+      - Les réponses des cordes, une demi-heure par banque, sont gardées en cache.
+      - Le banc de résonateurs vectorise ses sommes, ce qui le rend 2,7 fois plus rapide.
+  - *Noire repassée dans le pipeline accéléré.* Le profil est reproduit : sur la phrase A/B, l'écart avec l'ancien est 31 dB sous la musique, sans différence de niveau, accord pédalé et arpège compris. La résonance sympathique est un peu meilleure (ajustement par note : la moitié à 2,3 dB, 90 % à 6,1 dB, contre 2,5 et 7,4). Le classement « une ou deux frappes » se fait désormais sur l'attaque (0–30 ms) : −50 dB au plus pour Noire, +1 dB en médiane pour Piano in 162. Dans la première fenêtre (30–200 ms), la résonance de Noire monte déjà à −21 dB, ce qui avait fait classer 56 de ses paires comme deux frappes.
+  - *Un constat.* Les gains de couplage de Piano in 162 sont 10 à 21 dB au-dessus de ceux de Noire. Sur le Steinway B enregistré pédale enfoncée, l'effet de la pédale est bien plus fort que la couche de résonance simulée de Noire : la note jouée elle-même s'y épanouit aussi. Le modèle suit chacune (la moitié à 2,3 dB). Le choix de la résonance à garder fera partie de la décision de fin de projet.
+  - *Une leçon d'outillage.* Un pipeline dure une heure. L'export, modifié pendant ce temps, a rencontré l'ancien `forge.takes` encore chargé et a échoué. Le pipeline charge désormais tous ses modules au départ.
 
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
