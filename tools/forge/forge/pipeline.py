@@ -60,7 +60,8 @@ def _fresh(output: Path, corpus: Path) -> bool:
     return output.exists() and (not index.exists() or output.stat().st_mtime > index.stat().st_mtime)
 
 
-def _run_step(step: str, velocity: int | None, corpus: Path, jobs: int, resume: bool) -> str:
+def _run_step(step: str, velocity: int | None, corpus: Path, jobs: int, resume: bool,
+              sympathetic_from: Path | None = None) -> str:
     """Runs one step; returns 'done' or 'skipped' (resume: its output is already there)."""
     if step == "analyze":
         from forge.analysis import run
@@ -86,7 +87,7 @@ def _run_step(step: str, velocity: int | None, corpus: Path, jobs: int, resume: 
         write(corpus, None)
     elif step == "sympathetic":
         from forge.sympathetic import run
-        run(corpus, None, jobs, None)
+        run(corpus, None, jobs, None, sympathetic_from)
     elif step == "export":
         from forge.export import run
         run(corpus, jobs)
@@ -94,7 +95,7 @@ def _run_step(step: str, velocity: int | None, corpus: Path, jobs: int, resume: 
 
 
 def run(corpus: Path, layers: list[int] | None = None, skip: set[str] | None = None, jobs: int = 0,
-        resume: bool = False) -> int:
+        resume: bool = False, sympathetic_from: Path | None = None) -> int:
     for name in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):  # before numpy, in the workers too
         os.environ[name] = "1"
     from forge import native, progress
@@ -111,7 +112,7 @@ def run(corpus: Path, layers: list[int] | None = None, skip: set[str] | None = N
         progress.begin(i)
         started = time.time()
         try:
-            result = _run_step(step, velocity, corpus, jobs, resume)
+            result = _run_step(step, velocity, corpus, jobs, resume, sympathetic_from)
             progress.end(i, result)
             print(f"{time.strftime('%H:%M:%S')}    {name}: {result} ({time.time() - started:.0f} s)")
         except (Exception, SystemExit) as error:  # a step's SystemExit carries its reason

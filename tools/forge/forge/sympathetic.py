@@ -42,6 +42,17 @@ little: two velocities only); the shape kept is the one with the smallest mean a
 The strings are those of the layer nearest SYMPATHETIC_VELOCITY: a free string rings with its own modes, whatever
 the strike that measured them.
 
+The library's resonance of a pair is the pedal-down take minus the pedal-up take when both hold the same strike (a
+deterministic library: Noire; their difference over the first window is then more than 30 dB under the note).
+Banks recorded with the pedal up and down hold two strikes (Piano in 162): the resonance's power per band and window
+is then estimated as P(down) - g P(up), g the ratio of the two strikes' powers in the band over the first window
+(which carries no measurement then). On Noire, where both are known, the estimate finds the subtraction's power within
+0.1 dB (median) after 1.5 s and 0.6 dB over 0.5-1.5 s (studies/sympathetic_power_check.py); between two strikes
+without resonance (Piano in 162's round robins) it is centred on zero, while its pairs show the pedal adding about
+40 % of the take's power (studies/sympathetic_power_noise.py). Windows past where a recording stops (an SFZ sample
+cut short) carry no measurement. A bank with no pedal-down recording can take another's calibration with its own
+strings (calibration_from: the band gains, extra decays, drive shapes and velocity law).
+
 sympathetic.json: bands_hz (edges), gains, extra_decays, registers [{first, onset_s, drive_decay_s (0: none), gain_db,
 velocity_exponent}] (one per exciting note measured: the note's own fit; and
 onset_s, drive_decay_s: the first register's), velocity_exponent, reference_velocity, f_max_hz,
@@ -63,6 +74,7 @@ from scipy.signal import decimate, lfilter
 
 from forge.note_modes import clean
 from forge import progress
+from forge.takes import sound_end
 
 SYMPATHETIC_VELOCITY = 64
 F_MAX = 25.0 * 2 ** (22 / 3)  # 4032 Hz: the library's resonance holds no energy above 4 kHz
@@ -159,8 +171,12 @@ def _pair(down: Path) -> tuple[Path, Path] | None:
     return (down, up) if up is not None else None
 
 
-def _load_pair(down: Path, up: Path) -> tuple[np.ndarray, np.ndarray, float, int]:
-    """(drive mono, library resonance stereo, rate, note) from the note-on, at the full rate."""
+SAME_STRIKE_DB = -30.0  # a pair holds one strike when its difference over the first window is this far under it
+
+
+def _library(down: Path, up: Path) -> tuple[np.ndarray, float, int, list[np.ndarray], str]:
+    """(drive mono, rate, note, the library's resonance power per window and band, the method: 'difference' or
+    'power')."""
     md = json.loads(down.with_suffix(".json").read_text(encoding="utf-8"))
     mu = json.loads(up.with_suffix(".json").read_text(encoding="utf-8"))
     xd, fs = sf.read(down, dtype="float64", always_2d=True)
@@ -168,7 +184,23 @@ def _load_pair(down: Path, up: Path) -> tuple[np.ndarray, np.ndarray, float, int
     n = int(DRIVE_S * fs)
     d = xd[md["note_on_sample"]:md["note_on_sample"] + n].T
     u = xu[mu["note_on_sample"]:mu["note_on_sample"] + n].T
-    return u.mean(axis=0), d - u, float(fs), md["note"]
+    dec = lambda x: decimate(x, 4, ftype="fir", zero_phase=True, axis=1)
+    a0, b0 = WINDOWS_S[0]
+    if power(d - u, fs, a0, b0) <= power(u, fs, a0, b0) * 10 ** (SAME_STRIKE_DB / 10):
+        d4 = dec(d - u)
+        library, method = [band_powers(d4, fs / 4, a, b) for a, b in WINDOWS_S], "difference"
+    else:
+        d4, u4 = dec(d), dec(u)
+        pd = [band_powers(d4, fs / 4, a, b) for a, b in WINDOWS_S]
+        pu = [band_powers(u4, fs / 4, a, b) for a, b in WINDOWS_S]
+        g = np.where(pu[0] > 0, pd[0] / np.maximum(pu[0], 1e-300), 1.0)
+        library = [np.zeros_like(pd[0])] + [np.maximum(pd[w] - g * pu[w], 0.0) for w in range(1, len(WINDOWS_S))]
+        method = "power"
+    ends = [e - m["note_on_sample"] for m in (md, mu) if (e := sound_end(m)) is not None]
+    for w, (a, b) in enumerate(WINDOWS_S):  # a window past where a recording stops: no measurement
+        if ends and min(ends) < b * fs:
+            library[w] = np.zeros_like(library[w])
+    return u.mean(axis=0), float(fs), md["note"], library, method
 
 
 def onset_envelope(n: int, fs: float, onset: float, decay: float = 0.0) -> np.ndarray:
@@ -183,10 +215,8 @@ def _measure_task(args) -> dict:
     """For one pair: the library's power per window and band, and the model's for each configuration (extra decay
     per band, onset, drive decay), with unit coupling, each band alone at its own rate."""
     down, up, res_by_note, configs = Path(args[0]), Path(args[1]), args[2], args[3]
-    drive, diff, fs, note = _load_pair(down, up)
+    drive, fs, note, library, method = _library(down, up)
     meta = json.loads(down.with_suffix(".json").read_text(encoding="utf-8"))
-    d4 = decimate(diff, 4, ftype="fir", zero_phase=True, axis=1)
-    library = [band_powers(d4, fs / 4, a, b) for a, b in WINDOWS_S]
     others = np.concatenate([r for m, r in res_by_note.items() if m != note])  # the struck string is the voice
     bands = band_of(others[:, 0])
     model = np.zeros((len(configs), len(WINDOWS_S), len(BANDS) - 1))
@@ -203,7 +233,7 @@ def _measure_task(args) -> dict:
                 y = response(drives[dec], fs / dec, others[bands == b], extra=extra)
                 model[i, :, b] = [power(y, fs / dec, a, c) for a, c in WINDOWS_S]
     return {"take": down.stem, "note": note, "velocity": meta["velocity"], "model": model,
-            "library": np.asarray(library)}
+            "library": np.asarray(library), "method": method}
 
 
 def _band_fit(measures: list[dict], i: int, b: int, scale: dict | None = None):
@@ -276,7 +306,8 @@ def fit_gains(measures: list[dict], i: int, scale: dict[str, float]) -> tuple[np
     return 10 ** (_fill_smooth(gains_db) / 20), spread
 
 
-def run(corpus: Path, interactions: Path | None = None, jobs: int = 0, decays_from: Path | None = None) -> list[Path]:
+def run(corpus: Path, interactions: Path | None = None, jobs: int = 0, decays_from: Path | None = None,
+        calibration_from: Path | None = None) -> list[Path]:
     """corpus: the reference state folder (modes); interactions: the same state in the interactions session;
     decays_from: a sympathetic.json whose extra decays are kept (the first, longest stage skipped)."""
     interactions = interactions or corpus.parent.parent / "interactions" / corpus.name
@@ -296,12 +327,18 @@ def run(corpus: Path, interactions: Path | None = None, jobs: int = 0, decays_fr
                                                                 for d, u in pairs]), len(pairs), "pairs",
                                        "responses of the free strings"))
 
+    if calibration_from is not None:
+        return [transfer(corpus, calibration_from, res_by_note)]
     # 1. The extra decay per band (no onset, no drive decay).
     if decays_from is not None:
         extra = np.asarray(json.loads(decays_from.read_text(encoding="utf-8"))["extra_decays"], dtype=np.float64)
         print("  extra decay per band (1/s), from " + decays_from.name + ": " + " ".join(f"{e:g}" for e in extra))
     else:
         measures = measure([(np.full(nb, e), 0.0, 0.0) for e in EXTRA_DECAYS])
+        methods = {m["method"] for m in measures}
+        print("  the library's resonance: " + ", ".join(
+            f"{sum(m['method'] == k for m in measures)} pairs by {'subtraction (one strike)' if k == 'difference' else 'power (two strikes)'}"
+            for k in sorted(methods)))
         extra = fit_decays(measures)
         print("  extra decay per band (1/s): " + " ".join(f"{e:g}" for e in extra) + f" ({time.time() - start:.0f} s)")
     # 2. The drive's shape per register of the exciting note, with those decays.
@@ -430,6 +467,27 @@ def write(corpus: Path, interactions: Path, res_by_note: dict, extra: np.ndarray
         "velocity_exponent": round(exponent, 4),
         "reference_velocity": REFERENCE_VELOCITY, "windows_s": WINDOWS_S, "fit": r["report"], "notes": notes},
         separators=(",", ":")), encoding="utf-8")
+    return out
+
+
+def transfer(corpus: Path, source: Path, res_by_note: dict) -> Path:
+    """sympathetic.json for a bank with no pedal-down recording: another bank's calibration (band gains, extra decays,
+    drive shapes, velocity law) on this bank's own strings."""
+    data = json.loads(Path(source).read_text(encoding="utf-8"))
+    gains, extra = np.asarray(data["gains"], dtype=np.float64), np.asarray(data["extra_decays"], dtype=np.float64)
+    notes = []
+    for m, res in sorted(res_by_note.items()):
+        bands = band_of(res[:, 0])
+        rows = np.column_stack([res[:, 0], res[:, 1] + extra[bands], gains[bands], res[:, 2:6]])
+        notes.append({"midi": m, "resonators": [[round(float(v[0]), 5), round(float(v[1]), 5),
+                                                 *(float(f"{x:.6e}") for x in v[2:])] for v in rows]})
+    out = corpus / "sympathetic.json"
+    keep = ("velocity", "f_max_hz", "bands_hz", "gains", "extra_decays", "onset_s", "drive_decay_s", "registers",
+            "velocity_exponent", "reference_velocity", "windows_s")
+    out.write_text(json.dumps({**{k: data[k] for k in keep if k in data}, "source": str(corpus),
+                               "calibration_from": str(source), "notes": notes}, separators=(",", ":")),
+                   encoding="utf-8")
+    print(f"  calibration of {source} on this bank's {sum(len(r) for r in res_by_note.values())} resonators")
     return out
 
 

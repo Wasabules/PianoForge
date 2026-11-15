@@ -64,7 +64,8 @@ def cmd_sympathetic(args) -> int:
     from forge.sympathetic import run
 
     for path in run(Path(args.corpus), Path(args.interactions) if args.interactions else None, args.jobs,
-                    Path(args.decays_from) if args.decays_from else None):
+                    Path(args.decays_from) if args.decays_from else None,
+                    Path(args.calibration_from) if args.calibration_from else None):
         print(f"Written: {path}")
     return 0
 
@@ -85,7 +86,8 @@ def cmd_pipeline(args) -> int:
     unknown = skip - set(STEPS)
     if unknown:
         raise SystemExit(f"unknown step(s): {', '.join(sorted(unknown))}; steps: {', '.join(STEPS)}")
-    return run(Path(args.corpus), layers, skip, args.jobs, args.resume)
+    return run(Path(args.corpus), layers, skip, args.jobs, args.resume,
+               Path(args.sympathetic_from) if args.sympathetic_from else None)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -132,6 +134,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--jobs", type=int, default=0, help="worker processes (default: one per core)")
     p.add_argument("--decays-from", help="keep the extra decays of this sympathetic.json (skips the first, longest "
                                          "stage)")
+    p.add_argument("--calibration-from", help="a bank with no pedal-down recording: take this sympathetic.json's "
+                                              "calibration, on this bank's own strings")
     p.set_defaults(func=cmd_sympathetic)
     p = sub.add_parser("pipeline", help="every step of a state's profile in order, with its progress (progress.json, "
                                         "read by the forge monitor) and log (forge-log.txt)")
@@ -141,6 +145,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--skip", help="steps left out, e.g. sympathetic,half-pedal")
     p.add_argument("--resume", action="store_true", help="keep the modes and soundboard layers already measured "
                                                          "since the last render")
+    p.add_argument("--sympathetic-from", help="a bank with no pedal-down recording: the sympathetic.json whose "
+                                              "calibration it takes")
     p.add_argument("--jobs", type=int, default=0, help="worker processes (default: one per core)")
     p.set_defaults(func=cmd_pipeline)
     p = sub.add_parser("export", help="write the modal profile played by the engine (modal-profile.bin), from the "
