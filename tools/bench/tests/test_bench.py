@@ -208,6 +208,8 @@ class Storage(unittest.TestCase):
             self.assertLess(max_diff_db(audio, back), -130)  # 24-bit quantization
             self.assertEqual(corpus.rebuild_index(), 1)
             self.assertFalse(list(Path(d).rglob("*.tmp*")))
+            (Path(d) / "modes-v064.json").write_text("{}", encoding="utf-8")  # the forge's outputs are no takes
+            self.assertEqual(corpus.rebuild_index(), 1)
 
     def test_every_take_gets_its_own_file(self):
         # Regression: names with decimal durations ("t0.1", "t0.5") used to share one file.

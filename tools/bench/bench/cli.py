@@ -138,7 +138,8 @@ def _render_one(host, take: Take, fs: int, corpus: Corpus, context: dict, speed:
     audio = host.render_take(take, speed=speed)
     result = analyze(audio, fs, take.meta.get("note_on_sample"), take.events, take.meta.get("note_off_sample"))
     meta = {**take.meta, "id": take.id, "key": take.key(context), "duration_s": round(take.duration / fs, 4),
-            "events": take.events, "speed": speed, "render_s": round(time.monotonic() - t0, 3), **result}
+            "events": take.events, "speed": speed, "render_s": round(time.monotonic() - t0, 3), **result,
+            **getattr(host, "last_info", {})}  # an SFZ bank: where a sample cut the note short
     corpus.write(take, audio, fs, meta)
     return result
 

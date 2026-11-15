@@ -250,14 +250,36 @@ their measures side by side: tuning, inharmonicity, sustain, brightness, dynamic
 | `forge soundboard` | The soundboard body: resonances shared by every note, amplitudes per note (`soundboard-v064.json`). Needs `forge modes`. The resonances are measured at velocity 64 and reused for the other velocities. |
 | `forge export` | The modal profile played by the engine (`modal-profile.bin`), from the modes and the soundboard of every measured velocity layer, the damper curves and the attack residuals; and each layer's measures for the engine between two layers (section LEVL): the attack's energy as recorded, and each partial's level as it sounds over the sustain. A profile exported before them still plays, with the attack at the overall gain between two layers. |
 
-The modal profile of the reference corpus takes about 1.5 hours to measure (every velocity layer), then about a
-quarter of an hour to export (6 cores):
+`forge pipeline` runs every step of a state's profile in order (analyze, modes and soundboard at each layer,
+release-curves, release-noise, half-pedal, sympathetic, export), logs to `forge-log.txt` and writes its progress
+to `progress.json` in the state's folder:
 
 ```
-for v in 8 16 24 32 40 48 56 64 72 80 88 96 104 112 120 127; do .venv/Scripts/forge modes --velocity $v; done
-for v in 64 8 16 24 32 40 48 56 72 80 88 96 104 112 120 127; do .venv/Scripts/forge soundboard --velocity $v; done
-.venv/Scripts/forge export
+.venv\Scripts\forge pipeline --corpus corpus\reference\noire-dry
+.venv\Scripts\forge pipeline --corpus corpus\reference\in162-close --layers 64,32,80,96,127 --skip sympathetic
 ```
+
+(`--resume` keeps the layers already measured since the last render.) The forge monitor follows every pipeline of
+a corpus: the steps, the one under way, the time left and the end of the log:
+
+```
+cmake --build --preset windows-release --target PianoForgeForgeMonitor
+build\windows-msvc\tools\forge\monitor\PianoForgeForgeMonitor_artefacts\Release\PianoForgeForgeMonitor.exe corpus
+```
+
+The forge's heavy loops have native kernels (`tools/forge/native`, C++, built with the project, or alone:
+`cmake -S tools/forge/native -B build/forge-native`), loaded by the Python forge when built; the Python code stays
+the reference and the fallback (`PIANOFORGE_FORGE_NATIVE=0`), and the tests check one against the other:
+
+| Kernel | Used by | Python | Native |
+|---|---|---|---|
+| Variable projection of a partial's modes (Kaufman's Jacobian) | modes | 59 s a bass note | 10 s |
+| Sum of damped sinusoids (the modes, the body) | soundboard, export | 16 s a note | 1.3 s |
+| Bank of one-pole resonators (the free strings) | sympathetic | 64 s a pedal pair | 4.9 s |
+
+With them (and one BLAS thread per worker: the pipeline sets it), a velocity layer's modes take about 3 minutes
+instead of half an hour. A few ill-conditioned partials depend on the order of floating-point sums: their modes
+change with a multithreaded BLAS, never between the native and the Python code under the same settings.
 
 Every forge command takes `--corpus corpus/reference/<state>` (default: `noire-dry`). A profile calibrated on Noire
 stays local, like its corpus, and is never published; one built from a free bank may be, with the bank's credit.

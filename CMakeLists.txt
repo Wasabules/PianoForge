@@ -27,6 +27,11 @@ FetchContent_MakeAvailable(JUCE)
 add_subdirectory(engine)
 add_subdirectory(app)
 
+# The forge's tools: its native kernels (C++, loaded by the Python forge) and the forge monitor (a small window that
+# follows the forge pipelines' progress).
+add_subdirectory(tools/forge/native)
+add_subdirectory(tools/forge/monitor)
+
 # The VST3 instrument (plugin/): the same engine, room and limiter in a host.
 option(PIANOFORGE_PLUGIN "Build the VST3 plugin" ON)
 if(PIANOFORGE_PLUGIN)

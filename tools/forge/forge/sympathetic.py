@@ -62,6 +62,7 @@ import soundfile as sf
 from scipy.signal import decimate, lfilter
 
 from forge.note_modes import clean
+from forge import progress
 
 SYMPATHETIC_VELOCITY = 64
 F_MAX = 25.0 * 2 ** (22 / 3)  # 4032 Hz: the library's resonance holds no energy above 4 kHz
@@ -112,10 +113,19 @@ def decimation_of(band: int, fs: float) -> int:
 def response(x: np.ndarray, fs: float, res: np.ndarray, gains=None, extra=None) -> np.ndarray:
     """Stereo response (2 x samples) of the resonators `res` (k x 6) to the mono drive x at the rate fs. Unit
     coupling (b = 1 per second) and no extra decay when `gains` / `extra` are None, otherwise per band."""
-    y = np.zeros((2, len(x)))
     bands = band_of(res[:, 0])
-    b = np.ones(len(res)) if gains is None else np.asarray(gains)[bands]
-    e = np.zeros(len(res)) if extra is None else np.asarray(extra)[bands]
+    b = np.ones(len(res)) if gains is None else np.asarray(gains, dtype=np.float64)[bands]
+    e = np.zeros(len(res)) if extra is None else np.asarray(extra, dtype=np.float64)[bands]
+    from forge import native
+
+    if native.available:  # the same recurrences in C++ (tools/forge/native/resonators.cpp), 50 times faster
+        return native.resonator_bank(x, fs, res, b, e)
+    return _response_python(x, fs, res, b, e)
+
+
+def _response_python(x: np.ndarray, fs: float, res: np.ndarray, b: np.ndarray, e: np.ndarray) -> np.ndarray:
+    """response() in Python (the reference): one lfilter per resonator."""
+    y = np.zeros((2, len(x)))
     for k, (f, d, lr, li, rr, ri) in enumerate(res):
         if b[k] == 0:
             continue
@@ -282,7 +292,9 @@ def run(corpus: Path, interactions: Path | None = None, jobs: int = 0, decays_fr
 
     def measure(configs):
         with ProcessPoolExecutor(max_workers=jobs or None) as pool:
-            return list(pool.map(_measure_task, [(str(d), str(u), res_by_note, configs) for d, u in pairs]))
+            return list(progress.track(pool.map(_measure_task, [(str(d), str(u), res_by_note, configs)
+                                                                for d, u in pairs]), len(pairs), "pairs",
+                                       "responses of the free strings"))
 
     # 1. The extra decay per band (no onset, no drive decay).
     if decays_from is not None:

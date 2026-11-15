@@ -31,6 +31,8 @@ import soundfile as sf
 
 from forge.modes import BandExtractor, _hankel_cov, esprit_poles, synthesize
 from forge.note_modes import clean, partial_modes
+from forge.takes import held_end
+from forge import progress
 
 BAND = (30.0, 700.0)
 T0, T1 = 0.03, 2.5
@@ -45,7 +47,7 @@ def residual_baseband(path: Path, note: dict, seconds: float | None = None) -> t
     the part of the hold that is read (it changes the baseband rate, which depends on the length)."""
     meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     audio, fs = sf.read(path, dtype="float64", always_2d=True)
-    on, off = meta["note_on_sample"], meta["note_off_sample"]
+    on, off = meta["note_on_sample"], held_end(meta)
     if seconds is not None:
         off = min(off, on + int(round(seconds * fs)))
     x = audio[on:off].T
@@ -171,7 +173,7 @@ def run(corpus: Path, velocity: int = 64, jobs: int = 0) -> list[Path]:
               f"T60 median {np.median(6.91 / decays):.2f} s")
     tasks = [(str(takes[m]), notes[m], freqs.tolist(), decays.tolist()) for m in sorted(notes) if m in takes]
     with ProcessPoolExecutor(max_workers=jobs or None) as pool:
-        fitted = list(pool.map(_fit_task, tasks))
+        fitted = list(progress.track(pool.map(_fit_task, tasks), len(tasks), "notes", "body amplitudes"))
     print(f"  amplitudes of {len(fitted)} notes ({time.time() - start:.0f} s)")
     out = corpus / f"soundboard-v{velocity:03d}.json"
     out.write_text(json.dumps({
@@ -195,7 +197,11 @@ def load(path: Path) -> tuple[np.ndarray, np.ndarray, dict[int, np.ndarray]]:
 
 
 def synthesize_body(freqs: np.ndarray, decays: np.ndarray, amps: np.ndarray, length: int, fs: float) -> np.ndarray:
-    """The body of one note (channels x length), from the note-on."""
+    """The body of one note (channels x length), from the note-on. Native when the forge's library is built."""
+    from forge import native
+
+    if native.available:
+        return native.damped_sum(freqs, decays, amps, length, fs)
     t = np.arange(length) / fs
     out = np.zeros((amps.shape[0], length))
     for k in range(len(freqs)):

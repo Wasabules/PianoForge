@@ -18,6 +18,8 @@ import numpy as np
 import soundfile as sf
 
 from forge.partials import NoteAnalysis, Partial, analyze_note
+from forge.takes import held_end
+from forge import progress
 
 NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 MIN_PARTIALS_FOR_B = 4  # fewer partials cannot pin down the curvature of f_n / n
@@ -31,7 +33,8 @@ def _analyze(args: tuple[str, int]) -> dict:
     path, velocity = args
     meta = json.loads(Path(path).with_suffix(".json").read_text(encoding="utf-8"))
     audio, fs = sf.read(path, dtype="float64", always_2d=True)
-    result = analyze_note(audio.T, fs, meta["note"], meta["note_on_sample"], meta["hold"])
+    hold = (held_end(meta) - meta["note_on_sample"]) / fs  # to where the recording stops, if earlier
+    result = analyze_note(audio.T, fs, meta["note"], meta["note_on_sample"], hold)
     out = asdict(result)
     out.update(velocity=velocity, file=Path(path).name, sample_rate=fs)
     return out
@@ -68,7 +71,7 @@ def analyze_keyboard(corpus: Path, velocity: int = 64, log=print) -> dict:
     workers = max(1, (os.cpu_count() or 2) - 1)
     log(f"Analyzing {len(paths)} notes at velocity {velocity} on {workers} processes...")
     with ProcessPoolExecutor(max_workers=workers) as pool:
-        notes = list(pool.map(_analyze, paths))
+        notes = list(progress.track(pool.map(_analyze, paths), len(paths), "notes", "partials and decays"))
 
     reliable = [n for n in notes if len(n["partials"]) >= MIN_PARTIALS_FOR_B and n["inharmonicity"] > 0]
     fit = _fit_log_b(np.array([n["midi"] for n in reliable], float), np.array([n["inharmonicity"] for n in reliable]))

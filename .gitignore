@@ -3,6 +3,8 @@
 __pycache__/
 *.egg-info/
 build/
+# The forge's native kernels, copied next to the forge package by the build
+tools/forge/forge/_native/
 
 # Données locales : rendus de bibliothèques commerciales (EULA) et états propres à cette machine
 corpus/

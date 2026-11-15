@@ -77,6 +77,17 @@ def cmd_export(args) -> int:
     return 0
 
 
+def cmd_pipeline(args) -> int:
+    from forge.pipeline import LAYERS, STEPS, run
+
+    layers = [int(v) for v in args.layers.split(",")] if args.layers else list(LAYERS)
+    skip = {s.strip() for s in args.skip.split(",")} if args.skip else set()
+    unknown = skip - set(STEPS)
+    if unknown:
+        raise SystemExit(f"unknown step(s): {', '.join(sorted(unknown))}; steps: {', '.join(STEPS)}")
+    return run(Path(args.corpus), layers, skip, args.jobs, args.resume)
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -122,6 +133,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--decays-from", help="keep the extra decays of this sympathetic.json (skips the first, longest "
                                          "stage)")
     p.set_defaults(func=cmd_sympathetic)
+    p = sub.add_parser("pipeline", help="every step of a state's profile in order, with its progress (progress.json, "
+                                        "read by the forge monitor) and log (forge-log.txt)")
+    p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"))
+    p.add_argument("--layers", help="velocity layers to measure, e.g. 64,32,80,96,127 (default: the 16 of the "
+                                    "reference session)")
+    p.add_argument("--skip", help="steps left out, e.g. sympathetic,half-pedal")
+    p.add_argument("--resume", action="store_true", help="keep the modes and soundboard layers already measured "
+                                                         "since the last render")
+    p.add_argument("--jobs", type=int, default=0, help="worker processes (default: one per core)")
+    p.set_defaults(func=cmd_pipeline)
     p = sub.add_parser("export", help="write the modal profile played by the engine (modal-profile.bin), from the "
                                       "modes and soundboard of every measured velocity layer")
     p.add_argument("--corpus", default=str(PROJECT_ROOT / "corpus" / "reference" / "noire-dry"))

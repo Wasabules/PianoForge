@@ -68,8 +68,9 @@ class Corpus:
         return data.T.copy(), fs
 
     def metas(self) -> list[dict]:
+        """The takes' JSON files: in the passes' folders (the state's own folder also holds the forge's outputs)."""
         return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(self.root.rglob("*.json"))
-                if p.name not in RESERVED_JSON]
+                if p.name not in RESERVED_JSON and p.parent != self.root]
 
     def write_manifest(self, manifest: dict) -> None:
         self.root.mkdir(parents=True, exist_ok=True)

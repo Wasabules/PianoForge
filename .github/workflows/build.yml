@@ -73,6 +73,10 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: pip install -e tools/forge -e tools/bench pytest
+      - name: The forge's native kernels (C++; the tests check them against the Python reference)
+        run: |
+          cmake -S tools/forge/native -B build/forge-native -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/forge-native
       - name: Test the forge
         run: pytest -q tools/forge/tests
       - name: Test the bench (no Kontakt needed: its protocol, checks, storage and SFZ player)

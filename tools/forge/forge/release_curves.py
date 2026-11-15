@@ -35,6 +35,8 @@ import numpy as np
 import soundfile as sf
 
 from forge.modes import BandExtractor
+from forge.takes import sound_end
+from forge import progress
 
 STEP_S = 0.01      # curve resolution
 WINDOW_S = 0.02    # power window
@@ -168,7 +170,16 @@ def measure(corpus: Path, log=print) -> dict:
             held, _ = _load(held_path)
             off = meta["note_off_sample"]
             p_rel, p_held = _powers(rel, off, fs, count), _powers(held, off, fs, count)
-            ratios.append(np.where(p_held > 1e-20, p_rel / np.maximum(p_held, 1e-30), 1.0))
+            ratio = np.where(p_held > 1e-20, p_rel / np.maximum(p_held, 1e-30), 1.0)
+            # Where a sample cuts the held note short (an SFZ bank), the ratio past the cut compares silences: it
+            # keeps its last measured value.
+            ends = [e for e in (sound_end(json.loads(held_path.with_suffix(".json").read_text(encoding="utf-8"))),
+                                sound_end(meta)) if e is not None]
+            if ends:
+                valid = max(1, (min(ends) - off - round(WINDOW_S * fs)) // round(STEP_S * fs) + 1)
+                if valid < count:
+                    ratio[valid:] = ratio[valid - 1]
+            ratios.append(ratio)
             v = meta["velocity"]
             ratio_of[v] = ratios[-1]
             if v not in modes and (corpus / f"modes-v{v:03d}.json").exists():
@@ -193,7 +204,9 @@ def measure(corpus: Path, log=print) -> dict:
     for key, take in group_tasks:
         by_key[key].append(take)
     with ProcessPoolExecutor() as pool:
-        for note, hold, powers in pool.map(_group_task, [(k[0], k[1], t, count) for k, t in sorted(by_key.items())]):
+        group_tasks_list = [(k[0], k[1], t, count) for k, t in sorted(by_key.items())]
+        for note, hold, powers in progress.track(pool.map(_group_task, group_tasks_list), len(group_tasks_list),
+                                                 "notes", "partial groups"):
             i, j = notes.index(note), holds.index(hold)
             group_db[i, j] = group_curves(sum(p[0] for p in powers.values()), sum(p[1] for p in powers.values()),
                                           curves[i, j])

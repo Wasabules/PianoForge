@@ -31,6 +31,7 @@ import soundfile as sf
 
 from forge import soundboard
 from forge.modes import BandExtractor
+from forge import progress
 
 HOLDS_USED = (0.5, 2.0)   # after a short hold the strike's own body still rings, which the difference also holds
 LONG_HOLD_S, LONG_HOLD_VELOCITY = 10.0, 40  # the interactions session's pedal-up takes (single-notes has v40)
@@ -91,7 +92,7 @@ def run(corpus: Path, jobs: int = 0, interactions: Path | None = None) -> list[P
         tasks.append((str(take), str(held), off, off - meta["note_on_sample"] + on_held, modes_of(LONG_HOLD_VELOCITY)[note],
                       freqs.tolist(), decays.tolist(), LONG_HOLD_VELOCITY, LONG_HOLD_S))
     with ProcessPoolExecutor(max_workers=jobs or None) as pool:
-        fitted = list(pool.map(_fit_task, tasks))
+        fitted = list(progress.track(pool.map(_fit_task, tasks), len(tasks), "takes", "release knocks"))
     t = np.arange(int(44100 * 1.0)) / 44100.0
 
     def level(amps: np.ndarray) -> float:

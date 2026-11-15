@@ -67,7 +67,8 @@ import soundfile as sf
 
 from bench.protocol import Take
 
-PLAYER_VERSION = "3"  # 2: the random draws depend on the strike, not on the take; 3: no gap between ranges
+PLAYER_VERSION = "4"  # 2: the random draws depend on the strike, not on the take; 3: no gap between ranges;
+                      # 4: where a sample cuts a sounding note short (sound_end_sample)
 SUSTAIN_CC, SOSTENUTO_CC = 64, 66
 PEDAL_DOWN = 64                  # a pedal is down from this raw value
 EG_RATE = 9.0                    # exponential segments: exp(-9) over the time given
@@ -789,7 +790,11 @@ class SfzPlayer:
         return env[:end], end
 
     def _mix(self, voices: list[_Voice], n: int) -> np.ndarray:
+        """The voices summed; self.sound_end: the first output sample where a voice still sounding (its envelope
+        not over) ran out of sample, None if none did. Banks cut their samples short (Piano in 162: C4 played
+        piano stops at 11.3 s, 42 dB under its peak, without a fade), and what follows is no decay of the note."""
         out = np.zeros((2, n), dtype=np.float64)
+        self.sound_end: int | None = None
         for v in voices:
             if v.start >= n or (v.gains[0] == 0.0 and v.gains[1] == 0.0):
                 continue
@@ -807,6 +812,9 @@ class SfzPlayer:
             if length <= 0:
                 continue
             audio = self._pitched(v.region.sample, offset, stop, v.cents, length)
+            if audio.shape[1] < length and v.region.trigger in ATTACK_TRIGGERS:  # cut short by its sample
+                end = v.start + audio.shape[1]
+                self.sound_end = end if self.sound_end is None else min(self.sound_end, end)
             length = min(length, audio.shape[1])
             seg = audio[:, :length] * env[:length]
             if fade:
@@ -838,7 +846,12 @@ class SfzHost:
         return 0.0  # every take starts from silence
 
     def render_take(self, take: Take, speed: float | None = None) -> np.ndarray:
-        return self.player.render(take.events, take.duration)
+        """The take; last_info: what the corpus should know of the render (sound_end_sample, where a sample cut a
+        sounding note short)."""
+        audio = self.player.render(take.events, take.duration)
+        end = self.player.sound_end
+        self.last_info = {} if end is None else {"sound_end_sample": int(end)}
+        return audio
 
     def measure_a4(self) -> float:
         """Fundamental of A4 (velocity 64), from a zero-padded spectrum of one second of the sustain (as Kontakt's)."""

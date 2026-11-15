@@ -23,6 +23,8 @@ import soundfile as sf
 
 from forge.modes import BandExtractor, Mode, PartialModes, analyze_partial
 from forge.partials import discover_partials
+from forge.takes import held_end
+from forge import progress
 
 CONVENTION = "x_c(t) = Re(a_c exp((-decay + 2 pi i freq) t)), t in seconds from the note-on"
 
@@ -32,7 +34,7 @@ def analyze_take(path: Path, max_partials: int = 80, floor_db: float = -80.0) ->
     loudest partial by more than this are not analysed (inaudible next to it)."""
     meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     audio, fs = sf.read(path, dtype="float64", always_2d=True)
-    on, off = meta["note_on_sample"], meta["note_off_sample"]
+    on, off = meta["note_on_sample"], held_end(meta)
     x = audio[on:off].T
     midi = meta["note"]
     f0, B, partials = discover_partials(x.mean(axis=0), fs, midi, 0)
@@ -98,7 +100,8 @@ def run(corpus: Path, velocity: int = 64, notes: tuple[int, int] = (21, 108), jo
     start = time.time()
     results = []
     with ProcessPoolExecutor(max_workers=jobs or None) as pool:
-        for result in pool.map(_task, [str(p) for p in takes]):
+        for result in progress.track(pool.map(_task, [str(p) for p in takes]), len(takes), "notes",
+                                     f"modes at velocity {velocity}"):
             errors = [p["envelope_error_db"] for p in result["partials"]]
             counts = [len(p["modes"]) for p in result["partials"]]
             print(f"  {result['name']:>4}: {len(errors):2d} partials, envelope error median "

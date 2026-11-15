@@ -89,6 +89,8 @@ import soundfile as sf
 from forge import release_noise, soundboard, sympathetic, unison
 from forge.modes import BandExtractor, synthesize
 from forge.note_modes import clean, partial_modes
+from forge.takes import held_end
+from forge import progress
 
 MAGIC, VERSION = b"PFMODAL1", 3
 RESIDUAL_S, RESIDUAL_FADE_S = 0.10, 0.04
@@ -269,7 +271,7 @@ def fade_times(path: Path, note: dict) -> dict[int, float]:
         return {}
     meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     audio, fs = sf.read(path, dtype="float64", always_2d=True)
-    extractor = BandExtractor(audio[meta["note_on_sample"]:meta["note_off_sample"]].T, fs)
+    extractor = BandExtractor(audio[meta["note_on_sample"]:held_end(meta)].T, fs)
     pass_hz = min(0.33 * note["f0"], 30.0)  # the bands of the analysis (modes.partial_window)
     stop_hz = min(0.66 * note["f0"], 2 * pass_hz)
     smear = 1.5 / (stop_hz - pass_hz)
@@ -456,7 +458,8 @@ def run(corpus: Path, jobs: int = 0) -> list[Path]:
     tasks = [(str(takes[(m, v)]), modes[v][m], (freqs, decays, boards[v][2][m]))
              for v in layers for m in sorted(modes[v]) if (m, v) in takes and m in boards[v][2]]
     with ProcessPoolExecutor(max_workers=jobs or None) as pool:
-        residuals = {(r["midi"], r["velocity"]): r for r in pool.map(_layer_task, tasks)}
+        residuals = {(r["midi"], r["velocity"]): r
+                     for r in progress.track(pool.map(_layer_task, tasks), len(tasks), "layers", "attack residuals")}
     print(f"  residuals of {len(residuals)} takes ({time.time() - start:.0f} s)")
     lowered = [r for r in residuals.values() if r["lowered"]]
     print(f"  soundboard louder than the take, brought down: {sum(r['lowered'] for r in lowered)} resonances "
@@ -498,7 +501,9 @@ def run(corpus: Path, jobs: int = 0) -> list[Path]:
     out += sections(corpus)
     # The coupled strings of each unison, from the modes just written.
     with ProcessPoolExecutor(max_workers=jobs or None) as pool:
-        tables = {(m, v): t for m, v, t in pool.map(_unison_task, [(m, v, modes[v][m]) for m, present in notes.items() for v in present])}
+        unison_tasks = [(m, v, modes[v][m]) for m, present in notes.items() for v in present]
+        tables = {(m, v): t for m, v, t in progress.track(pool.map(_unison_task, unison_tasks), len(unison_tasks),
+                                                            "layers", "coupled strings")}
     payload = [struct.pack("<I", len(midis))]
     for m, present in notes.items():
         payload.append(struct.pack("<2I", m, len(present)))

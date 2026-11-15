@@ -136,7 +136,20 @@ def _exponents(poles: np.ndarray, fs_d: float) -> tuple[np.ndarray, np.ndarray]:
 def _refine(seg: np.ndarray, weight: np.ndarray, fs_d: float, decay: np.ndarray, offset: np.ndarray):
     """Variable projection: the poles are optimised by Levenberg-Marquardt, the amplitudes solved exactly at each
     step (weighted least squares). Decays are parametrised by their logarithm, so they stay positive.
-    Returns (decay, offset, amplitudes at the window start (channels x modes), weighted relative residual)."""
+    Returns (decay, offset, amplitudes at the window start (channels x modes), weighted relative residual).
+    The native kernel (forge/native.py, C++, Kaufman's Jacobian) does the same when it is built; this is the
+    reference, and its fallback."""
+    from forge import native
+
+    if native.available:
+        out = native.vp_refine(seg, weight, fs_d, decay, offset)
+        if out is not None:
+            return out
+    return _refine_python(seg, weight, fs_d, decay, offset)
+
+
+def _refine_python(seg: np.ndarray, weight: np.ndarray, fs_d: float, decay: np.ndarray, offset: np.ndarray):
+    """_refine in Python: scipy's Levenberg-Marquardt, with a Jacobian by finite differences."""
     from scipy.optimize import least_squares
 
     m = np.arange(seg.shape[1], dtype=np.float64)
@@ -359,7 +372,16 @@ def fit_shared(windows: list[PartialWindow], decay: np.ndarray, offset: np.ndarr
 
 def synthesize(partials: list[PartialModes], channels: int, length: int, fs: float,
                start: int = 0) -> np.ndarray:
-    """Sum of every mode, from sample `start` (t = start / fs) over `length` samples (channels x length)."""
+    """Sum of every mode, from sample `start` (t = start / fs) over `length` samples (channels x length). Native
+    when the forge's library is built (forge/native.py: damped_sum)."""
+    from forge import native
+
+    if native.available:
+        modes = [m for p in partials for m in p.modes]
+        if not modes:
+            return np.zeros((channels, length))
+        amps = np.array([[m.amps[c] for m in modes] for c in range(channels)], dtype=np.complex128)
+        return native.damped_sum([m.freq for m in modes], [m.decay for m in modes], amps, length, fs, start)
     t = (start + np.arange(length)) / fs
     out = np.zeros((channels, length))
     for p in partials:

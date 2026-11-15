@@ -258,6 +258,20 @@ class Bank(unittest.TestCase):
         soft = SfzPlayer(bank, FS, align_ms=3.0).render([on(0.0, 60, 40), off(1.0, 60)], FS)
         np.testing.assert_array_equal(soft, SfzPlayer(bank, FS).render([on(0.0, 60, 40), off(1.0, 60)], FS))
 
+    def test_sound_end(self):
+        """A note held past its sample's end: where it stops is reported; released before, nothing is."""
+        host = SfzHost(self.path, FS, cc={20: 0.0})  # no release region: nothing sounds past the cut
+        session = parse_session('[session]\nsample_rate = 48000\n[[pass]]\nname = "n"\ntype = "note"\n'
+                                'notes = ["C4"]\nvelocities = [100]\nholds = [1.0, 4.0]\ntail = 1.0\n')
+        short, long = session.takes
+        host.render_take(short)
+        self.assertEqual(host.last_info, {})
+        audio = host.render_take(long)
+        end = host.last_info["sound_end_sample"]
+        self.assertEqual(end, long.meta["note_on_sample"] + 3 * FS)  # the 3 s sample, at its own pitch and rate
+        self.assertGreater(np.max(np.abs(audio[:, end - 100:end])), 0.1)
+        self.assertEqual(float(np.max(np.abs(audio[:, end:]))), 0.0)
+
     # -- the bench's host
 
     def test_host(self):
