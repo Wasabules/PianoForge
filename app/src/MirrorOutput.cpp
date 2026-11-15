@@ -61,6 +61,9 @@ std::unique_ptr<juce::AudioIODeviceType> MirrorOutput::createType(bool lowLatenc
         lowLatency ? juce::WASAPIDeviceMode::sharedLowLatency : juce::WASAPIDeviceMode::shared));
 #elif JUCE_LINUX
     return std::unique_ptr<juce::AudioIODeviceType>(juce::AudioIODeviceType::createAudioIODeviceType_ALSA());
+#elif JUCE_MAC
+    (void) lowLatency;
+    return std::unique_ptr<juce::AudioIODeviceType>(juce::AudioIODeviceType::createAudioIODeviceType_CoreAudio());
 #else
     (void) lowLatency;
     return nullptr;

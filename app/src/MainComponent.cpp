@@ -245,11 +245,14 @@ MainComponent::MainComponent()
     setSize(1440, 600);
     constructed = true;
     startTimerHz(20);
-    // Updates at start, if asked for (Help > Update settings), once the window is up.
+#if JUCE_WINDOWS
+    // Updates at start, if asked for (Help > Update settings), once the window is up. (The update is the Windows
+    // installer: elsewhere, PianoForge is updated as it was installed.)
     juce::Timer::callAfterDelay(4000, [safe = juce::Component::SafePointer<MainComponent>(this)] {
         if (auto* self = safe.getComponent())
             self->checkForUpdates(false);
     });
+#endif
 }
 
 MainComponent::~MainComponent()
@@ -420,9 +423,11 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
     case 6:
         menu.addItem(item(kShortcuts, "Keyboard shortcuts", "F1"));
         menu.addItem(item(kAbout, "About PianoForge"));
+#if JUCE_WINDOWS
         menu.addSeparator();
         menu.addItem(item(kCheckUpdates, "Check for updates..."));
         menu.addItem(item(kUpdateSettings, "Update settings..."));
+#endif
         break;
     default:
         break;

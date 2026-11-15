@@ -6,7 +6,9 @@
 # obs-frontend-api.dll's exports. The target install-obs-plugin copies the plugin where OBS looks for plugins of every
 # user, no administrator rights needed, OBS running or not (the new plugin then loads at its next start):
 # %ProgramData%/obs-studio/plugins/pianoforge-obs.
-# Linux: built against the system's libobs and frontend API (package libobs-dev or obs-studio's development files).
+# Linux: built against the system's libobs and frontend API (package libobs-dev or obs-studio's development files);
+# install-obs-plugin copies it to ~/.config/obs-studio/plugins/pianoforge-obs. macOS: against OBS's libobs and frontend
+# API (their CMake packages), as a pianoforge-obs.plugin bundle.
 
 set(PIANOFORGE_OBS_VERSION "33.0.1" CACHE STRING "OBS Studio version the plugin is built against (its libobs headers)")
 set(PIANOFORGE_OBS_HASH "9174ee0e3677c92d0d060bdce4c5d44dfee9fd3afddfb6333f098fd029b8de2b" CACHE STRING
@@ -99,6 +101,30 @@ else()
     find_package(libobs REQUIRED)
     find_package(obs-frontend-api REQUIRED)
     target_link_libraries(pianoforge-obs PRIVATE OBS::libobs OBS::obs-frontend-api)
+    if(APPLE)
+        # macOS: a bundle, pianoforge-obs.plugin, its data in Contents/Resources (where OBS looks for it there), in
+        # ~/Library/Application Support/obs-studio/plugins.
+        set_target_properties(pianoforge-obs PROPERTIES BUNDLE TRUE BUNDLE_EXTENSION plugin)
+        add_custom_command(TARGET pianoforge-obs POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/data
+                    "$<TARGET_BUNDLE_CONTENT_DIR:pianoforge-obs>/Resources")
+        set(obs_plugins "$ENV{HOME}/Library/Application Support/obs-studio/plugins")
+        add_custom_target(install-obs-plugin
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:pianoforge-obs>"
+                    "${obs_plugins}/pianoforge-obs.plugin"
+            DEPENDS pianoforge-obs
+            COMMENT "Installing the PianoForge OBS plugin into ${obs_plugins}")
+    else()
+        # Linux: OBS's per-user plugin folder (a Flatpak OBS has its own: ~/.var/app/com.obsproject.Studio/config/...).
+        set(PIANOFORGE_OBS_PLUGINS_DIR "$ENV{HOME}/.config/obs-studio/plugins" CACHE PATH "OBS's per-user plugin folder")
+        set(plugin_root "${PIANOFORGE_OBS_PLUGINS_DIR}/pianoforge-obs")
+        add_custom_target(install-obs-plugin
+            COMMAND ${CMAKE_COMMAND} -DDLL=$<TARGET_FILE:pianoforge-obs>
+                    -DLOCALES=${CMAKE_CURRENT_SOURCE_DIR}/data/locale -DDEST=${plugin_root}
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/install_plugin.cmake
+            DEPENDS pianoforge-obs
+            COMMENT "Installing the PianoForge OBS plugin into ${plugin_root}")
+    endif()
 endif()
 
 # The plugin inside the installed libobs, without the OBS application (obs/tests/plugin_test.cpp): audio, and video

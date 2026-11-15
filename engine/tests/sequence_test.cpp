@@ -1,6 +1,7 @@
 // MIDI file reader and sequence player tests (shared by the lab and the browser module). Exits non-zero on a failure.
 #include <pianoforge/midi_sequence.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>

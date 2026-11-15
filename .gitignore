@@ -9,3 +9,10 @@ corpus/
 
 # Compiled WebAssembly module (web/: emcmake build, copied next to the page)
 web/site/pianoforge.wasm
+
+# Local tools and systems
+CMakeUserPresets.json
+.vs/
+.vscode/
+.idea/
+.DS_Store

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 namespace {
@@ -15,6 +16,16 @@ void check(bool condition, const char* what)
 {
     std::printf("%s  %s\n", condition ? "[PASS]" : "[FAIL]", what);
     failures += condition ? 0 : 1;
+}
+
+/// A check on how long something took: informative only when PIANOFORGE_NO_TIMING is set (a shared machine, the CI).
+void timed(bool condition, const char* what)
+{
+    if (std::getenv("PIANOFORGE_NO_TIMING") != nullptr && !condition) {
+        std::printf("[INFO]  %s (timing not checked here)\n", what);
+        return;
+    }
+    check(condition, what);
 }
 
 constexpr double kPi = 3.141592653589793;
@@ -103,7 +114,7 @@ int main()
         up.process(in.data(), (int) in.size(), out.data());
         const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         std::printf("      x4, 10 s of one channel in %.3f s: %.2f %% of real time\n", s, 10.0 * s);
-        check(s < 0.3, "the upsampling costs less than 3 % of a core per channel");
+        timed(s < 0.3, "the upsampling costs less than 3 % of a core per channel");
     }
     return failures ? 1 : 0;
 }

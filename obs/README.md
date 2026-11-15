@@ -50,7 +50,9 @@ The texts are in English and French (`data/locale`).
   keyboard source (in no scene) is rendered after OBS's main view, at most 30 times a second and as large as the
   window shows it, staged on the GPU one frame and read back the next, and its frames written to the channel.
 
-## Build and install (Windows)
+## Build and install
+
+### Windows
 
 The plugin is built with the rest of the project when OBS Studio is installed (`C:/Program Files/obs-studio`,
 or `-DPIANOFORGE_OBS_DIR=...`). The libobs and frontend API headers of the matching version are fetched
@@ -60,6 +62,20 @@ or `-DPIANOFORGE_OBS_DIR=...`). The libobs and frontend API headers of the match
 ```
 cmake --build build/windows-msvc --config Release --target install-obs-plugin
 ```
+
+### Linux and macOS
+
+Built against the system's libobs and frontend API (their CMake packages: `libobs-dev` and OBS's development files
+on Linux; OBS's own build on macOS), when found at configure time (`-DPIANOFORGE_OBS_PLUGIN=ON` forces it).
+
+```
+cmake --build --preset linux-release --target install-obs-plugin
+```
+
+copies it to `~/.config/obs-studio/plugins/pianoforge-obs` (`-DPIANOFORGE_OBS_PLUGINS_DIR=...` for a Flatpak OBS:
+`~/.var/app/com.obsproject.Studio/config/obs-studio/plugins`). On macOS it is a bundle, `pianoforge-obs.plugin` (its
+data in `Contents/Resources`), copied to `~/Library/Application Support/obs-studio/plugins`. Neither has run yet:
+OBS draws with OpenGL there, and the keyboard's shader has only been tried with Direct3D.
 
 copies it to `%ProgramData%/obs-studio/plugins/pianoforge-obs` (no administrator rights needed), OBS running or not:
 a plugin in use is moved aside (removed by a later install) and the new one loads at OBS's next start. The

@@ -3,7 +3,7 @@
 # PianoForge
 
 A concert grand piano simulator played from a MIDI keyboard: a calibrated hybrid modal engine, with
-recording of every take and technician-level settings. Cross-platform (Windows first, Linux compatible),
+recording of every take and technician-level settings. Cross-platform (Windows, Linux, macOS: see Platforms),
 low latency (key to sound <= 10 ms, jitter <= 1 ms).
 
 Status: proof of concept. The modal engine plays modes measured on a reference corpus rendered from a sampled
@@ -27,22 +27,50 @@ switches between that reference and the modal engine while playing.
 
 ## Build the application
 
-Requirements: CMake >= 3.25, Visual Studio 2022 (Windows) or GCC/Ninja and the JUCE Linux dependencies (Linux).
-JUCE is fetched automatically at configure time.
+Requirements: CMake >= 3.25 and Ninja, with Visual Studio 2022 (Windows), GCC 13 or later and JUCE's Linux
+dependencies (Linux), or Xcode's command-line tools (macOS). JUCE is fetched automatically at configure time.
 
 ```
-cmake --preset windows-msvc
-cmake --build --preset windows-release
+cmake --preset windows-msvc          # linux-gcc, macos-clang
+cmake --build --preset windows-release   # linux-release, macos-release
 build/windows-msvc/app/PianoForgeApp_artefacts/Release/PianoForge.exe
+```
+
+JUCE's Linux dependencies (Ubuntu 24.04):
+
+```
+sudo apt install ninja-build libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev libxrandr-dev \
+  libxinerama-dev libxcursor-dev libxcomposite-dev libxext-dev libxrender-dev libgl1-mesa-dev
 ```
 
 Engine tests (no corpus needed) and headless self-test of the application (reference player, and the modal
 engine when the corpus state has a profile):
 
 ```
-ctest --test-dir build/windows-msvc -C Release
+ctest --preset windows-release       # linux-release, macos-release
 PianoForge.exe --selftest corpus/reference/noire-dry/single-notes selftest.txt
 ```
+
+## Platforms
+
+Windows is where PianoForge is used and tested every day. The code is written for Linux and macOS too, and the
+continuous integration (`.github/workflows/build.yml`: Windows, Ubuntu, macOS on Apple silicon, the forge's tests,
+the WebAssembly build) builds and tests it on all three at every push; what it has not done yet is run on them.
+
+| | Windows | Linux | macOS |
+|---|---|---|---|
+| Engine | AVX2 | AVX2 (x86-64); the generic loop elsewhere | the generic loop on Apple silicon (not measured yet) |
+| Audio | ASIO, WASAPI, DirectSound | ALSA | Core Audio |
+| Stream output (a second device) | WASAPI | ALSA | Core Audio |
+| MP3 export | Media Foundation | none (WAV, FLAC) | none (WAV, FLAC) |
+| Updates | the installer, from the app | as it was installed | as it was installed |
+| Installer | Inno Setup | none yet | none yet (nor signing) |
+| VST3 plugin | ~/AppData/Local/Programs/Common/VST3 | ~/.vst3 | ~/Library/Audio/Plug-Ins/VST3, and an Audio Unit |
+| OBS plugin | built against the installed OBS, tested in libobs | against libobs (OpenGL: its shader untried) | a .plugin bundle (untried) |
+| OBS feed, stream look channel | shared memory (Local\\) | POSIX shared memory | POSIX shared memory |
+
+The timing checks of the tests (the room, the upsampler) are informative where `PIANOFORGE_NO_TIMING` is set (a
+shared machine: the CI).
 
 Play a MIDI file live: File > Open MIDI file (Ctrl+O), drop it on the window, or pass it on the command line
 (`PianoForge.exe song.mid`). It plays to the sample with what the keyboards play, and is recorded with it.

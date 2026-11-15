@@ -7,8 +7,14 @@
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/windows-msvc",
-      "cacheVariables": { "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/_deps" },
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+      "cacheVariables": {
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/_deps"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
     },
     {
       "name": "linux-gcc",
@@ -20,12 +26,71 @@
         "CMAKE_CXX_COMPILER": "g++",
         "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/_deps"
       },
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "macos-clang",
+      "displayName": "macOS (Apple Clang, Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/macos-clang",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0",
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/_deps"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "windows-release", "configurePreset": "windows-msvc", "configuration": "Release" },
-    { "name": "windows-debug", "configurePreset": "windows-msvc", "configuration": "Debug" },
-    { "name": "linux-release", "configurePreset": "linux-gcc" }
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-msvc",
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-gcc"
+    },
+    {
+      "name": "macos-release",
+      "configurePreset": "macos-clang"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-gcc",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-release",
+      "configurePreset": "macos-clang",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
   ]
 }

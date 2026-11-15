@@ -1,4 +1,5 @@
-# Copies the plugin into OBS's plugin folder, OBS running or not (cmake -P, with DLL, LOCALES and DEST defined): the
+# Copies the plugin into OBS's plugin folder (Windows, Linux), OBS running or not (cmake -P, with DLL, LOCALES and
+# DEST defined): the
 # DLL, the locales, and the shaders beside the locales' folder.
 # Windows keeps a loaded DLL from being overwritten, not from being renamed: the one OBS uses moves aside (.old,
 # removed by a later install once OBS has let go of it) and the new one takes its place, for OBS's next start.
@@ -23,7 +24,8 @@ foreach(effect IN LISTS effects)
     file(COPY_FILE "${effect}" "${DEST}/data/${name}" ONLY_IF_DIFFERENT)
 endforeach()
 
-set(target "${bin}/pianoforge-obs.dll")
+get_filename_component(module "${DLL}" NAME) # pianoforge-obs.dll, pianoforge-obs.so
+set(target "${bin}/${module}")
 if(EXISTS "${target}")
     execute_process(COMMAND "${CMAKE_COMMAND}" -E compare_files "${DLL}" "${target}" RESULT_VARIABLE different)
     if(different EQUAL 0)

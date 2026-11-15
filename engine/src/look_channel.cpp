@@ -19,6 +19,7 @@
 #else
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -96,7 +97,8 @@ void* mapChannel(void*& handle)
     const int fd = shm_open(name.c_str(), O_CREAT | O_RDWR, 0600);
     if (fd < 0)
         return nullptr;
-    if (ftruncate(fd, (off_t) kBytes) != 0) {
+    struct stat st {}; // sized by whichever side comes first (macOS refuses to resize an existing object)
+    if (fstat(fd, &st) != 0 || (st.st_size < (off_t) kBytes && ftruncate(fd, (off_t) kBytes) != 0)) {
         ::close(fd);
         return nullptr;
     }

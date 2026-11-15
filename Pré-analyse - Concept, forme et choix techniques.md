@@ -1147,6 +1147,27 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - dans le test, une fonction d'attente rappelait la condition une dernière fois en sortie de boucle, ce qui consommait l'image d'aperçu déjà reçue ;
     - les mesures audio du test du plugin varient quand la machine est chargée (96 % au moment du test).
 
+**Préparer GitHub et Ubuntu (15 novembre 2026).** Le dépôt partira sur GitHub, puis le travail continuera sous Ubuntu. On a d'abord vérifié le code, sans changer de système.
+  - *Rien de la bibliothèque commerciale dans le dépôt.* Les fichiers suivis et tout l'historique ont été passés en revue : ni audio, ni corpus, ni profil, aucun secret, aucun chemin personnel. Le corpus est ignoré, et la page web garde le profil dans le navigateur.
+  - *Ce qui était faux sur la CI.* La Pré-analyse la prévoyait sous Linux à chaque commit ; elle n'existait pas, et rien n'avait jamais été compilé hors de Windows. Elle existe maintenant (`.github/workflows/build.yml`) : Windows (MSVC), Ubuntu 24.04 (GCC) et macOS 14 (Apple Clang, arm64), plus les tests Python de la forge et la version WebAssembly, à chaque push. Les tests qui demandent le corpus s'écartent d'eux-mêmes ; les tests chronométrés (la salle, le suréchantillonneur) deviennent informatifs là où `PIANOFORGE_NO_TIMING` est posé, car les machines y sont partagées.
+  - *Ce qui a été revu dans le code.*
+    - La casse des `#include` : aucun écart (Windows l'ignore, Linux non).
+    - Les API de Windows : toutes sous condition de plateforme.
+    - Les en-têtes standard que MSVC apporte en passant : un seul manquait, dans un test.
+  - *Ce qui a été corrigé.*
+    - **La mémoire partagée POSIX** (le flux vers OBS, le canal du rendu pour le stream) n'est dimensionnée que si elle est plus petite : macOS refuse de redimensionner un objet existant. Un lecteur n'ouvre pas un flux plus petit que prévu, qui provoquerait une erreur de bus au-delà de sa fin.
+    - **La sortie miroir pour le stream** passe par Core Audio sur macOS.
+    - **Les mises à jour** (l'installateur Windows) ne sont proposées que sous Windows.
+    - **Le VST3** s'installe dans le dossier de chaque système, et devient aussi une Audio Unit sur macOS (Logic, GarageBand).
+    - **Le plugin OBS** s'installe dans le dossier d'OBS sous Linux, et forme un bundle `.plugin` sur macOS.
+    - Les presets CMake gagnent macOS et les tests (`ctest --preset ...`).
+  - *Ce qui reste* :
+    - un premier vrai lancement sous Ubuntu et sous macOS (son, MIDI, fenêtre) ;
+    - le shader du clavier OBS sous OpenGL ;
+    - la boucle du moteur sur ARM (NEON) et sa mesure ;
+    - l'export MP3 hors Windows ;
+    - les installateurs Linux et macOS (et la signature sur macOS).
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

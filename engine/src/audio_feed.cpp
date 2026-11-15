@@ -19,6 +19,7 @@
 #else
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -145,7 +146,12 @@ void* mapShared(bool create, void*& handle)
     const int fd = shm_open(name.c_str(), create ? (O_CREAT | O_RDWR) : O_RDWR, 0600);
     if (fd < 0)
         return nullptr;
-    if (create && ftruncate(fd, (off_t) kBytes) != 0) {
+    // Sized once (macOS refuses to resize an existing object); a reader maps no more than there is (past its end, an
+    // access would be a bus error: an older writer's smaller feed is not opened).
+    struct stat st {};
+    const bool sized = fstat(fd, &st) == 0
+                       && (st.st_size >= (off_t) kBytes || (create && ftruncate(fd, (off_t) kBytes) == 0));
+    if (!sized) {
         ::close(fd);
         return nullptr;
     }

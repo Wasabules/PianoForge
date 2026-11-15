@@ -7,6 +7,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdio>
+#include <cstdlib>
 #include <numeric>
 #include <random>
 #include <vector>
@@ -19,6 +20,16 @@ void check(bool condition, const char* what)
 {
     std::printf("%s  %s\n", condition ? "[PASS]" : "[FAIL]", what);
     failures += condition ? 0 : 1;
+}
+
+/// A check on how long something took: informative only when PIANOFORGE_NO_TIMING is set (a shared machine, the CI).
+void timed(bool condition, const char* what)
+{
+    if (std::getenv("PIANOFORGE_NO_TIMING") != nullptr && !condition) {
+        std::printf("[INFO]  %s (timing not checked here)\n", what);
+        return;
+    }
+    check(condition, what);
 }
 
 constexpr double kRate = 48000.0;
@@ -510,7 +521,8 @@ int main()
         c[0] = d[0] = 1.0f;
         run(fresh, c, d, 128);
         std::printf("      60 s of silence after the tail in %.4f s\n", asleep);
-        check(asleep < 0.01 && a == c && b == d, "asleep after the tail: silence costs nothing, the next note starts clean");
+        check(a == c && b == d, "after the tail: the next note starts clean");
+        timed(asleep < 0.01, "asleep after the tail: silence costs nothing");
     }
 
     // 12. The listening position (a concert hall: 15 000 m3, T60 2.2 s). An impulse on both channels.
@@ -849,7 +861,7 @@ int main()
         run(room, x, y, 128);
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         std::printf("      10 s at 48 kHz in %.3f s: %.2f %% of real time\n", seconds, 100 * seconds / 10.0);
-        check(seconds < 0.3, "the room costs less than 3 % of a core");
+        timed(seconds < 0.3, "the room costs less than 3 % of a core");
     }
 
     return failures ? 1 : 0;
