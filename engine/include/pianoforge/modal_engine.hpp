@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pianoforge/biquad.hpp>
 #include <pianoforge/engine.hpp>
 #include <pianoforge/modal_profile.hpp>
 #include <pianoforge/mode_bank.hpp>
@@ -80,6 +81,10 @@ public:
     static constexpr double kLevelRampSeconds = 0.05; // after the residual: overall gain -> each partial's level
     static constexpr float kDefaultVoicingVelocity = 0.6f;
     static constexpr float kDefaultVoicingCorner = 4.0f; // the shelf's midpoint, in partial numbers
+    static constexpr float kDefaultAttackSoftMs = 40.0f;  // the attack's softness: how long it lasts
+    static constexpr double kAttackCornerHz = 1200.0;     // its shelf's midpoint
+    static constexpr double kRestrikeRiseSeconds = 0.002; // a re-strike's: the string already rings, no step
+    static constexpr double kLidCornerHz = 1500.0, kLidClosedDb = -9.0, kLidClosedLevelDb = -2.0; // the lid closed
     static constexpr double kPartialFadeSeconds = 1.0; // a partial faded out (profile fade time): extra T60
 
     void prepare(double sampleRate, int maxBlockSize) override;
@@ -127,6 +132,20 @@ public:
     std::atomic<float> voicingCorner { kDefaultVoicingCorner };
     /// The voicing of one strike (dB) at this note and velocity.
     float voicingDb(int note, int velocity) const noexcept;
+    /// Touch and resonance:
+    /// - dynamicRange: each strike's level below the note's loudest layer, in dB, times this (1: as measured; 0.5:
+    ///   the pianissimo half as far below the fortissimo; above 1, further). Every gain of the voice moves together
+    ///   (its modes, its attack residual, the soundboard's excitation). Note-on.
+    /// - sustainLength: the strings' decay times (and the partials' fade times) times this (1: as measured). Note-on.
+    /// - damperRate: the dampers' curves run this much faster (1: as measured; 0.5: a slower, longer release). At once.
+    /// - attackSoftDb, attackSoftMs: the sound above kAttackCornerHz lowered (negative: a softer attack) or raised (a
+    ///   harder one), fading out over the first attackSoftMs of each strike (a raised cosine). Note-on.
+    /// - lidOpen: the lid, 1 open (as measured), 0.5 on the half stick, 0 closed: the treble above kLidCornerHz down
+    ///   to kLidClosedDb and the whole sound to kLidClosedLevelDb, in proportion. At once.
+    /// All at their defaults: the sound as measured, bit for bit.
+    std::atomic<float> dynamicRange { 1.0f }, sustainLength { 1.0f }, damperRate { 1.0f };
+    std::atomic<float> attackSoftDb { 0.0f }, attackSoftMs { kDefaultAttackSoftMs };
+    std::atomic<float> lidOpen { 1.0f };
     /// Frequency ratio of a note against the profile: (referenceA4 / 440) x 2^(cents / 1200).
     double tuningRatio(int note) const noexcept;
 
@@ -143,6 +162,9 @@ public:
         float unisonSpread = 1.0f; // the strings' detunings within each unison against the measured (0 to 4)
         float voicingBassDb = 0.0f, voicingMiddleDb = 0.0f, voicingTrebleDb = 0.0f;
         float voicingVelocity = kDefaultVoicingVelocity, voicingCorner = kDefaultVoicingCorner;
+        float dynamicRange = 1.0f, sustainLength = 1.0f, damperRate = 1.0f;
+        float attackSoftDb = 0.0f, attackSoftMs = kDefaultAttackSoftMs;
+        float lidOpen = 1.0f;
     };
     Settings settings() const noexcept;
     /// Applies `s` (the free strings are retuned on the next block).
@@ -228,12 +250,13 @@ private:
         float curveGain = 1.0f;
         std::array<float, DamperCurves::kMaxPoints> releaseGains {};
         std::uint64_t age = 0;
-        /// The voicing's high shelf (transposed direct form II, per channel); off at 0 dB.
+        /// The voicing's high shelf, off at 0 dB; the attack's, faded out over attackSamples from the note-on (a
+        /// re-strike's fading in over attackRise first: the string already rings).
         struct Shelf {
             bool on = false;
-            float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f;
-            float s1[2] {}, s2[2] {};
-        } voicing;
+            Biquad f;
+        } voicing, attack;
+        std::int64_t attackSamples = 0, attackRise = 0;
     };
 
     void allocate();
@@ -248,6 +271,9 @@ private:
     void render(const ModalProfile& p, float* const* outputs, int numChannels, int start, int n) noexcept;
     bool produce(const ModalProfile& p, Voice& v, int n) noexcept;
     void setVoicing(Voice& v, int note, int velocity, bool keepState) noexcept;
+    void setAttack(Voice& v, bool restrike) noexcept;
+    void softenAttack(Voice& v, float* left, float* right, int n) noexcept;
+    void applyLid(float* const* outputs, int numChannels, int n, float gain) noexcept;
     void renderBank(Voice& v, float* left, float* right, int n) noexcept;
     void mergeEarlier(Voice& v) noexcept; // a re-strike's hammer contact over
     void renderStrings(int n) noexcept;
@@ -260,6 +286,9 @@ private:
     std::array<float, 128> onsetFactor {}, driveFadeFactor {};
     std::array<float, 128> driveGain {}, driveExponent {}; // per note: the drive's gain and velocity exponent
     std::vector<Voice> voices = std::vector<Voice>(kMaxVoices); // on the heap: 128 voices are too big for a stack
+    // The lid (audio thread): its shelf, the setting it was made for (-1: none yet), its level now and wanted.
+    Biquad lidShelf;
+    float lidApplied = -1.0f, lidLevel = 1.0f, lidTarget = 1.0f;
     std::vector<Carried> carriedModes; // a re-strike's (allocated with the voices)
     std::vector<double> blendFreq, blendScale; // a strike's moved poles, per mode of the nearer layer (scratch)
     std::vector<double> logDecays; // a partial's log decays (scratch, as many as the profile's largest partial has modes)

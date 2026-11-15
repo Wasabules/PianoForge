@@ -135,6 +135,22 @@ side of it reaches both ears, the farther one later and duller (a spherical head
 shadow, equalized for a source in front so that a mono sound keeps its level), the room's reflections each from
 where they come, and the tail as coherent between the ears as a diffuse field. Room on or off.
 
+Shaping the instrument and the output, at 0 or 100 % the sound as measured, bit for bit:
+
+- Voicing (Engine settings, Ctrl+E): the hammers needled or hardened per register (bass, middle, treble), a shelf
+  on each voice's whole sound from a chosen partial up, following the velocity by a share.
+- Tone and dynamics (Engine > Tone and dynamics, Ctrl+D):
+  - Touch and resonance (the modal engine): the dynamic range, the sustain length, the damper speed, the attack's
+    softness and length, and the lid (open, half stick, closed).
+  - The output tone: bass, presence and air.
+  - A convolution reverb: an impulse response from a WAV file of your choice, beside the room, with its level and
+    the room's.
+  - A stream compressor: it works on what leaves for OBS and the mirror output only; what is heard and recorded
+    stays as it is.
+
+  The first three are in the instrument presets and the take renders. The plugin keeps the sound as measured for
+  now.
+
 In a browser (WebAssembly, the modal engine and the room, Web MIDI): see `web/README.md`.
 
 Offline render of a MIDI file, through the reference player or the modal engine:

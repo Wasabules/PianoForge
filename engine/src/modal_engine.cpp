@@ -225,6 +225,8 @@ void ModalEngine::prepare(double newSampleRate, int newMaxBlockSize)
         b->assign((std::size_t) maxBlockSize, 0.0f);
     driveOwn.assign((std::size_t) 128 * (std::size_t) maxBlockSize, 0.0f);
     allocate();
+    lidShelf = Biquad {};
+    lidApplied = -1.0f;
     pedalLift = 0.0f;
     sostenuto = false;
     sostenutoHeld.fill(false);
@@ -363,6 +365,12 @@ ModalEngine::Settings ModalEngine::settings() const noexcept
     s.voicingTrebleDb = voicingTrebleDb.load();
     s.voicingVelocity = voicingVelocity.load();
     s.voicingCorner = voicingCorner.load();
+    s.dynamicRange = dynamicRange.load();
+    s.sustainLength = sustainLength.load();
+    s.damperRate = damperRate.load();
+    s.attackSoftDb = attackSoftDb.load();
+    s.attackSoftMs = attackSoftMs.load();
+    s.lidOpen = lidOpen.load();
     return s;
 }
 
@@ -386,6 +394,12 @@ void ModalEngine::applySettings(const Settings& s) noexcept
     voicingTrebleDb = s.voicingTrebleDb;
     voicingVelocity = std::clamp(s.voicingVelocity, 0.0f, 1.0f);
     voicingCorner = std::clamp(s.voicingCorner, 1.0f, 16.0f);
+    dynamicRange = std::clamp(s.dynamicRange, 0.25f, 1.5f);
+    sustainLength = std::clamp(s.sustainLength, 0.25f, 4.0f);
+    damperRate = std::clamp(s.damperRate, 0.2f, 5.0f);
+    attackSoftDb = std::clamp(s.attackSoftDb, -24.0f, 12.0f);
+    attackSoftMs = std::clamp(s.attackSoftMs, 5.0f, 300.0f);
+    lidOpen = std::clamp(s.lidOpen, 0.0f, 1.0f);
     tuningVersion.fetch_add(1);
 }
 
@@ -411,18 +425,91 @@ void ModalEngine::setVoicing(Voice& v, int note, int velocity, bool keepState) n
     // A high shelf (RBJ, slope 1) whose midpoint follows the note: the partials above the corner move by db.
     const double f0 = 440.0 * std::pow(2.0, (note - 69) / 12.0) * tuningRatio(note);
     const double corner = std::clamp((double) voicingCorner.load(std::memory_order_relaxed), 1.0, 16.0) * f0;
-    const double w0 = 2.0 * 3.14159265358979323846 * std::min(corner, 0.45 * sampleRate) / sampleRate;
-    const double A = std::pow(10.0, db / 40.0), c = std::cos(w0), alpha = std::sin(w0) / std::sqrt(2.0);
-    const double root = 2.0 * std::sqrt(A) * alpha;
-    const double a0 = (A + 1.0) - (A - 1.0) * c + root;
-    f.b0 = (float) (A * ((A + 1.0) + (A - 1.0) * c + root) / a0);
-    f.b1 = (float) (-2.0 * A * ((A - 1.0) + (A + 1.0) * c) / a0);
-    f.b2 = (float) (A * ((A + 1.0) + (A - 1.0) * c - root) / a0);
-    f.a1 = (float) (2.0 * ((A - 1.0) - (A + 1.0) * c) / a0);
-    f.a2 = (float) (((A + 1.0) - (A - 1.0) * c - root) / a0);
+    f.f.take(Biquad::shelf(sampleRate, corner, db, true));
     if (!keepState || !f.on)
-        f.s1[0] = f.s1[1] = f.s2[0] = f.s2[1] = 0.0f;
+        f.f.reset();
     f.on = true;
+}
+
+void ModalEngine::setAttack(Voice& v, bool restrike) noexcept
+{
+    auto& f = v.attack;
+    const float db = std::clamp(attackSoftDb.load(std::memory_order_relaxed), -24.0f, 12.0f);
+    if (std::abs(db) < 0.01f) {
+        f.on = false;
+        return;
+    }
+    const double ms = std::clamp((double) attackSoftMs.load(std::memory_order_relaxed), 5.0, 300.0);
+    f.f.take(Biquad::shelf(sampleRate, kAttackCornerHz, db, true));
+    if (!f.on)
+        f.f.reset();
+    f.on = true;
+    v.attackSamples = std::max<std::int64_t>(1, std::llround(ms * 1e-3 * sampleRate));
+    v.attackRise = restrike ? std::max<std::int64_t>(1, std::llround(kRestrikeRiseSeconds * sampleRate)) : 0;
+}
+
+void ModalEngine::softenAttack(Voice& v, float* l, float* r, int m) noexcept
+{
+    // The sound through the attack's shelf, mixed back to the sound itself as the attack ends (no filter switched
+    // while it sounds: at the end, the mix is the sound alone).
+    auto& f = v.attack.f;
+    const double total = (double) v.attackSamples, rise = (double) v.attackRise;
+    float l1 = f.s1[0], l2 = f.s2[0], r1 = f.s1[1], r2 = f.s2[1];
+    for (int k = 0; k < m; ++k) {
+        const double t = (double) (v.sinceOn + k);
+        float w = t < total ? (float) (0.5 + 0.5 * std::cos(0.5 * kTwoPi * t / total)) : 0.0f;
+        if (t < rise)
+            w *= (float) (t / rise);
+        const float inL = l[k], outL = f.b0 * inL + l1;
+        l1 = f.b1 * inL - f.a1 * outL + l2;
+        l2 = f.b2 * inL - f.a2 * outL;
+        l[k] = inL + w * (outL - inL);
+        const float inR = r[k], outR = f.b0 * inR + r1;
+        r1 = f.b1 * inR - f.a1 * outR + r2;
+        r2 = f.b2 * inR - f.a2 * outR;
+        r[k] = inR + w * (outR - inR);
+    }
+    f.s1[0] = l1;
+    f.s2[0] = l2;
+    f.s1[1] = r1;
+    f.s2[1] = r2;
+    if (v.sinceOn + m >= v.attackSamples)
+        v.attack.on = false;
+}
+
+void ModalEngine::applyLid(float* const* outputs, int numChannels, int n, float gain) noexcept
+{
+    // The lid: a shelf on the treble and a level, both in proportion to how far it is closed; a level moved glides
+    // over the block. Open: neither (the output gain alone, as it always was).
+    const float lid = std::clamp(lidOpen.load(std::memory_order_relaxed), 0.0f, 1.0f);
+    if (lid != lidApplied) {
+        const double closed = 1.0 - (double) lid;
+        const bool wasFlat = lidShelf.flat();
+        lidShelf.take(Biquad::shelf(sampleRate, kLidCornerHz, kLidClosedDb * closed, true));
+        if (wasFlat)
+            lidShelf.reset();
+        lidTarget = (float) std::pow(10.0, kLidClosedLevelDb * closed / 20.0);
+        if (lidApplied < 0.0f)
+            lidLevel = lidTarget;
+        lidApplied = lid;
+    }
+    if (!lidShelf.flat())
+        for (int c = 0; c < std::min(numChannels, 2); ++c)
+            if (outputs[c] != nullptr)
+                lidShelf.process(outputs[c], n, c);
+    if (lidLevel == 1.0f && lidTarget == 1.0f) {
+        for (int c = 0; c < std::min(numChannels, 2); ++c)
+            if (outputs[c] != nullptr)
+                for (int k = 0; k < n; ++k)
+                    outputs[c][k] *= gain;
+        return;
+    }
+    const float step = (lidTarget - lidLevel) / (float) std::max(1, n);
+    for (int c = 0; c < std::min(numChannels, 2); ++c)
+        if (outputs[c] != nullptr)
+            for (int k = 0; k < n; ++k)
+                outputs[c][k] *= gain * (lidLevel + step * (float) (k + 1));
+    lidLevel = lidTarget;
 }
 
 void ModalEngine::retuneStrings() noexcept
@@ -528,14 +615,12 @@ void ModalEngine::process(float* const* outputs, int numChannels, int n, const E
         start = end;
     }
 
-    const float gain = outputGain.load(std::memory_order_relaxed);
+    applyLid(outputs, numChannels, n, outputGain.load(std::memory_order_relaxed));
     float peak = 0.0f;
     for (int c = 0; c < std::min(numChannels, 2); ++c)
         if (outputs[c] != nullptr)
-            for (int k = 0; k < n; ++k) {
-                outputs[c][k] *= gain;
+            for (int k = 0; k < n; ++k)
                 peak = std::max(peak, std::abs(outputs[c][k]));
-            }
     float previous = outputPeak.load(std::memory_order_relaxed);
     while (peak > previous && !outputPeak.compare_exchange_weak(previous, peak)) {}
 
@@ -634,6 +719,15 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
         overall = (float) std::max(0.05, std::pow(10.0, -dbPerStep * (layers.front().velocity - velocity) / 20.0));
     }
     overall = std::clamp(overall, 0.0f, kMaxGain);
+    // The dynamic range: this strike's level below the note's loudest layer (in dB) scaled, every gain of the voice
+    // below moving together. The sustain length: every mode's decay rate divided by it.
+    float dyn = 1.0f;
+    if (const float range = std::clamp(dynamicRange.load(std::memory_order_relaxed), 0.25f, 1.5f); range != 1.0f) {
+        const double top = layers.back().level, here = (double) overall * near.level;
+        if (top > 0.0 && here > 0.0)
+            dyn = (float) std::clamp(std::pow(top / here, 1.0 - (double) range), 0.05, 20.0);
+    }
+    const double sustain = std::clamp((double) sustainLength.load(std::memory_order_relaxed), 0.25, 4.0);
     // Between two layers (blendLayers): how far toward the other layer (0 to 0.5), and the weights, in amplitude, of
     // a partial only the lower layer has (1 - alpha) or only the upper one (alpha).
     const bool blend = &near != &other && alpha > 0.0 && alpha < 1.0 && blendLayers.load(std::memory_order_relaxed)
@@ -678,6 +772,7 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
 
     // The voicing of this strike (a re-strike keeps the filter's state: what rings goes on through it).
     setVoicing(v, note, velocity, carry);
+    setAttack(v, carry);
     v.bank.clear();
     v.modeNumber.clear();
     v.targetPole.clear();
@@ -779,8 +874,10 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
             else if (noteStrings >= 2 && soft > 0.0)
                 common *= (float) ((noteStrings - soft) / noteStrings);
         }
-        const float scaled = start * common;
+        const float scaled = start * common * dyn;
         auto push = [&](double freq, double decay, std::complex<float> l, std::complex<float> r, double df, double ds) {
+            if (sustain != 1.0)
+                decay /= sustain;
             const auto pole = modePole(freq * tuning, decay, sampleRate);
             if (!v.bank.add(pole, l * scaled, r * scaled))
                 return;
@@ -875,7 +972,7 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
         v.slots.push_back({ first, v.bank.size() - first, part.number, p.dampers.groupOf(part.number), false });
         // Past its fade time, the partial dies out (after the level ramp, whose end puts the exact poles back).
         if (part.fadeSeconds > 0.0f && v.fades.size() < v.fades.capacity())
-            v.fades.push_back({ std::max((std::int64_t) std::llround(part.fadeSeconds * sampleRate), residualEnd + rampLength),
+            v.fades.push_back({ std::max((std::int64_t) std::llround(part.fadeSeconds * sustain * sampleRate), residualEnd + rampLength),
                                 (int) v.slots.size() - 1 });
     }
     // Re-strike: each mode of the string's vibration added to the new mode of the same partial nearest to it (pole:
@@ -939,7 +1036,7 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     if (bodyEnabled.load(std::memory_order_relaxed) && body.size() == (int) near.bodyLeft.size()) {
         // The overall gain, like the residual: the fast resonances extrapolated back to the note-on are cancelled
         // by the residual only at the same gain. (Against the strings, the body hardly changes between layers.)
-        const float gb = blend ? attackGain : overall;
+        const float gb = (blend ? attackGain : overall) * dyn;
         if (bodyDecay < 1.0f) { // the body was fading out (all sound off): start again from silence
             body.silence();
             bodyDecay = bodyGain = 1.0f;
@@ -959,7 +1056,7 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
     v.layer = &near;
     v.residualPos = 0.0;
     v.residualStep = p.residualRate / sampleRate * tuning;
-    v.residualGain = residualEnabled.load(std::memory_order_relaxed) ? (blend ? attackGain : overall) : 0.0f;
+    v.residualGain = residualEnabled.load(std::memory_order_relaxed) ? (blend ? attackGain : overall) * dyn : 0.0f;
     v.gain = v.decay = 1.0f;
     v.curveGain = 1.0f;
     v.curvePos = 0.0;
@@ -1301,7 +1398,8 @@ void ModalEngine::dampGroups(const ModalProfile& p, Voice& v, int m) noexcept
         }
         return;
     }
-    const double step = v.damperSpeed / (p.dampers.stepSeconds * sampleRate);
+    const double step = v.damperSpeed * std::clamp((double) damperRate.load(std::memory_order_relaxed), 0.2, 5.0)
+                      / (p.dampers.stepSeconds * sampleRate);
     const int last = v.curvePoints - 1;
     auto gainAt = [&](int g, double pos) {
         const float* curve = v.groupGains.data() + (std::size_t) g * (std::size_t) p.dampers.length;
@@ -1367,22 +1465,11 @@ bool ModalEngine::produce(const ModalProfile& p, Voice& v, int m) noexcept
     }
 
     if (v.voicing.on) { // the voicing: the voice's whole sound through its shelf
-        auto& f = v.voicing;
-        float* channel[2] = { l, r };
-        for (int c = 0; c < 2; ++c) {
-            float s1 = f.s1[c], s2 = f.s2[c];
-            float* x = channel[c];
-            for (int k = 0; k < m; ++k) {
-                const float in = x[k];
-                const float out = f.b0 * in + s1;
-                s1 = f.b1 * in - f.a1 * out + s2;
-                s2 = f.b2 * in - f.a2 * out;
-                x[k] = out;
-            }
-            f.s1[c] = s1;
-            f.s2[c] = s2;
-        }
+        v.voicing.f.process(l, m, 0);
+        v.voicing.f.process(r, m, 1);
     }
+    if (v.attack.on) // the attack's softness, fading out
+        softenAttack(v, l, r, m);
 
     // The drive of the free strings: the voice's sound (strings and attack residual, as calibrated), rising from
     // the note-on and fading (forge sympathetic: the reference's resonance builds up later and fades on its own;
@@ -1414,7 +1501,8 @@ bool ModalEngine::produce(const ModalProfile& p, Voice& v, int m) noexcept
         v.gain = g;
     }
     if (v.damperCurve) { // linear interpolation between the curve points, run at the damper's speed
-        const double step = v.damperSpeed / (p.dampers.stepSeconds * sampleRate);
+        const double step = v.damperSpeed * std::clamp((double) damperRate.load(std::memory_order_relaxed), 0.2, 5.0)
+                          / (p.dampers.stepSeconds * sampleRate);
         const int last = v.curvePoints - 1;
         float g = v.curveGain;
         for (int k = 0; k < m; ++k) {

@@ -18,6 +18,7 @@ target_sources(PianoForgeApp PRIVATE
     src/MidiFilePlayer.cpp
     src/ui/Meters.cpp
     src/ui/EnginePanel.cpp
+    src/ui/TonePanel.cpp
     src/ui/AudioPanel.cpp
     src/ui/PerformancePanel.cpp
     src/ui/PlayerBar.cpp
@@ -66,6 +67,7 @@ target_link_libraries(PianoForgeApp
         juce::juce_audio_utils
         juce::juce_audio_formats
         juce::juce_audio_devices
+        juce::juce_dsp
         juce::juce_cryptography
     PUBLIC
         juce::juce_recommended_config_flags

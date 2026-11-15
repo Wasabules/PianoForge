@@ -5,8 +5,10 @@
 #include "MirrorOutput.h"
 #include "TakePlayback.h"
 #include "TakeRecorder.h"
+#include "Tone.h"
 
 #include <pianoforge/audio_feed.hpp>
+#include <pianoforge/compressor.hpp>
 #include <pianoforge/engine.hpp>
 #include <pianoforge/limiter.hpp>
 #include <pianoforge/room.hpp>
@@ -46,13 +48,20 @@ struct AudioLoad {
 /// less work at 192 kHz, for nothing audible lost. What is recorded, captured as takes, streamed (OBS, mirror) is
 /// the engine's sound, at its rate; the MIDI events keep their timing to within one engine sample.
 ///
-/// The volume comes after the room, before the limiter: what is heard and recorded. The OBS plugin's feed takes the
-/// sound before both, as three mixes (pf::FeedMix): as heard, as on speakers (a second room, the head left out, run
-/// while an OBS source takes that mix), and dry; the MIDI events with their frames, the state for overlays and the
-/// marks (chapters) ride along.
+/// After the room: the convolution reverb (the engine's sound before the room through an impulse response, added to
+/// the room's output, in parallel) and the output's tone (an EQ); then the volume and the limiter: what is heard and
+/// recorded. The OBS plugin's feed takes the sound before the volume, as three mixes (pf::FeedMix): as heard, as on
+/// speakers (a second room, the head left out, run while an OBS source takes that mix; the reverb and the tone as
+/// heard), and dry; the MIDI events with their frames, the state for overlays and the marks (chapters) ride along.
+/// The stream's compressor works on what leaves for a stream only (the feed's mixes, the mirror).
 class AudioHost final : public juce::AudioIODeviceCallback {
 public:
     explicit AudioHost(pf::Engine& e) : engine(e) { feedOpen = feed.create(); }
+    ~AudioHost()
+    {
+        delete irPending.exchange(nullptr);
+        delete irSpent.exchange(nullptr);
+    }
 
     juce::MidiMessageCollector collector; // MIDI from keyboards (MIDI thread) and from the UI (message thread)
     juce::MidiKeyboardState keyboardState; // on-screen keyboard; also displays the notes received
@@ -66,6 +75,47 @@ public:
     /// An OBS source takes the speakers mix (the interface sets it from the feed's readers): the second room runs.
     std::atomic<bool> speakersWanted { false };
     TakePlayback playback;                 // takes listened to: heard only (after the recording and streaming taps)
+    /// The output's tone (dB): bass (a low shelf), presence (a bell), air (a high shelf); see OutputEq.
+    std::atomic<float> toneBassDb { 0.0f }, tonePresenceDb { 0.0f }, toneAirDb { 0.0f };
+    /// The convolution reverb: on, its level (dB) and the room's output's (dB; kDryOffDb or below: none).
+    std::atomic<bool> convolutionOn { false };
+    std::atomic<float> convolutionWetDb { -12.0f }, convolutionDryDb { 0.0f };
+    /// Message thread: the impulse response the convolution uses from now on (nullptr: none), crossfaded in.
+    void setImpulse(std::shared_ptr<const ImpulseResponse> ir)
+    {
+        collectGarbage();
+        auto* handed = new ImpulseLoad;
+        if (ir != nullptr) {
+            handed->buffer.makeCopyOf(ir->samples);
+            handed->rate = ir->sampleRate;
+            handed->stereo = ir->stereo();
+        }
+        impulseShared = std::move(ir);
+        delete irPending.exchange(handed); // one not taken yet is replaced
+    }
+    std::shared_ptr<const ImpulseResponse> impulse() const { return impulseShared; } // message thread
+    /// Message thread: frees what the audio thread let go of (an impulse response handed over).
+    void collectGarbage() { delete irSpent.exchange(nullptr); }
+    /// What the offline renders need to sound as heard after the room. Message thread.
+    OutputTone outputTone() const
+    {
+        OutputTone t;
+        t.bassDb = toneBassDb.load();
+        t.presenceDb = tonePresenceDb.load();
+        t.airDb = toneAirDb.load();
+        t.convolution = convolutionOn.load() && impulseShared != nullptr;
+        t.wetDb = convolutionWetDb.load();
+        t.dryDb = convolutionDryDb.load();
+        t.impulse = impulseShared;
+        return t;
+    }
+    /// The stream's compressor (the feed's three mixes and the mirror alike).
+    void setStreamCompressor(const pf::Compressor::Settings& s) noexcept
+    {
+        for (auto& c : streamCompressors)
+            c.applySettings(s);
+    }
+    float streamReduction() const noexcept { return streamCompressors[0].reduction(); }
     /// The engine's rate: 0 the device's divided down to 48 kHz or less (applies at the next device start), 1 the
     /// device's own.
     std::atomic<int> rateMode { 0 };
@@ -113,9 +163,16 @@ public:
         roomSpeakers.prepare(rate);
         speakersRunning = false;
         limiter.prepare(rate);
+        takeImpulse(); // (no block runs: the impulse response handed over is ready with prepare)
+        convolution.prepare({ rate, (juce::uint32) engineBlock, 2 });
+        convolutionRunning = false;
+        wetNow = 0.0f;
+        dryNow = 1.0f;
+        for (auto& c : streamCompressors)
+            c.prepare(rate);
         mirror.mainFormat(rate, engineBlock);
         feed.setFormat((std::uint32_t) std::lround(rate), (std::uint32_t) engineBlock);
-        for (auto& b : { &engineL, &engineR, &dryL, &dryR, &speakersL, &speakersR })
+        for (auto& b : { &engineL, &engineR, &dryL, &dryR, &speakersL, &speakersR, &convL, &convR, &streamL, &streamR, &mirrorL, &mirrorR })
             b->assign((std::size_t) engineBlock, 0.0f);
         for (auto& b : { &upL, &upR })
             b->assign((std::size_t) (engineBlock * k), 0.0f);
@@ -261,6 +318,23 @@ private:
             std::copy(left, left + frames, dryL.begin());
             std::copy(right, right + frames, dryR.begin());
         }
+        // The convolution reverb: the sound before the room through the impulse response (once it was on, one more
+        // block, its level fading to none).
+        const bool irReady = takeImpulse();
+        const bool wantReverb = stereo && irReady && convolutionOn.load(std::memory_order_relaxed) && frames <= (int) convL.size();
+        const bool reverb = wantReverb || (convolutionRunning && stereo && frames <= (int) convL.size());
+        if (reverb) {
+            if (!convolutionRunning)
+                convolution.reset(); // from silence
+            std::copy(left, left + frames, convL.begin());
+            std::copy(right, right + frames, convR.begin());
+            float* channels[2] = { convL.data(), convR.data() };
+            juce::dsp::AudioBlock<float> block(channels, 2, (size_t) frames);
+            convolution.process(juce::dsp::ProcessContextReplacing<float>(block));
+        }
+        const float wetTarget = wantReverb ? std::pow(10.0f, convolutionWetDb.load(std::memory_order_relaxed) / 20.0f) : 0.0f;
+        const float dryTarget = wantReverb ? dryGain(convolutionDryDb.load(std::memory_order_relaxed)) : 1.0f;
+        const double rate = recordingRate.load(std::memory_order_relaxed);
         if (speakers) { // the heard room's settings, the head left out (from silence when it starts)
             if (!speakersRunning)
                 roomSpeakers.reset();
@@ -271,20 +345,45 @@ private:
             std::copy(left, left + frames, speakersL.begin());
             std::copy(right, right + frames, speakersR.begin());
             roomSpeakers.process(speakersL.data(), speakersR.data(), frames);
+            if (reverb)
+                mixReverb(speakersL.data(), speakersR.data(), frames, wetTarget, dryTarget);
+            eqSpeakers.update(rate, toneBassDb.load(std::memory_order_relaxed), tonePresenceDb.load(std::memory_order_relaxed),
+                              toneAirDb.load(std::memory_order_relaxed));
+            eqSpeakers.process(speakersL.data(), speakersR.data(), frames);
         } else {
             speakersRunning = false;
         }
         if (stereo)
             room.process(left, right, frames);
+        if (reverb)
+            mixReverb(left, right, frames, wetTarget, dryTarget);
+        wetNow = reverb ? wetTarget : 0.0f;
+        dryNow = reverb ? dryTarget : 1.0f;
+        convolutionRunning = wantReverb;
+        eqHeard.update(rate, toneBassDb.load(std::memory_order_relaxed), tonePresenceDb.load(std::memory_order_relaxed),
+                       toneAirDb.load(std::memory_order_relaxed));
+        eqHeard.process(left, right, frames);
         if (feedOpen) {
             pf::AudioFeedWriter::Block b;
             b.left[0] = left;
             b.right[0] = stereo ? right : left;
+            const bool squeeze = streamCompressors[0].isOn() && frames <= (int) streamL.size();
+            if (squeeze) { // the stream's compressor: on copies (what is heard stays as it is)
+                std::copy(left, left + frames, streamL.begin());
+                std::copy(stereo ? right : left, (stereo ? right : left) + frames, streamR.begin());
+                streamCompressors[0].process(streamL.data(), streamR.data(), frames);
+                b.left[0] = streamL.data();
+                b.right[0] = streamR.data();
+            }
             if (speakers) {
+                if (squeeze)
+                    streamCompressors[1].process(speakersL.data(), speakersR.data(), frames);
                 b.left[1] = speakersL.data();
                 b.right[1] = speakersR.data();
             }
             if (mixes) {
+                if (squeeze)
+                    streamCompressors[2].process(dryL.data(), dryR.data(), frames);
                 b.left[2] = dryL.data();
                 b.right[2] = dryR.data();
             }
@@ -316,7 +415,15 @@ private:
     void finish(float* const* out, int channels, int frames) noexcept
     {
         live.push(out, channels, frames, samplesElapsed); // a copy into a lock-free FIFO: nothing waits on it
-        mirror.push(out, channels, frames);               // likewise
+        if (streamCompressors[3].isOn() && channels >= 2 && frames <= (int) mirrorL.size()) { // what leaves for a stream
+            std::copy(out[0], out[0] + frames, mirrorL.begin());
+            std::copy(out[1], out[1] + frames, mirrorR.begin());
+            streamCompressors[3].process(mirrorL.data(), mirrorR.data(), frames);
+            const float* squeezed[2] = { mirrorL.data(), mirrorR.data() };
+            mirror.push(squeezed, 2, frames);
+        } else {
+            mirror.push(out, channels, frames); // likewise
+        }
         notePeak(load.peakLeft, channels > 0 ? out[0] : nullptr, frames);
         notePeak(load.peakRight, channels > 1 ? out[1] : nullptr, frames);
         samplesElapsed += frames;
@@ -343,6 +450,34 @@ private:
         load.callbacks.fetch_add(1, std::memory_order_release);
     }
 
+    /// The room's output at the dry level, the reverb's added at the wet level (both gliding over the block).
+    void mixReverb(float* left, float* right, int frames, float wetTarget, float dryTarget) noexcept
+    {
+        const float wetStep = (wetTarget - wetNow) / (float) frames, dryStep = (dryTarget - dryNow) / (float) frames;
+        for (int k = 0; k < frames; ++k) {
+            const float w = wetNow + wetStep * (float) (k + 1), d = dryNow + dryStep * (float) (k + 1);
+            left[k] = d * left[k] + w * convL[(std::size_t) k];
+            right[k] = d * right[k] + w * convR[(std::size_t) k];
+        }
+    }
+
+    /// Audio thread (or a device starting): an impulse response handed over goes to the convolution (wait-free; the
+    /// emptied hand-over back to the message thread, once it took the last one).
+    bool takeImpulse() noexcept
+    {
+        if (irSpent.load(std::memory_order_acquire) == nullptr)
+            if (auto* handed = irPending.exchange(nullptr, std::memory_order_acq_rel)) {
+                const bool some = handed->buffer.getNumSamples() > 0;
+                if (some)
+                    convolution.loadImpulseResponse(std::move(handed->buffer), handed->rate,
+                                                    handed->stereo ? juce::dsp::Convolution::Stereo::yes : juce::dsp::Convolution::Stereo::no,
+                                                    juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::yes);
+                convolutionReady.store(some, std::memory_order_relaxed);
+                irSpent.store(handed, std::memory_order_release);
+            }
+        return convolutionReady.load(std::memory_order_relaxed);
+    }
+
     static void notePeak(std::atomic<float>& peak, const float* x, int n) noexcept
     {
         if (x == nullptr)
@@ -363,6 +498,22 @@ private:
     bool speakersRunning = false;
     float volumeNow = 1.0f;   // the volume applied at the end of the last block (audio thread)
     std::vector<float> dryL, dryR, speakersL, speakersR;
+    // The convolution reverb: the impulse response handed over (message thread -> audio thread, and back emptied).
+    struct ImpulseLoad {
+        juce::AudioBuffer<float> buffer;
+        double rate = 48000.0;
+        bool stereo = false;
+    };
+    std::atomic<ImpulseLoad*> irPending { nullptr }, irSpent { nullptr };
+    std::shared_ptr<const ImpulseResponse> impulseShared; // message thread: the one in use, for the offline renders
+    juce::dsp::Convolution convolution { juce::dsp::Convolution::NonUniform { 2048 } }; // no latency
+    std::atomic<bool> convolutionReady { false };
+    bool convolutionRunning = false; // audio thread
+    float wetNow = 0.0f, dryNow = 1.0f;
+    std::vector<float> convL, convR;
+    OutputEq eqHeard, eqSpeakers; // audio thread
+    std::array<pf::Compressor, 4> streamCompressors; // the feed's three mixes, the mirror
+    std::vector<float> streamL, streamR, mirrorL, mirrorR;
     std::vector<pf::FeedEvent> feedEvents = std::vector<pf::FeedEvent>(kMaxEvents); // on the heap: hosts live on stacks (the self-test)
     juce::MidiBuffer midi;
     std::array<pf::Event, kMaxEvents> events {};

@@ -1055,6 +1055,83 @@ int main()
               "harder hammers: the partials above the corner raised");
         const double atHalf = db(half, 3520.0) - 20.0 * std::log10(amplitude(play(0.0f, 1.0f, 64), 3520.0) / amplitude(plain, 3520.0));
         check(atHalf < -5.0 && atHalf > -7.0, "following the velocity: half the voicing at velocity 64");
+
+        // The attack's softness: the treble lowered at the strike, fading out; past it, the sound as measured.
+        auto withEngine = [&](auto setup, std::vector<pf::Event> events, std::shared_ptr<const pf::ModalProfile> profile) {
+            pf::ModalEngine e;
+            e.install(profile);
+            e.bodyEnabled = false;
+            setup(e);
+            e.prepare(kRate, 64);
+            std::vector<float> a, b;
+            render(e, std::move(events), (int) kRate * 2, a, b);
+            return a;
+        };
+        const std::vector<pf::Event> strike = { { 0, 0x90, 69, 100 } };
+        const auto asMeasured = withEngine([](pf::ModalEngine&) {}, strike, p);
+        const auto soft = withEngine([](pf::ModalEngine& e) { e.attackSoftDb = -12.0f; e.attackSoftMs = 40.0f; }, strike, p);
+        auto bandDb = [&](const std::vector<float>& x, const std::vector<float>& ref, double f, int from, int to) {
+            std::complex<double> s, t;
+            for (int i = from; i < to; ++i) {
+                const auto w = std::polar(1.0, -kTwoPi * f * i / kRate);
+                s += (double) x[(std::size_t) i] * w;
+                t += (double) ref[(std::size_t) i] * w;
+            }
+            return 20.0 * std::log10(std::abs(s) / std::abs(t));
+        };
+        const double early = bandDb(soft, asMeasured, 3520.0, 0, 240), earlyLow = bandDb(soft, asMeasured, 440.0, 0, 480);
+        const bool restored = std::equal(soft.begin() + (std::ptrdiff_t) (0.045 * kRate), soft.end(),
+                                         asMeasured.begin() + (std::ptrdiff_t) (0.045 * kRate));
+        std::printf("      attack -12 dB over 40 ms: partial 8 %+.2f dB over the first 5 ms, partial 1 %+.2f dB over 10 ms\n",
+                    early, earlyLow);
+        check(early < -7.0 && std::abs(earlyLow) < 1.5, "a softer attack: the treble lowered at the strike, the fundamental hardly");
+        check(restored, "past the attack: the sound as measured (bit for bit)");
+
+        // The lid: closed, the treble down by kLidClosedDb more than the whole.
+        const auto closed = withEngine([](pf::ModalEngine& e) { e.lidOpen = 0.0f; }, strike, p);
+        const double lidLow = bandDb(closed, asMeasured, 440.0, (int) (0.2 * kRate), (int) kRate);
+        const double lidHigh = bandDb(closed, asMeasured, 3520.0, (int) (0.2 * kRate), (int) kRate);
+        std::printf("      lid closed: partial 1 %+.2f dB, partial 8 %+.2f dB\n", lidLow, lidHigh);
+        check(lidLow < -1.8 && lidLow > -3.2 && lidHigh < -9.5 && lidHigh > -12.0, "the lid closed: the treble down, the whole a little");
+    }
+
+    // Touch and resonance: the dynamic range, the sustain length, the dampers' speed.
+    {
+        const auto p = makeProfile(); // layers at velocities 40 and 100, 12 dB apart; dampers: -60 dB in 0.2 s
+        auto play = [&](auto setup, std::vector<pf::Event> events, int frames) {
+            pf::ModalEngine e;
+            e.install(p);
+            e.bodyEnabled = false;
+            setup(e);
+            e.prepare(kRate, 64);
+            std::vector<float> a, b;
+            render(e, std::move(events), frames, a, b);
+            return a;
+        };
+        auto none = [](pf::ModalEngine&) {};
+        auto halfRange = [](pf::ModalEngine& e) { e.dynamicRange = 0.5f; };
+        const int second = (int) kRate;
+        const auto soft = play(none, { { 0, 0x90, 69, 40 } }, second), softHalf = play(halfRange, { { 0, 0x90, 69, 40 } }, second);
+        const auto loud = play(none, { { 0, 0x90, 69, 100 } }, second), loudHalf = play(halfRange, { { 0, 0x90, 69, 100 } }, second);
+        const double softGain = 20.0 * std::log10(rms(softHalf, 0, second) / rms(soft, 0, second));
+        const double loudGain = 20.0 * std::log10(rms(loudHalf, 0, second) / rms(loud, 0, second));
+        std::printf("      dynamic range 50 %%: the pianissimo layer %+.2f dB, the fortissimo %+.2f dB\n", softGain, loudGain);
+        check(std::abs(softGain - 6.0) < 0.5 && std::abs(loudGain) < 0.01,
+              "the dynamic range halved: the soft layer 6 dB closer to the loud one, the loud one unchanged");
+
+        const auto longer = play([](pf::ModalEngine& e) { e.sustainLength = 2.0f; }, { { 0, 0x90, 69, 100 } }, 2 * second);
+        const auto plain = play(none, { { 0, 0x90, 69, 100 } }, 2 * second);
+        const double start = 20.0 * std::log10(rms(longer, 0, 480) / rms(plain, 0, 480));
+        const double later = 20.0 * std::log10(rms(longer, (int) (1.5 * kRate), 2 * second) / rms(plain, (int) (1.5 * kRate), 2 * second));
+        std::printf("      sustain x2: %+.2f dB over the first 10 ms, %+.2f dB at 1.5 to 2 s\n", start, later);
+        check(std::abs(start) < 0.5 && later > 5.0, "a longer sustain: the same strike, a slower decay");
+
+        const std::vector<pf::Event> held = { { 0, 0x90, 69, 100 }, { (std::uint32_t) (kRate / 2), 0x80, 69, 0 } };
+        const auto quick = play(none, held, second), slow = play([](pf::ModalEngine& e) { e.damperRate = 0.5f; }, held, second);
+        const int from = (int) (0.55 * kRate), to = (int) (0.6 * kRate);
+        const double slower = 20.0 * std::log10(rms(slow, from, to) / rms(quick, from, to));
+        std::printf("      dampers at half speed: %+.2f dB 50 to 100 ms after the release\n", slower);
+        check(slower > 6.0, "slower dampers: a longer release");
     }
 
     return failures ? 1 : 0;

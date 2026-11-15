@@ -14,6 +14,7 @@
 #include "StreamLook.h"
 #include "ui/AudioPanel.h"
 #include "ui/EnginePanel.h"
+#include "ui/TonePanel.h"
 #include "ui/Meters.h"
 #include "ui/PerformancePanel.h"
 #include "ui/PlayerBar.h"
@@ -156,10 +157,11 @@ private:
 
     // Panels (created with the application: their settings apply from the start) and their windows.
     std::unique_ptr<EnginePanel> enginePanel;
+    std::unique_ptr<TonePanel> tonePanel;
     std::unique_ptr<AudioPanel> audioPanel;
     PerformancePanel performancePanel;
     std::unique_ptr<RoomPanel> roomPanel;
-    std::unique_ptr<ToolWindow> engineWindow, audioWindow, performanceWindow, roomWindow, takesWindow, gesturesWindow, streamLookWindow;
+    std::unique_ptr<ToolWindow> engineWindow, toneWindow, audioWindow, performanceWindow, roomWindow, takesWindow, gesturesWindow, streamLookWindow;
     std::unique_ptr<GesturesPanel> gesturesPanel;
     std::unique_ptr<StreamLook> streamLook;           // the OBS keyboard's look, shared with OBS
     std::unique_ptr<StreamLookPanel> streamLookPanel; // its window's content

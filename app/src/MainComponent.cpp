@@ -19,7 +19,7 @@ enum MenuId {
     // Player
     kPlayPause = 80, kStopPlayer, kBack, kForward, kLoop, kCloseMidi, kSpeed = 100,
     // Engine
-    kEngineReference = 20, kEngineModal, kEngineModalB, kChooseProfileB, kEngineOption = 30, kEngineSettings = 50, kRoomToggle, kRoomSettings, kHeadphones,
+    kEngineReference = 20, kEngineModal, kEngineModalB, kChooseProfileB, kEngineOption = 30, kEngineSettings = 50, kRoomToggle, kRoomSettings, kHeadphones, kToneSettings,
     // Audio
     kAudioSettings = 60, kPerformance, kResetDropouts, kStreamLook,
     // Keyboard
@@ -134,6 +134,7 @@ MainComponent::MainComponent()
 
     // Panels: their settings apply now, whether their windows open or not.
     enginePanel = std::make_unique<EnginePanel>(modal, player, *settings);
+    tonePanel = std::make_unique<TonePanel>(modal, host, *settings);
     audioPanel = std::make_unique<AudioPanel>(deviceManager, host, *settings);
     performancePanel.onReset = [this] {
         auto* d = deviceManager.getCurrentAudioDevice();
@@ -371,6 +372,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         }
         menu.addSeparator();
         menu.addItem(item(kEngineSettings, "Engine settings (tuning, re-strike, levels)...", "Ctrl+E"));
+        menu.addItem(item(kToneSettings, "Tone and dynamics (touch, lid, EQ, reverb, stream)...", "Ctrl+D"));
         menu.addSeparator();
         menu.addItem(item(kRoomToggle, "Room: " + roomPanel->presetName(), {}, roomPanel->isOn()));
         juce::PopupMenu rooms;
@@ -503,6 +505,7 @@ void MainComponent::menuItemSelected(int id, int)
     case kEngineModalB: selectModalProfile(true); break;
     case kChooseProfileB: chooseProfileB(); break;
     case kEngineSettings: showWindow(engineWindow, "Engine settings", *enginePanel); break;
+    case kToneSettings: showWindow(toneWindow, "Tone and dynamics", *tonePanel); break;
     case kRoomToggle: roomPanel->setOn(!roomPanel->isOn()); break;
     case kRoomSettings: showWindow(roomWindow, "Room", *roomPanel); break;
     case kHeadphones: toggleHeadphones(); break;
@@ -546,7 +549,7 @@ void MainComponent::showShortcuts()
               "MIDI file player\n  Ctrl+O: open a MIDI file (or drop it on the window)\n  Ctrl+Space: play / pause\n"
               "  Ctrl+Home: stop, back to the start\n  Ctrl+Left / Ctrl+Right: 5 s back / forward\n  Ctrl+L: loop\n\n"
               "Application\n  Ctrl+R: record / stop\n  Ctrl+S: save the last take\n  Ctrl+1 / Ctrl+2: reference / modal engine\n"
-              "  Ctrl+T: takes and recordings\n  Ctrl+E: engine settings\n  Ctrl+M: room settings\n  Ctrl+H: heard on headphones / speakers\n  Ctrl+,: audio, MIDI and streaming\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
+              "  Ctrl+T: takes and recordings\n  Ctrl+E: engine settings\n  Ctrl+D: tone and dynamics\n  Ctrl+M: room settings\n  Ctrl+H: heard on headphones / speakers\n  Ctrl+,: audio, MIDI and streaming\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
               "Piano gestures, on the MIDI keyboard (Keyboard > Piano gestures)\n" + gesturesHelp()
             + "\nThe mouse plays too: lower on a key is louder.");
 }
@@ -820,6 +823,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
         case 'R': toggleRecording(); return true;
         case 'S': saveLastTake(); return true;
         case 'E': showWindow(engineWindow, "Engine settings", *enginePanel); return true;
+        case 'D': showWindow(toneWindow, "Tone and dynamics", *tonePanel); return true;
         case 'M': showWindow(roomWindow, "Room", *roomPanel); return true;
         case 'T': openTakes(); return true;
         case 'H': toggleHeadphones(); return true;
@@ -924,6 +928,8 @@ const juce::StringArray& MainComponent::instrumentKeys()
                                           "modalReleaseNoise", "playWholeTake", "sympatheticDb", "unisonSpread", "restrikeFade",
                                           "restrikeAbsorption",
                                           "voicingBassDb", "voicingMiddleDb", "voicingTrebleDb", "voicingVelocity", "voicingCorner",
+                                          "dynamicRange", "sustainLength", "damperRate", "attackSoftDb", "attackSoftMs", "lidOpen",
+                                          "toneBassDb", "tonePresenceDb", "toneAirDb", "convolutionOn", "convolutionWetDb", "convolutionDryDb",
                                           "referenceA4", "temperament", "temperamentRoot",
                                           "roomModel", "roomOn", "roomPreset", "roomPresetName", "roomPosition", "roomKeepLoudness",
                                           "roomLevel", "roomSize", "roomDecay", "roomBrightness", "roomWidth", "roomDistance" };
@@ -945,6 +951,7 @@ void MainComponent::reloadSettings()
     pedalCurve.set(pedalSettings);
     volume.setValue(s->getDoubleValue("volume", volume.getValue()), juce::sendNotificationSync);
     enginePanel->reload();
+    tonePanel->reload();
     roomPanel->reload();
     gesturesPanel->reload();
     if (s->getIntValue("engine", 2) == 2 ? !modalSelected() : modalSelected())
@@ -1045,7 +1052,7 @@ namespace {
 /// Settings that belong to this computer, left out of an export and of an import.
 bool machineSetting(const juce::String& key)
 {
-    return key == "audio" || key.startsWith("audioDevice.") || key == "corpus" || key == "profileB" || key == "midiFolder" || key == "mirrorDevice"
+    return key == "audio" || key.startsWith("audioDevice.") || key == "corpus" || key == "profileB" || key == "convolutionFile" || key == "midiFolder" || key == "mirrorDevice"
         || key == "engineRateMode" || key == "roomHeadphones" // what this computer plays through
         || key == "updateLastCheck" || key == "updateSkipped";
 }
@@ -1376,12 +1383,19 @@ void MainComponent::renderInBackground(juce::MidiMessageSequence sequence, doubl
     // the limiter, as they are now; the tail is longer by the room's.
     takeRender = std::thread([sequence = std::move(sequence), bank = std::move(bank), profile = std::move(profile),
                               withModal, settings = modal.settings(), room = host.room.settings(), limit = host.limiter.enabled.load(),
+                              tone = host.outputTone(),
                               rate, restrike = enginePanel->restrikeSeconds(), whole = enginePanel->isOn(EnginePanel::Option::wholeTake),
                               wavFile, summary, done = std::move(done), safe = juce::Component::SafePointer<MainComponent>(this)] {
-        const double tail = 4.0 + (room.enabled ? pf::Room::tailSeconds(room) : 0.0);
+        const double reverbTail = tone.convolution && tone.impulse != nullptr
+                                      ? tone.impulse->samples.getNumSamples() / tone.impulse->sampleRate : 0.0;
+        const double tail = 4.0 + std::max(room.enabled ? pf::Room::tailSeconds(room) : 0.0, reverbTail);
         auto audio = withModal ? renderSequenceModal(sequence, profile, rate, settings, tail)
                                : renderSequence(sequence, bank, rate, restrike, whole, tail);
+        std::unique_ptr<juce::AudioBuffer<float>> dry; // the sound before the room: the convolution's input
+        if (tone.convolution)
+            dry = std::make_unique<juce::AudioBuffer<float>>(audio);
         applyRoom(audio, room, rate);
+        applyOutputTone(audio, dry.get(), tone, rate); // the reverb and the tone, as live
         applyLimiter(audio, limit, rate);
         const auto written = writeWav(audio, rate, wavFile);
         juce::MessageManager::callAsync([safe, written, wavFile, summary, done] {

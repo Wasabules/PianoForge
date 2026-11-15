@@ -825,6 +825,93 @@ int runSelfTest(const juce::StringArray& arguments)
                     + " dB after the release (expected > 6)");
     }
 
+    // 8e2. After the room: the convolution reverb (an impulse response of one click 100 ms late: the sound again,
+    //      100 ms later; the room's output at "none": nothing before), the output's tone (the bass raised: a low
+    //      chord louder), the stream's compressor (it reduces what leaves for a stream, not what is heard).
+    {
+        bool feedOpen = true; // the compressor works on the OBS feed: none open (another instance has it), not measured
+        auto play = [&](auto setup, std::initializer_list<int> notes, double seconds) {
+            player.playWholeTake = false;
+            auto hostOwner = std::make_unique<AudioHost>(player); // on the heap: hosts are large
+            AudioHost& host = *hostOwner;
+            feedOpen = host.feedOn();
+            setup(host);
+            host.start(fs, 512);
+            std::vector<float> l(512), rr(512), out;
+            float* outputs[2] = { l.data(), rr.data() };
+            const int blocks = (int) (seconds * fs) / 512;
+            float reduction = 0.0f;
+            for (int k = 0; k < blocks; ++k) {
+                for (const int note : notes) {
+                    if (k == 2)
+                        host.send(juce::MidiMessage::noteOn(1, note, (juce::uint8) 110));
+                    if (k == (int) (0.5 * fs) / 512)
+                        host.send(juce::MidiMessage::noteOff(1, note));
+                }
+                host.audioDeviceIOCallbackWithContext(nullptr, 0, outputs, 2, 512, {});
+                out.insert(out.end(), l.begin(), l.end());
+                reduction = std::max(reduction, host.streamReduction());
+            }
+            host.collectGarbage();
+            return std::make_pair(out, reduction);
+        };
+        auto level = [&](const std::vector<float>& x, double a, double b) {
+            double e = 0.0;
+            for (int i = (int) (a * fs); i < (int) (b * fs) && i < (int) x.size(); ++i)
+                e += (double) x[(size_t) i] * x[(size_t) i];
+            return 10.0 * std::log10(e / ((b - a) * fs) + 1e-30);
+        };
+        auto click = std::make_shared<ImpulseResponse>();
+        click->samples.setSize(1, (int) (0.2 * fs));
+        click->samples.clear();
+        click->samples.setSample(0, (int) (0.1 * fs), 1.0f);
+        click->sampleRate = fs;
+        const auto none = [](AudioHost&) {};
+        const auto plain = play(none, { 60, 64, 67 }, 1.0).first;
+        const auto echoed = play([&](AudioHost& h) {
+                                h.setImpulse(click);
+                                h.convolutionOn = true;
+                                h.convolutionWetDb = 0.0f;
+                                h.convolutionDryDb = kDryOffDb;
+                            },
+                                 { 60, 64, 67 }, 1.0)
+                                .first;
+        const int onset = 2 * 512, late = (int) (0.1 * fs);
+        double fit = 0.0, energy = 0.0, gain = 0.0; // the echo against the plain sound 100 ms earlier (its scale fitted)
+        for (int t = onset; t < onset + (int) (0.3 * fs); ++t) {
+            gain += (double) echoed[(size_t) (t + late)] * plain[(size_t) t];
+            energy += (double) plain[(size_t) t] * plain[(size_t) t];
+        }
+        gain /= std::max(energy, 1e-30);
+        for (int t = onset; t < onset + (int) (0.3 * fs); ++t) {
+            const double d = echoed[(size_t) (t + late)] - gain * plain[(size_t) t];
+            fit += d * d;
+        }
+        const double before = level(echoed, 0.0, (onset + late - 64) / fs) - level(plain, onset / fs, (onset + late) / fs);
+        const double mismatch = 10.0 * std::log10(fit / std::max(energy * gain * gain, 1e-30));
+        r.check(gain > 0.0 && before < -80.0 && mismatch < -60.0,
+                "convolution reverb: an impulse response of one click 100 ms late gives the sound 100 ms later (residue "
+                    + juce::String(mismatch, 1) + " dB, expected < -60; before it " + juce::String(before, 1) + " dB, expected < -80)");
+
+        const auto low = play(none, { 36, 43 }, 1.0).first;
+        const auto lowRaised = play([](AudioHost& h) { h.toneBassDb = 12.0f; }, { 36, 43 }, 1.0).first;
+        const double raised = level(lowRaised, 0.05, 0.5) - level(low, 0.05, 0.5);
+        r.check(raised > 3.0 && raised < 12.5,
+                "output tone: the bass +12 dB (a shelf at 120 Hz) makes a low chord " + juce::String(raised, 1) + " dB louder (expected 3 to 12.5)");
+
+        const auto squeezed = play([](AudioHost& h) {
+            pf::Compressor::Settings c;
+            c.enabled = true;
+            c.thresholdDb = -40.0f;
+            c.ratio = 4.0f;
+            h.setStreamCompressor(c);
+        },
+                                   { 60, 64, 67 }, 1.0);
+        r.check(squeezed.first == plain && (squeezed.second > 5.0 || !feedOpen),
+                "stream compressor: what is heard untouched (bit for bit), what leaves for a stream reduced by up to "
+                    + (feedOpen ? juce::String(squeezed.second, 1) + " dB (expected > 5)" : juce::String("? dB (the OBS feed is another instance's: not measured)")));
+    }
+
     // 8f. The engine below the device's rate: a device at 4 x 44.1 kHz (what the Windows mixer can impose) runs
     //     the engine at 44.1 kHz and brings its sound up. Blocks of 1001 device samples, so that a frame straddles
     //     two blocks (the carry). The same chord as at 44.1 kHz, at the same level; nothing above 24 kHz but the
