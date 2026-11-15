@@ -212,8 +212,9 @@ See `tools/bench/README.md`.
 ## Reference banks
 
 The engine was studied on one commercial library; free sample banks are references too, rendered by the bench's SFZ
-player through the same sessions and measured by the same forge. The final sound leans on the free ones: a profile
-built from them can be published, with their credit.
+player through the same sessions and measured by the same forge. The three banks are kept as references; which one
+the published sound rests on is decided at the end of the project (a profile built from a free bank can be published,
+with its credit).
 
 | Bank | Piano | Recording | Licence | Corpus state |
 |---|---|---|---|---|
