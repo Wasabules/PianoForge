@@ -31,7 +31,7 @@ import soundfile as sf
 
 from forge.modes import BandExtractor, _hankel_cov, esprit_poles, synthesize
 from forge.note_modes import clean, partial_modes
-from forge.takes import held_end
+from forge.takes import held_end, read as read_take
 from forge import progress
 
 BAND = (30.0, 700.0)
@@ -46,7 +46,7 @@ def residual_baseband(path: Path, note: dict, seconds: float | None = None) -> t
     """Body band of (recording - measured modes), at baseband, over [T0, T1] (channels x samples). `seconds` limits
     the part of the hold that is read (it changes the baseband rate, which depends on the length)."""
     meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
-    audio, fs = sf.read(path, dtype="float64", always_2d=True)
+    audio, fs = read_take(path)
     on, off = meta["note_on_sample"], held_end(meta)
     if seconds is not None:
         off = min(off, on + int(round(seconds * fs)))

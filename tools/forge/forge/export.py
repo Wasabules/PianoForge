@@ -89,7 +89,7 @@ import soundfile as sf
 from forge import release_noise, soundboard, sympathetic, unison
 from forge.modes import BandExtractor, synthesize
 from forge.note_modes import clean, partial_modes
-from forge.takes import held_end
+from forge.takes import held_end, read as read_take
 from forge import progress
 
 MAGIC, VERSION = b"PFMODAL1", 3
@@ -140,7 +140,7 @@ def quiet_from(r: np.ndarray, x: np.ndarray, fs: float, start: float) -> float:
 def residual(path: Path, note: dict, body_freqs, body_decays, body_amps) -> tuple[np.ndarray, int]:
     """Attack residual of one take (frames x channels), faded out, at the take's sample rate."""
     meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
-    audio, fs = sf.read(path, dtype="float64", always_2d=True)
+    audio, fs = read_take(path)
     longest = int(round(RESIDUAL_MAX_S * fs))
     on = meta["note_on_sample"]
     x = audio[on:on + longest].T
@@ -270,7 +270,7 @@ def fade_times(path: Path, note: dict) -> dict[int, float]:
     if not todo:
         return {}
     meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
-    audio, fs = sf.read(path, dtype="float64", always_2d=True)
+    audio, fs = read_take(path)
     extractor = BandExtractor(audio[meta["note_on_sample"]:held_end(meta)].T, fs)
     pass_hz = min(0.33 * note["f0"], 30.0)  # the bands of the analysis (modes.partial_window)
     stop_hz = min(0.66 * note["f0"], 2 * pass_hz)
