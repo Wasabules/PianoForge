@@ -358,6 +358,11 @@ ModalEngine::Settings ModalEngine::settings() const noexcept
     for (std::size_t pc = 0; pc < 12; ++pc)
         s.pitchClassCents[pc] = pitchClassCents[pc].load();
     s.unisonSpread = unisonSpread.load();
+    s.voicingBassDb = voicingBassDb.load();
+    s.voicingMiddleDb = voicingMiddleDb.load();
+    s.voicingTrebleDb = voicingTrebleDb.load();
+    s.voicingVelocity = voicingVelocity.load();
+    s.voicingCorner = voicingCorner.load();
     return s;
 }
 
@@ -376,7 +381,48 @@ void ModalEngine::applySettings(const Settings& s) noexcept
     for (std::size_t pc = 0; pc < 12; ++pc)
         pitchClassCents[pc] = s.pitchClassCents[pc];
     unisonSpread = std::clamp(s.unisonSpread, 0.0f, 4.0f);
+    voicingBassDb = s.voicingBassDb;
+    voicingMiddleDb = s.voicingMiddleDb;
+    voicingTrebleDb = s.voicingTrebleDb;
+    voicingVelocity = std::clamp(s.voicingVelocity, 0.0f, 1.0f);
+    voicingCorner = std::clamp(s.voicingCorner, 1.0f, 16.0f);
     tuningVersion.fetch_add(1);
+}
+
+float ModalEngine::voicingDb(int note, int velocity) const noexcept
+{
+    const float bass = voicingBassDb.load(std::memory_order_relaxed);
+    const float middle = voicingMiddleDb.load(std::memory_order_relaxed);
+    const float treble = voicingTrebleDb.load(std::memory_order_relaxed);
+    const float x = (float) std::clamp(note, 21, 108);
+    const float db = x <= 60.0f ? bass + (middle - bass) * (x - 21.0f) / 39.0f : middle + (treble - middle) * (x - 60.0f) / 48.0f;
+    const float follow = std::clamp(voicingVelocity.load(std::memory_order_relaxed), 0.0f, 1.0f);
+    return db * ((1.0f - follow) + follow * (float) std::clamp(velocity, 0, 127) / 127.0f);
+}
+
+void ModalEngine::setVoicing(Voice& v, int note, int velocity, bool keepState) noexcept
+{
+    auto& f = v.voicing;
+    const float db = voicingDb(note, velocity);
+    if (std::abs(db) < 0.01f) {
+        f.on = false; // the sound as measured, exactly
+        return;
+    }
+    // A high shelf (RBJ, slope 1) whose midpoint follows the note: the partials above the corner move by db.
+    const double f0 = 440.0 * std::pow(2.0, (note - 69) / 12.0) * tuningRatio(note);
+    const double corner = std::clamp((double) voicingCorner.load(std::memory_order_relaxed), 1.0, 16.0) * f0;
+    const double w0 = 2.0 * 3.14159265358979323846 * std::min(corner, 0.45 * sampleRate) / sampleRate;
+    const double A = std::pow(10.0, db / 40.0), c = std::cos(w0), alpha = std::sin(w0) / std::sqrt(2.0);
+    const double root = 2.0 * std::sqrt(A) * alpha;
+    const double a0 = (A + 1.0) - (A - 1.0) * c + root;
+    f.b0 = (float) (A * ((A + 1.0) + (A - 1.0) * c + root) / a0);
+    f.b1 = (float) (-2.0 * A * ((A - 1.0) + (A + 1.0) * c) / a0);
+    f.b2 = (float) (A * ((A + 1.0) + (A - 1.0) * c - root) / a0);
+    f.a1 = (float) (2.0 * ((A - 1.0) - (A + 1.0) * c) / a0);
+    f.a2 = (float) (((A + 1.0) - (A - 1.0) * c - root) / a0);
+    if (!keepState || !f.on)
+        f.s1[0] = f.s1[1] = f.s2[0] = f.s2[1] = 0.0f;
+    f.on = true;
 }
 
 void ModalEngine::retuneStrings() noexcept
@@ -630,6 +676,8 @@ void ModalEngine::noteOn(const ModalProfile& p, int note, int velocity) noexcept
             t.gain = 0.0f;
     }
 
+    // The voicing of this strike (a re-strike keeps the filter's state: what rings goes on through it).
+    setVoicing(v, note, velocity, carry);
     v.bank.clear();
     v.modeNumber.clear();
     v.targetPole.clear();
@@ -1316,6 +1364,24 @@ bool ModalEngine::produce(const ModalProfile& p, Voice& v, int m) noexcept
             t.gain = 0.0f;
         else
             residualLeft = true;
+    }
+
+    if (v.voicing.on) { // the voicing: the voice's whole sound through its shelf
+        auto& f = v.voicing;
+        float* channel[2] = { l, r };
+        for (int c = 0; c < 2; ++c) {
+            float s1 = f.s1[c], s2 = f.s2[c];
+            float* x = channel[c];
+            for (int k = 0; k < m; ++k) {
+                const float in = x[k];
+                const float out = f.b0 * in + s1;
+                s1 = f.b1 * in - f.a1 * out + s2;
+                s2 = f.b2 * in - f.a2 * out;
+                x[k] = out;
+            }
+            f.s1[c] = s1;
+            f.s2[c] = s2;
+        }
     }
 
     // The drive of the free strings: the voice's sound (strings and attack residual, as calibrated), rising from

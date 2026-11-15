@@ -923,6 +923,7 @@ const juce::StringArray& MainComponent::instrumentKeys()
                                           "modalBody", "modalResidual", "modalSympathetic", "modalHeldKeys", "modalPedalCatch",
                                           "modalReleaseNoise", "playWholeTake", "sympatheticDb", "unisonSpread", "restrikeFade",
                                           "restrikeAbsorption",
+                                          "voicingBassDb", "voicingMiddleDb", "voicingTrebleDb", "voicingVelocity", "voicingCorner",
                                           "referenceA4", "temperament", "temperamentRoot",
                                           "roomModel", "roomOn", "roomPreset", "roomPresetName", "roomPosition", "roomKeepLoudness",
                                           "roomLevel", "roomSize", "roomDecay", "roomBrightness", "roomWidth", "roomDistance" };

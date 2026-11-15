@@ -127,11 +127,61 @@ EnginePanel::EnginePanel(pf::ModalEngine& m, ReferencePlayer& p, juce::Propertie
     };
     applyTuning();
 
+    // Voicing: what a technician does to the hammers, by register. Negative: needled, softer (a rounder tone);
+    // positive: hardened (brighter). The partials above the corner move; the fundamental stays.
+    const char* registers[] = { "Bass (A0)", "Middle (C4)", "Treble (C8)" };
+    const char* voicingKeys[] = { "voicingBassDb", "voicingMiddleDb", "voicingTrebleDb" };
+    for (size_t i = 0; i < voicing.size(); ++i) {
+        voicingLabels[i].setText(registers[i], juce::dontSendNotification);
+        auto& slider = voicing[i];
+        slider.setRange(-18.0, 12.0, 0.5);
+        slider.setTextValueSuffix(" dB");
+        slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 64, 20);
+        slider.setDoubleClickReturnValue(true, 0.0);
+        slider.setTooltip("The hammers of this register: below 0 dB needled (softer, rounder), above hardened (brighter). The upper "
+                     "partials move, the fundamental stays; linear between A0, C4 and C8. The notes struck from then on.");
+        slider.setValue(settings.getDoubleValue(voicingKeys[i], 0.0), juce::dontSendNotification);
+        slider.onValueChange = [this] { applyVoicing(); };
+        slider.onDragEnd = [this] { save(); };
+    }
+    voicingFollowLabel.setText("Follows the velocity", juce::dontSendNotification);
+    voicingFollow.setRange(0.0, 100.0, 1.0);
+    voicingFollow.setTextValueSuffix(" %");
+    voicingFollow.setTextBoxStyle(juce::Slider::TextBoxRight, false, 64, 20);
+    voicingFollow.setDoubleClickReturnValue(true, 100.0 * pf::ModalEngine::kDefaultVoicingVelocity);
+    voicingFollow.setTooltip("0 %: the same at every velocity; 100 %: in proportion to it (a needled felt changes the forte most)");
+    voicingFollow.setValue(settings.getDoubleValue("voicingVelocity", pf::ModalEngine::kDefaultVoicingVelocity) * 100.0,
+                           juce::dontSendNotification);
+    voicingFollow.onValueChange = [this] { applyVoicing(); };
+    voicingFollow.onDragEnd = [this] { save(); };
+    voicingCornerLabel.setText("From partial", juce::dontSendNotification);
+    voicingCorner.setRange(2.0, 10.0, 0.5);
+    voicingCorner.setTextBoxStyle(juce::Slider::TextBoxRight, false, 64, 20);
+    voicingCorner.setDoubleClickReturnValue(true, pf::ModalEngine::kDefaultVoicingCorner);
+    voicingCorner.setTooltip("Where the change sets in, in partials of the note (the shelf's midpoint): lower reaches more of the tone");
+    voicingCorner.setValue(settings.getDoubleValue("voicingCorner", pf::ModalEngine::kDefaultVoicingCorner), juce::dontSendNotification);
+    voicingCorner.onValueChange = [this] { applyVoicing(); };
+    voicingCorner.onDragEnd = [this] { save(); };
+    resetVoicing.onClick = [this] {
+        for (auto& slider : voicing)
+            slider.setValue(0.0, juce::dontSendNotification);
+        voicingFollow.setValue(100.0 * pf::ModalEngine::kDefaultVoicingVelocity, juce::dontSendNotification);
+        voicingCorner.setValue(pf::ModalEngine::kDefaultVoicingCorner, juce::dontSendNotification);
+        applyVoicing();
+        save();
+    };
+    applyVoicing();
+
     for (auto* c : std::initializer_list<juce::Component*> { &sympatheticLabel, &sympatheticLevel, &unisonLabel, &unison, &absorptionLabel, &absorption, &restrikeLabel, &restrike,
                                                              &a4Label, &referenceA4, &temperamentLabel, &temperament, &root,
-                                                             &resetTuning })
+                                                             &resetTuning, &voicingFollowLabel, &voicingFollow, &voicingCornerLabel,
+                                                             &voicingCorner, &resetVoicing })
         addAndMakeVisible(*c);
-    setSize(640, 650);
+    for (size_t i = 0; i < voicing.size(); ++i) {
+        addAndMakeVisible(voicingLabels[i]);
+        addAndMakeVisible(voicing[i]);
+    }
+    setSize(640, 820);
 }
 
 void EnginePanel::reload()
@@ -152,6 +202,22 @@ void EnginePanel::reload()
     temperament.setSelectedId(juce::jlimit(1, (int) kTemperaments.size(), settings.getIntValue("temperament", 1)), juce::dontSendNotification);
     root.setSelectedId(juce::jlimit(1, 12, settings.getIntValue("temperamentRoot", 1)), juce::dontSendNotification);
     applyTuning();
+    voicing[0].setValue(settings.getDoubleValue("voicingBassDb", 0.0), juce::dontSendNotification);
+    voicing[1].setValue(settings.getDoubleValue("voicingMiddleDb", 0.0), juce::dontSendNotification);
+    voicing[2].setValue(settings.getDoubleValue("voicingTrebleDb", 0.0), juce::dontSendNotification);
+    voicingFollow.setValue(settings.getDoubleValue("voicingVelocity", pf::ModalEngine::kDefaultVoicingVelocity) * 100.0,
+                           juce::dontSendNotification);
+    voicingCorner.setValue(settings.getDoubleValue("voicingCorner", pf::ModalEngine::kDefaultVoicingCorner), juce::dontSendNotification);
+    applyVoicing();
+}
+
+void EnginePanel::applyVoicing()
+{
+    modal.voicingBassDb = (float) voicing[0].getValue();
+    modal.voicingMiddleDb = (float) voicing[1].getValue();
+    modal.voicingTrebleDb = (float) voicing[2].getValue();
+    modal.voicingVelocity = (float) (voicingFollow.getValue() / 100.0);
+    modal.voicingCorner = (float) voicingCorner.getValue();
 }
 
 void EnginePanel::apply(Option o)
@@ -191,6 +257,11 @@ void EnginePanel::save()
     settings.setValue("referenceA4", referenceA4.getValue());
     settings.setValue("temperament", temperament.getSelectedId());
     settings.setValue("temperamentRoot", root.getSelectedId());
+    settings.setValue("voicingBassDb", voicing[0].getValue());
+    settings.setValue("voicingMiddleDb", voicing[1].getValue());
+    settings.setValue("voicingTrebleDb", voicing[2].getValue());
+    settings.setValue("voicingVelocity", voicingFollow.getValue() / 100.0);
+    settings.setValue("voicingCorner", voicingCorner.getValue());
     settings.saveIfNeeded();
 }
 
@@ -198,6 +269,7 @@ void EnginePanel::paint(juce::Graphics& g)
 {
     g.fillAll(theme::background);
     theme::drawCard(g, modalArea, "Modal engine: what it models");
+    theme::drawCard(g, voicingArea, "Voicing: the hammers (modal engine)");
     theme::drawCard(g, voicesArea, "Reference player: re-strike");
     theme::drawCard(g, tuningArea, "Tuning (modal engine)");
     theme::drawCard(g, referenceArea, "Reference player");
@@ -230,6 +302,25 @@ void EnginePanel::resized()
     row = inner.removeFromTop(28);
     absorptionLabel.setBounds(row.removeFromLeft(196).withTrimmedLeft(26));
     absorption.setBounds(row.removeFromLeft(300));
+
+    inner = place(voicingArea, 18 + 3 * 30 + 2 * 30 + 4);
+    for (size_t i = 0; i < voicing.size(); ++i) {
+        row = inner.removeFromTop(28);
+        voicingLabels[i].setBounds(row.removeFromLeft(196).withTrimmedLeft(26));
+        voicing[i].setBounds(row.removeFromLeft(300));
+        if (i == 0) {
+            row.removeFromLeft(10);
+            resetVoicing.setBounds(row.removeFromLeft(110).reduced(0, 2));
+        }
+        inner.removeFromTop(2);
+    }
+    row = inner.removeFromTop(28);
+    voicingFollowLabel.setBounds(row.removeFromLeft(196).withTrimmedLeft(26));
+    voicingFollow.setBounds(row.removeFromLeft(300));
+    inner.removeFromTop(2);
+    row = inner.removeFromTop(28);
+    voicingCornerLabel.setBounds(row.removeFromLeft(196).withTrimmedLeft(26));
+    voicingCorner.setBounds(row.removeFromLeft(300));
 
     inner = place(voicesArea, 18 + 36);
     row = inner.removeFromTop(28);

@@ -78,6 +78,8 @@ public:
     static constexpr int kTails = 4;       // attack residuals of earlier strikes still playing, per note
     static constexpr double kContactSeconds = 0.003; // a re-strike's hammer contact, over which it absorbs
     static constexpr double kLevelRampSeconds = 0.05; // after the residual: overall gain -> each partial's level
+    static constexpr float kDefaultVoicingVelocity = 0.6f;
+    static constexpr float kDefaultVoicingCorner = 4.0f; // the shelf's midpoint, in partial numbers
     static constexpr double kPartialFadeSeconds = 1.0; // a partial faded out (profile fade time): extra T60
 
     void prepare(double sampleRate, int maxBlockSize) override;
@@ -114,6 +116,17 @@ public:
     /// The strings of each unison detuned by this much against the measured (1: as measured; 0: in perfect unison,
     /// no beating, a single decay; 2 to 4: an old upright's honky-tonk). Applies to the notes struck from then on.
     std::atomic<float> unisonSpread { 1.0f };
+    /// Voicing, as a technician needles or hardens the hammers: the partials above `voicingCorner` (a partial number)
+    /// lowered (negative dB: softer hammers, a rounder tone) or raised (harder: brighter), by a high shelf on each
+    /// voice's whole sound (its modes and attack residual alike: the residual still cancels the modes extrapolated to
+    /// the note-on). The amount is set for the bass (A0), the middle (C4) and the treble (C8), linear in between, and
+    /// follows the velocity by `voicingVelocity` (0: alike at every velocity; 1: proportional to it, felt mostly in
+    /// the forte, as a needled felt is). 0 dB everywhere: no filter, the sound as measured. Applies at note-on.
+    std::atomic<float> voicingBassDb { 0.0f }, voicingMiddleDb { 0.0f }, voicingTrebleDb { 0.0f };
+    std::atomic<float> voicingVelocity { kDefaultVoicingVelocity };
+    std::atomic<float> voicingCorner { kDefaultVoicingCorner };
+    /// The voicing of one strike (dB) at this note and velocity.
+    float voicingDb(int note, int velocity) const noexcept;
     /// Frequency ratio of a note against the profile: (referenceA4 / 440) x 2^(cents / 1200).
     double tuningRatio(int note) const noexcept;
 
@@ -128,6 +141,8 @@ public:
         float referenceA4 = 440.0f;
         std::array<float, 12> pitchClassCents {};
         float unisonSpread = 1.0f; // the strings' detunings within each unison against the measured (0 to 4)
+        float voicingBassDb = 0.0f, voicingMiddleDb = 0.0f, voicingTrebleDb = 0.0f;
+        float voicingVelocity = kDefaultVoicingVelocity, voicingCorner = kDefaultVoicingCorner;
     };
     Settings settings() const noexcept;
     /// Applies `s` (the free strings are retuned on the next block).
@@ -213,6 +228,12 @@ private:
         float curveGain = 1.0f;
         std::array<float, DamperCurves::kMaxPoints> releaseGains {};
         std::uint64_t age = 0;
+        /// The voicing's high shelf (transposed direct form II, per channel); off at 0 dB.
+        struct Shelf {
+            bool on = false;
+            float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f;
+            float s1[2] {}, s2[2] {};
+        } voicing;
     };
 
     void allocate();
@@ -226,6 +247,7 @@ private:
     void releaseKnock(const ModalProfile& p, const Voice& v, float strength) noexcept;
     void render(const ModalProfile& p, float* const* outputs, int numChannels, int start, int n) noexcept;
     bool produce(const ModalProfile& p, Voice& v, int n) noexcept;
+    void setVoicing(Voice& v, int note, int velocity, bool keepState) noexcept;
     void renderBank(Voice& v, float* left, float* right, int n) noexcept;
     void mergeEarlier(Voice& v) noexcept; // a re-strike's hammer contact over
     void renderStrings(int n) noexcept;

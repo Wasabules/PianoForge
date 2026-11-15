@@ -35,6 +35,7 @@ public:
 private:
     void apply(Option o);
     void applyTuning();
+    void applyVoicing();
     void save();
 
     pf::ModalEngine& modal;
@@ -46,7 +47,13 @@ private:
     juce::Label sympatheticLabel, restrikeLabel, a4Label, temperamentLabel, unisonLabel, absorptionLabel;
     juce::ComboBox temperament, root;
     juce::TextButton resetTuning { "440 Hz, equal" };
-    juce::Rectangle<int> modalArea, voicesArea, tuningArea, referenceArea;
+    // Voicing: the hammers needled (softer) or hardened (brighter), per register, following the velocity.
+    std::array<juce::Slider, 3> voicing;  // bass (A0), middle (C4), treble (C8), dB
+    std::array<juce::Label, 3> voicingLabels;
+    juce::Slider voicingFollow, voicingCorner;
+    juce::Label voicingFollowLabel, voicingCornerLabel;
+    juce::TextButton resetVoicing { "As measured" };
+    juce::Rectangle<int> modalArea, voicingArea, voicesArea, tuningArea, referenceArea;
 };
 
 } // namespace pf::app

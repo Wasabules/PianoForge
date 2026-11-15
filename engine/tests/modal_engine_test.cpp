@@ -997,5 +997,65 @@ int main()
               "the unison's tuning: a single decay in perfect unison, deeper beating when wider");
     }
 
+    // Voicing: a high shelf on the voice's whole sound, the partials above the corner (4 x f0) moved, the fundamental
+    // kept; none at 0 dB (the sound as measured, bit for bit); following the velocity as asked.
+    {
+        auto p = std::make_shared<pf::ModalProfile>();
+        p->residualRate = kRate;
+        p->noteIndex.fill(-1);
+        pf::ModalProfile::Note n;
+        n.midi = 69;
+        n.f0 = 440.0;
+        pf::ModalProfile::Layer layer;
+        layer.velocity = 100;
+        layer.modes.push_back({ 440.0, 1.0, { 0.2f, 0.0f }, { 0.2f, 0.0f } });   // partial 1
+        layer.modes.push_back({ 3520.0, 1.0, { 0.2f, 0.0f }, { 0.2f, 0.0f } });  // partial 8, an octave above the corner
+        layer.partials.push_back({ 1, 0, 1, 0.1f });
+        layer.partials.push_back({ 8, 1, 1, 0.1f });
+        layer.level = 0.14f;
+        n.layers.push_back(std::move(layer));
+        p->notes.push_back(std::move(n));
+        p->noteIndex[69] = 0;
+        p->maxModesPerLayer = 2;
+        auto play = [&](float db, float follow, int velocity) {
+            pf::ModalEngine e;
+            e.install(p);
+            e.bodyEnabled = false;
+            e.voicingBassDb = db;
+            e.voicingMiddleDb = db;
+            e.voicingTrebleDb = db;
+            e.voicingVelocity = follow;
+            e.prepare(kRate, 64);
+            std::vector<float> a, b;
+            render(e, { { 0, 0x90, 69, (std::uint8_t) velocity } }, kRate, a, b);
+            return a;
+        };
+        auto amplitude = [](const std::vector<float>& x, double f) {
+            std::complex<double> s;
+            for (int i = (int) (0.2 * kRate); i < (int) x.size(); ++i)
+                s += (double) x[(std::size_t) i] * std::polar(1.0, -kTwoPi * f * i / kRate);
+            return std::abs(s);
+        };
+        const auto plain = play(0.0f, 0.0f, 100), softer = play(-12.0f, 0.0f, 100), harder = play(6.0f, 0.0f, 100);
+        const auto half = play(-12.0f, 1.0f, 64);
+        pf::ModalEngine untouched;
+        untouched.install(p);
+        untouched.bodyEnabled = false;
+        untouched.prepare(kRate, 64);
+        std::vector<float> u, ur;
+        render(untouched, { { 0, 0x90, 69, 100 } }, kRate, u, ur);
+        auto db = [&](const std::vector<float>& x, double f) { return 20.0 * std::log10(amplitude(x, f) / amplitude(plain, f)); };
+        std::printf("      voicing -12 dB: partial 1 %+.2f dB, partial 8 %+.2f dB; +6 dB: %+.2f / %+.2f dB; -12 dB "
+                    "following the velocity, at 64: %+.2f dB\n", db(softer, 440.0), db(softer, 3520.0), db(harder, 440.0),
+                    db(harder, 3520.0), db(half, 3520.0) - 20.0 * std::log10(amplitude(play(0.0f, 1.0f, 64), 3520.0) / amplitude(plain, 3520.0)));
+        check(u == plain, "voicing at 0 dB: no filter, the sound as measured (bit for bit)");
+        check(std::abs(db(softer, 440.0)) < 0.5 && db(softer, 3520.0) < -10.0 && db(softer, 3520.0) > -13.0,
+              "softer hammers: the partials above the corner lowered, the fundamental kept");
+        check(std::abs(db(harder, 440.0)) < 0.5 && db(harder, 3520.0) > 5.0 && db(harder, 3520.0) < 6.5,
+              "harder hammers: the partials above the corner raised");
+        const double atHalf = db(half, 3520.0) - 20.0 * std::log10(amplitude(play(0.0f, 1.0f, 64), 3520.0) / amplitude(plain, 3520.0));
+        check(atHalf < -5.0 && atHalf > -7.0, "following the velocity: half the voicing at velocity 64");
+    }
+
     return failures ? 1 : 0;
 }
