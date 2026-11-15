@@ -19,7 +19,7 @@ enum MenuId {
     // Player
     kPlayPause = 80, kStopPlayer, kBack, kForward, kLoop, kCloseMidi, kSpeed = 100,
     // Engine
-    kEngineReference = 20, kEngineModal, kEngineOption = 30, kEngineSettings = 50, kRoomToggle, kRoomSettings, kHeadphones,
+    kEngineReference = 20, kEngineModal, kEngineModalB, kChooseProfileB, kEngineOption = 30, kEngineSettings = 50, kRoomToggle, kRoomSettings, kHeadphones,
     // Audio
     kAudioSettings = 60, kPerformance, kResetDropouts, kStreamLook,
     // Keyboard
@@ -157,7 +157,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(*playerBar);
 
     // Toolbar: engine (switchable while playing, for A/B listening), recording, volume, velocity, pedal, load, level.
-    referenceButton.setTooltip("The reference: Noire's recordings, played back (Ctrl+1)");
+    referenceButton.setTooltip("The reference: the bank's recordings, played back (Ctrl+1)");
     modalButton.setTooltip("The PianoForge modal engine (Ctrl+2)");
     for (auto* b : { &referenceButton, &modalButton }) {
         b->setClickingTogglesState(false);
@@ -237,6 +237,8 @@ MainComponent::MainComponent()
     addChildComponent(progressBar);
 
     corpusFolder = findCorpus(settings->getValue("corpus"));
+    if (const juce::File b(settings->getValue("profileB")); b.existsAsFile())
+        loadProfileB(b, false); // ready for Ctrl+3; the engine starts on profile A
     if (corpusFolder.isDirectory())
         loadCorpus(corpusFolder);
     else
@@ -269,6 +271,8 @@ MainComponent::~MainComponent()
         takeRender.join();
     if (modalLoader.joinable())
         modalLoader.join();
+    if (profileBLoader.joinable())
+        profileBLoader.join();
     takesWindow.reset();
     takesPanel.reset();
     host.playback.release();
@@ -354,8 +358,11 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         break;
     }
     case 2: {
-        menu.addItem(item(kEngineReference, "Reference: Noire samples", "Ctrl+1", !modalSelected()));
-        menu.addItem(item(kEngineModal, "Modal: PianoForge engine", "Ctrl+2", modalSelected()));
+        menu.addItem(item(kEngineReference, "Reference: " + bankName() + " samples", "Ctrl+1", !modalSelected()));
+        menu.addItem(item(kEngineModal, "Modal, profile A: " + profileASummary, "Ctrl+2", modalSelected() && !profileBActive));
+        menu.addItem(item(kEngineModalB, "Modal, profile B: " + profileBSummary, "Ctrl+3", modalSelected() && profileBActive,
+                          profileB != nullptr));
+        menu.addItem(item(kChooseProfileB, "Profile B...", {}));
         menu.addSeparator();
         for (int o = 0; o < (int) EnginePanel::Option::count; ++o) {
             if (o == (int) EnginePanel::Option::wholeTake)
@@ -492,7 +499,9 @@ void MainComponent::menuItemSelected(int id, int)
     case kChangeCorpus: chooseCorpus(); break;
     case kQuit: juce::JUCEApplication::getInstance()->systemRequestedQuit(); break;
     case kEngineReference: selectEngine(false); break;
-    case kEngineModal: selectEngine(true); break;
+    case kEngineModal: selectModalProfile(false); break;
+    case kEngineModalB: selectModalProfile(true); break;
+    case kChooseProfileB: chooseProfileB(); break;
     case kEngineSettings: showWindow(engineWindow, "Engine settings", *enginePanel); break;
     case kRoomToggle: roomPanel->setOn(!roomPanel->isOn()); break;
     case kRoomSettings: showWindow(roomWindow, "Room", *roomPanel); break;
@@ -817,7 +826,8 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
         case 'P': showWindow(performanceWindow, "Performance", performancePanel); return true;
         case ',': showWindow(audioWindow, "Audio, MIDI and streaming", *audioPanel); return true;
         case '1': selectEngine(false); return true;
-        case '2': selectEngine(true); return true;
+        case '2': selectModalProfile(false); return true;
+        case '3': selectModalProfile(true); return true;
         case 'Q': juce::JUCEApplication::getInstance()->systemRequestedQuit(); return true;
         default: break;
         }
@@ -1034,7 +1044,7 @@ namespace {
 /// Settings that belong to this computer, left out of an export and of an import.
 bool machineSetting(const juce::String& key)
 {
-    return key == "audio" || key.startsWith("audioDevice.") || key == "corpus" || key == "midiFolder" || key == "mirrorDevice"
+    return key == "audio" || key.startsWith("audioDevice.") || key == "corpus" || key == "profileB" || key == "midiFolder" || key == "mirrorDevice"
         || key == "engineRateMode" || key == "roomHeadphones" // what this computer plays through
         || key == "updateLastCheck" || key == "updateSkipped";
 }
@@ -1467,7 +1477,7 @@ void MainComponent::loadModalProfile()
     modalLoader = std::thread([path, safe = juce::Component::SafePointer<MainComponent>(this)] {
         std::string error;
         auto profile = pf::loadModalProfile(path.getFullPathName().toStdString(), error);
-        juce::MessageManager::callAsync([safe, profile = std::move(profile), error]() mutable {
+        juce::MessageManager::callAsync([safe, path, profile = std::move(profile), error]() mutable {
             auto* self = safe.getComponent();
             if (self == nullptr)
                 return;
@@ -1476,12 +1486,101 @@ void MainComponent::loadModalProfile()
                 self->showMessage("The modal profile did not load: " + juce::String(error), theme::bad);
                 return;
             }
-            std::size_t layers = 0;
-            for (const auto& n : profile->notes)
-                layers = std::max(layers, n.layers.size());
-            self->profileSummary = "Modal profile: " + juce::String((int) profile->notes.size()) + " notes x "
-                                 + juce::String((int) layers) + " layers, " + juce::String(juce::roundToInt((double) profile->bytes / 1.0e6)) + " MB";
-            self->modal.install(std::move(profile));
+            self->profileASummary = describeProfile(*profile, path);
+            self->profileA = std::move(profile);
+            self->installActiveProfile();
+        });
+    });
+}
+
+juce::String MainComponent::describeProfile(const pf::ModalProfile& profile, const juce::File& file)
+{
+    std::size_t layers = 0;
+    for (const auto& n : profile.notes)
+        layers = std::max(layers, n.layers.size());
+    auto folder = file.getParentDirectory();
+    auto name = folder.getFileName(); // the corpus state, or a backup folder inside it
+    if (name.startsWith("backup"))
+        name = folder.getParentDirectory().getFileName() + "/" + name;
+    return name + " (" + juce::String((int) profile.notes.size()) + " notes x " + juce::String((int) layers) + " layers, "
+           + juce::String(juce::roundToInt((double) profile.bytes / 1.0e6)) + " MB)";
+}
+
+juce::String MainComponent::bankName() const
+{
+    const auto state = corpusFolder.getParentDirectory().getFileName();
+    return state.isNotEmpty() ? state : juce::String("the bank's");
+}
+
+void MainComponent::installActiveProfile()
+{
+    const auto chosen = profileBActive && profileB != nullptr ? profileB : profileA;
+    if (chosen == nullptr)
+        return;
+    if (chosen != modal.sharedProfile())
+        modal.install(chosen);
+    profileSummary = chosen == profileB ? "Modal profile B: " + profileBSummary : "Modal profile A: " + profileASummary;
+}
+
+void MainComponent::selectModalProfile(bool useB)
+{
+    if (useB && profileB == nullptr) {
+        chooseProfileB();
+        return;
+    }
+    const bool change = useB != profileBActive;
+    profileBActive = useB;
+    selectEngine(true);
+    if (change) {
+        // The notes sounding fade out (the engine's fast fade, as an engine switch does), then the other profile goes
+        // in: the same engine and settings, only the profile changes.
+        modal.allSoundOff();
+        juce::Timer::callAfterDelay(80, [safe = juce::Component::SafePointer<MainComponent>(this)] {
+            if (auto* self = safe.getComponent())
+                self->installActiveProfile();
+        });
+    }
+    showMessage(useB ? "Modal engine, profile B: " + profileBSummary : "Modal engine, profile A: " + profileASummary,
+                theme::accent);
+}
+
+void MainComponent::chooseProfileB()
+{
+    const auto start = profileBFile.existsAsFile() ? profileBFile.getParentDirectory() : corpusFolder.getParentDirectory().getParentDirectory();
+    fileChooser = std::make_unique<juce::FileChooser>("Profile B: a modal profile to compare (modal-profile.bin)", start, "*.bin");
+    fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                             [this](const juce::FileChooser& fc) {
+                                 if (const auto file = fc.getResult(); file.existsAsFile())
+                                     loadProfileB(file, true);
+                                 keyboard.grabKeyboardFocus();
+                             });
+}
+
+void MainComponent::loadProfileB(const juce::File& file, bool activate)
+{
+    if (profileBLoader.joinable())
+        profileBLoader.join();
+    profileBSummary = "loading...";
+    profileBLoader = std::thread([file, activate, safe = juce::Component::SafePointer<MainComponent>(this)] {
+        std::string error;
+        auto profile = pf::loadModalProfile(file.getFullPathName().toStdString(), error);
+        juce::MessageManager::callAsync([safe, file, activate, profile = std::move(profile), error]() mutable {
+            auto* self = safe.getComponent();
+            if (self == nullptr)
+                return;
+            if (profile == nullptr) {
+                self->profileBSummary = "none";
+                self->showMessage("Profile B did not load: " + juce::String(error), theme::bad);
+                return;
+            }
+            self->profileBSummary = describeProfile(*profile, file);
+            self->profileB = std::move(profile);
+            self->profileBFile = file;
+            self->saveSettings();
+            if (activate)
+                self->selectModalProfile(true);
+            else if (self->profileBActive)
+                self->installActiveProfile();
         });
     });
 }
@@ -1662,6 +1761,7 @@ void MainComponent::saveSettings()
         s->setValue("audio", xml.get());
     }
     s->setValue("corpus", corpusFolder.getFullPathName());
+    s->setValue("profileB", profileBFile.getFullPathName());
     s->setValue("volume", volume.getValue());
     s->setValue("velocity", (int) velocity.getValue());
     s->setValue("keyLayout", keyLayout);
@@ -1811,7 +1911,8 @@ void MainComponent::refreshDashboard()
 {
     // Engine.
     auto engineInfo = engineLines();
-    engineCard.setLines({ modalSelected() ? "Modal: PianoForge" : "Reference: Noire samples", engineInfo[0], engineInfo[1],
+    engineCard.setLines({ modalSelected() ? (profileBActive && profileB != nullptr ? "Modal: profile B" : "Modal: profile A")
+                                          : "Reference: " + bankName() + " samples", engineInfo[0], engineInfo[1],
                           modalSelected() ? profileSummary : corpusSummary },
                         theme::accent);
 
@@ -1933,7 +2034,7 @@ void MainComponent::timerCallback()
         performancePanel.pushColumn(peak, dropout);
     if (performanceWindow != nullptr && performanceWindow->isVisible()) {
         auto engine = engineLines();
-        engine.insert(0, modalSelected() ? "Modal: PianoForge engine" : "Reference: Noire samples");
+        engine.insert(0, modalSelected() ? "Modal: PianoForge engine" : "Reference: " + bankName() + " samples");
         performancePanel.update(load, engine, deviceLines(), adviceLines());
     }
     const bool sustain = modalSelected() ? modal.sustainDown.load() : player.sustainDown.load();

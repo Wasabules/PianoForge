@@ -72,6 +72,14 @@ private:
     // Actions.
     void selectEngine(bool modal);
     bool modalSelected() const { return engines.selected.load() == 1; }
+    // Two modal profiles to compare on the same engine and settings: A, the corpus's (modal-profile.bin next to its
+    // passes), and B, any profile file (another bank's, a former version). Ctrl+2 / Ctrl+3.
+    void selectModalProfile(bool useB);
+    void chooseProfileB();
+    void loadProfileB(const juce::File& file, bool activate);
+    void installActiveProfile();
+    static juce::String describeProfile(const pf::ModalProfile& profile, const juce::File& file);
+    juce::String bankName() const;
     void toggleRecording(std::int64_t notesFrom = -1);
     void finishRecording(std::int64_t at = -1);
     void saveLastTake(std::int64_t before = std::numeric_limits<std::int64_t>::max());
@@ -136,6 +144,11 @@ private:
     BankLoader loader;
     std::thread modalLoader;            // loads modal-profile.bin in the background
     juce::String corpusSummary = "Corpus: none", profileSummary = "Modal profile: not loaded";
+    std::shared_ptr<const pf::ModalProfile> profileA, profileB; // the corpus's profile, and the one compared with it
+    juce::File profileBFile;
+    bool profileBActive = false;        // the modal engine plays profile B
+    std::thread profileBLoader;
+    juce::String profileASummary = "not loaded", profileBSummary = "none";
     juce::MidiDeviceListConnection midiDevicesConnection;
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::File corpusFolder;
