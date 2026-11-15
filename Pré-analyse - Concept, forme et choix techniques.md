@@ -1168,6 +1168,22 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
     - l'export MP3 hors Windows ;
     - les installateurs Linux et macOS (et la signature sur macOS).
 
+**Banques libres de référence (15 novembre 2026).** Noire a servi d'étude : c'est sur elle que le moteur a été construit et mesuré. Mais sa licence interdit de diffuser ce qui en dérive, profil compris. Le son final s'appuiera donc sur deux banques libres, que l'on pourra citer : le *Salamander Grand Piano V3* (Yamaha C5 enregistré par Alexander Holm, licence CC-BY 3.0, SFZ remis en forme par SFZ Instruments) et *Piano in 162* (Steinway B d'Ivy Audio, « gratuit pour un usage personnel et commercial », sans texte de licence). Les trois banques restent des références.
+  - *Ce qu'elles sont.*
+    - **Salamander** : 48 kHz, 24 bits, 16 couches de vélocité, une note par tierce mineure (les autres sont transposées), une paire AB de micros AKG C414. Le relâchement des cordes est enregistré en trois couches, le bruit de relâchement des touches sur chaque note, ainsi que le bruit de pédale.
+    - **Piano in 162** : 44,1 kHz, 24 bits, chaque touche, 5 nuances, 2 frappes alternées (round robin), pédale levée et enfoncée, micros proches et d'ambiance. Pas d'échantillon de relâchement.
+  - *Comment elles entrent dans la chaîne.* Le banc a maintenant son propre lecteur SFZ (`tools/bench/bench/sfz.py`). `bench prepare-sfz` décrit une banque comme un état : le fichier, les contrôleurs, la licence et la source. `bench render` la joue ensuite à travers les mêmes séances que Kontakt, au taux d'échantillonnage de la banque et sur plusieurs processus (10 h 47 d'audio en 2 min 35 s pour Piano in 162). La forge la mesure comme Noire. Le lecteur suit sfizz là où le format SFZ laisse le choix ; ce qu'il ne joue pas est listé dans l'état. Les deux banques sont lues en entier, sans un seul opcode ignoré, extensions ARIA de Salamander comprises.
+  - *Ce que le lecteur fait autrement qu'un échantillonneur, pour les mesures.*
+    - **Le tirage aléatoire dépend de la frappe, pas de la prise.** La forge compare chaque prise de relâchement à la note tenue, échantillon par échantillon jusqu'au relâchement. Les deux doivent donc jouer le même enregistrement.
+    - **Pas de silence entre deux plages aléatoires.** Piano in 162 laisse un trou entre 0,500 et 0,501 : une frappe sur mille ne joue rien dans un échantillonneur. Le premier rendu a ainsi rendu F7 v40 muet.
+    - **Les attaques sont alignées**, sur demande de l'état (`--align-onsets 3`). Les échantillons commencent par un silence inégal : 12 ms en général chez Salamander, jusqu'à 70 ms chez Piano in 162 (les forte graves). La forge le prendrait pour de la latence. Chaque échantillon démarre donc 3 ms avant son attaque, avec un fondu d'entrée d'1 ms.
+  - *Réglages.* `salamander-dry` coupe les bruits de touche et de pédale, comme l'état sec de Noire ; tout le reste est tel que la banque le règle. `in162-close` utilise les micros proches.
+  - *Premières comparaisons* (`studies/compare_banks.py`, à vélocité 64).
+    - **Accord et inharmonicité** : du même ordre. Le Steinway B a un B plus fort dans le grave (cordes plus courtes que celles du CFX), c'est cohérent.
+    - **Dynamique** : Piano in 162 suit la courbe par défaut du SFZ, le carré de la vélocité. Ses vélocités douces sont bien plus faibles (−59 dB à v8 contre −35 dB chez Noire, par rapport à v127).
+    - **Étouffoirs** : ceux de Piano in 162 ne sont que l'enveloppe du SFZ, une même décroissance de 1,1 s sur toutes les notes, même dans l'aigu où un piano n'en a pas. Salamander a la même enveloppe, mais aussi de vrais relâchements de cordes enregistrés. Noire reste la seule mesure réelle des trois.
+  - *Licences.* Un profil tiré de Salamander peut être publié en citant Alexander Holm et SFZ Instruments. Pour Piano in 162, aucun texte ne précise ce qui dérive de la banque : avant de publier un profil qui en vient, on demandera l'accord d'Ivy Audio.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

@@ -266,11 +266,12 @@ _PASSES = {
 }
 
 
-def parse_session(text: str, base_dir: str | Path = ".") -> Session:
-    """base_dir: folder against which relative paths in the session (MIDI files) are resolved."""
+def parse_session(text: str, base_dir: str | Path = ".", sample_rate: int | None = None) -> Session:
+    """base_dir: folder against which relative paths in the session (MIDI files) are resolved. sample_rate: the
+    rate to time the takes at instead of the session's (an SFZ bank is rendered at its own rate)."""
     data = tomllib.loads(text)
     header = data.get("session", {})
-    fs = int(header.get("sample_rate", 48000))
+    fs = int(sample_rate or header.get("sample_rate", 48000))
     takes: list[Take] = []
     names = set()
     for cfg in data.get("pass", []):
@@ -287,6 +288,6 @@ def parse_session(text: str, base_dir: str | Path = ".") -> Session:
     return Session(header.get("name", "session"), fs, takes, text)
 
 
-def load_session(path: str | Path) -> Session:
+def load_session(path: str | Path, sample_rate: int | None = None) -> Session:
     path = Path(path)
-    return parse_session(path.read_text(encoding="utf-8"), path.parent)
+    return parse_session(path.read_text(encoding="utf-8"), path.parent, sample_rate)

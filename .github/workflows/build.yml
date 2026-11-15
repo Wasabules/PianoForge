@@ -64,7 +64,7 @@ jobs:
         run: xvfb-run -a ctest --preset ${{ matrix.build }}
 
   forge:
-    name: Forge (Python)
+    name: Forge and bench (Python)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -72,9 +72,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: pip install -e tools/forge pytest
-      - name: Test
+        run: pip install -e tools/forge -e tools/bench pytest
+      - name: Test the forge
         run: pytest -q tools/forge/tests
+      - name: Test the bench (no Kontakt needed: its protocol, checks, storage and SFZ player)
+        run: python -m unittest discover -s tools/bench/tests
 
   web:
     name: Web (WebAssembly)

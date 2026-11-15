@@ -209,6 +209,31 @@ python -m venv .venv
 
 See `tools/bench/README.md`.
 
+## Reference banks
+
+The engine was studied on one commercial library; free sample banks are references too, rendered by the bench's SFZ
+player through the same sessions and measured by the same forge. The final sound leans on the free ones: a profile
+built from them can be published, with their credit.
+
+| Bank | Piano | Recording | Licence | Corpus state |
+|---|---|---|---|---|
+| Noire (Kontakt) | Yamaha CFX | Native Instruments | commercial (EULA): the renders and the profile stay local | `noire-dry` |
+| [Salamander Grand Piano V3](https://github.com/sfzinstruments/SalamanderGrandPiano) | Yamaha C5 | Alexander Holm: 48 kHz, 24-bit, 16 velocity layers every minor third, an AB pair of AKG C414; SFZ by SFZ Instruments | [CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/) | `salamander-dry` |
+| [Piano in 162](https://www.ivyaudio.com/Piano-in-162) | Steinway B | Ivy Audio: 44.1 kHz, 24-bit, every key, 5 dynamics, 2 round robins, pedal up and down, close and ambient microphones; SFZ by Marcelo Colina | free for personal and commercial use (no licence text comes with it) | `in162-close` |
+
+The banks are not in the repository: put them under `corpus/sources/` (Salamander: the SFZ Instruments repository;
+Piano in 162: Ivy Audio's SFZ download), then:
+
+```
+.venv\Scripts\bench prepare-sfz --state salamander-dry --sfz "corpus\sources\salamander\SalamanderGrandPiano\Salamander Grand Piano V3.sfz" --hdcc 21=0 --hdcc 22=0 --align-onsets 3 --license "CC-BY 3.0"
+.venv\Scripts\bench prepare-sfz --state in162-close --sfz "corpus\sources\piano-in-162\Ivy Audio - Piano in 162 sfz\IvyAudio-PianoIn162-Close.sfz" --align-onsets 3
+.venv\Scripts\bench render tools\bench\sessions\reference.toml --state salamander-dry
+.venv\Scripts\bench render tools\bench\sessions\interactions.toml --state salamander-dry
+```
+
+(`salamander-dry`: the key-release and pedal noises off, as for Noire's dry state.) `studies/compare_banks.py` sets
+their measures side by side: tuning, inharmonicity, sustain, brightness, dynamics, dampers.
+
 ## Forge
 
 ```
@@ -233,7 +258,8 @@ for v in 64 8 16 24 32 40 48 56 72 80 88 96 104 112 120 127; do .venv/Scripts/fo
 .venv/Scripts/forge export
 ```
 
-The profile is calibrated on a commercial library: like the corpus, it stays local and is never published.
+Every forge command takes `--corpus corpus/reference/<state>` (default: `noire-dry`). A profile calibrated on Noire
+stays local, like its corpus, and is never published; one built from a free bank may be, with the bank's credit.
 
 ## Licences
 
