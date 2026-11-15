@@ -24,6 +24,14 @@ else()
                            $<$<BOOL:${forge_native_x86}>:-mavx2 -mfma>)
 endif()
 
+# The resonators' and the damped sums' lanes sum eight recurrences per sample: allowed to reorder those sums, the
+# compiler vectorises them (the results move by 1e-15, the tests compare with the Python code at 1e-9).
+if(MSVC)
+    set_source_files_properties(resonators.cpp synth.cpp PROPERTIES COMPILE_OPTIONS "/fp:fast")
+else()
+    set_source_files_properties(resonators.cpp synth.cpp PROPERTIES COMPILE_OPTIONS "-ffast-math;-fno-finite-math-only")
+endif()
+
 set(forge_native_dir "${CMAKE_CURRENT_SOURCE_DIR}/../forge/_native")
 add_custom_command(TARGET pianoforge_forge_native POST_BUILD
     COMMAND ${CMAKE_COMMAND} -DLIB=$<TARGET_FILE:pianoforge_forge_native> -DDEST=${forge_native_dir}

@@ -99,6 +99,10 @@ def run(corpus: Path, layers: list[int] | None = None, skip: set[str] | None = N
     for name in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):  # before numpy, in the workers too
         os.environ[name] = "1"
     from forge import native, progress
+    # Every step's module now, not when its step comes: a pipeline runs for an hour, and code edited meanwhile would
+    # otherwise meet the modules already loaded (2026-11-15: the export, edited, asked the old forge.takes for a
+    # function it did not have yet).
+    from forge import analysis, export, half_pedal, note_modes, release_curves, release_noise, soundboard, sympathetic  # noqa: F401
 
     corpus = Path(corpus)
     steps = plan(list(layers or LAYERS), skip or set())

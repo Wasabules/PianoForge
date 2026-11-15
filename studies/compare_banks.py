@@ -10,7 +10,8 @@ sessions and analysed by the same forge. This study puts their measures side by 
   - sustain: the early decay of the fundamental, dB/s (forge analyze);
   - brightness: the partials 2 to 8 against the fundamental, dB (forge analyze);
   - dynamics: the peak level per velocity against velocity 127, median over the notes (single-notes takes);
-  - dampers: the level 0.2 s and 1 s after the key release (a 2 s hold) against the note held (forge release-curves).
+  - dampers: the level 0.2 s and 1 s after the key release (a 2 s hold) against the note held (forge release-curves);
+  - the sympathetic resonance's calibration, where there is one: coupling gain and extra decay per band.
 And a table per register (medians), to read the differences in numbers.
 
 Usage: .venv/Scripts/python studies/compare_banks.py [state ...]   (default: noire-dry salamander-dry in162-close)
@@ -186,6 +187,19 @@ def main(states: list[str]) -> None:
               "| Velocity | " + " | ".join(LABELS.get(s, s) for s in states) + " |", rule]
     for v in sorted({v for s in states for v in dyn[s]}):
         lines.append(f"| {v} | " + " | ".join(f"{dyn[s][v]:+.1f}" if v in dyn[s] else "-" for s in states) + " |")
+    # The sympathetic resonance's calibration, where there is one: coupling gain and extra decay per band.
+    calibrations = {st: json.loads((CORPUS / st / "sympathetic.json").read_text(encoding="utf-8"))
+                    for st in states if (CORPUS / st / "sympathetic.json").exists()}
+    if calibrations:
+        names = [LABELS.get(st, st) + (f" (from {Path(c['calibration_from']).parent.name})" if "calibration_from" in c else "")
+                 for st, c in calibrations.items()]
+        lines += ["", "## Sympathetic resonance: coupling gain (dB) / extra decay (1/s) per band", "",
+                  "| Band (Hz) | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
+        edges = next(iter(calibrations.values()))["bands_hz"]
+        for b in range(len(edges) - 1):
+            cells = [f"{20 * np.log10(max(c['gains'][b], 1e-12)):+.1f} / {c['extra_decays'][b]:g}"
+                     for c in calibrations.values()]
+            lines.append(f"| {edges[b]:.0f}-{edges[b + 1]:.0f} | " + " | ".join(cells) + " |")
     (OUT / "comparison.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"Written: {OUT / 'comparison.png'}, {OUT / 'comparison.md'}")
 
