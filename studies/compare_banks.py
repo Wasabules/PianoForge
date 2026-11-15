@@ -3,7 +3,9 @@
 PianoForge was studied on one commercial library (Noire, rendered through Kontakt); free banks (the Salamander Grand
 Piano, a Yamaha C5, CC-BY 3.0; the Piano in 162, a Steinway B) are rendered by the bench's SFZ player through the same
 sessions and analysed by the same forge. This study puts their measures side by side, note by note:
-  - tuning: the stretch, cents against equal temperament (forge analyze, velocity 64);
+  - tuning: the stretch, cents against equal temperament (forge analyze, velocity 64), of the first partial as the
+    stiff-string fit places it, f0 sqrt(1 + B): the measured first partial misleads where it is weak (Salamander's
+    F#3, 21 dB under its second partial, reads 28 cents low);
   - inharmonicity B (forge analyze);
   - sustain: the early decay of the fundamental, dB/s (forge analyze);
   - brightness: the partials 2 to 8 against the fundamental, dB (forge analyze);
@@ -42,8 +44,9 @@ def note_measures(state: str) -> dict[int, dict]:
         partials = {p["n"]: p for p in n["partials"]}
         first = partials.get(1)
         upper = [10 ** (p["amp_db"] / 10) for k, p in partials.items() if 2 <= k <= 8]
+        et = 440.0 * 2 ** ((n["midi"] - 69) / 12)
         out[n["midi"]] = {
-            "cents": n["cents_vs_et"],
+            "cents": 1200 * np.log2(n["f0"] * np.sqrt(1 + n["inharmonicity"]) / et),
             "b": n["inharmonicity"],
             "decay": -first["early_db_s"] if first and first.get("early_db_s") is not None else np.nan,
             "bright": 10 * np.log10(sum(upper)) - first["amp_db"] if first and upper else np.nan,
