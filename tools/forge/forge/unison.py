@@ -17,8 +17,10 @@ q + Y q' + Y^2 q'' + ..., q = prod (lambda - lambda_k)); Y is the one that gives
   - 2 strings: one condition for two unknowns. Y = -sqrt((lambda_1 - lambda_2)^2 / 4 + delta^2 / 4) for a string
     detuning delta (rad/s); the delta kept is the one that makes the bridge the most resistive (smallest imaginary
     part of Y) with a positive intrinsic damping.
-  - 3 strings: two conditions, two unknowns (least squares from a few starting points). Kept when the strings'
-    dampings agree within 20 % of the poles' spread, the bridge takes energy (Re Y < 0) and the damping is >= 0.
+  - 3 strings: two conditions, two unknowns (least squares from a few starting points). There may be several exact
+    solutions: the first by cost that is physical is kept, the strings' dampings agreeing within 20 % of the poles'
+    spread, the bridge taking energy (Re Y < 0) and the damping >= 0 (until 2026-11-15 only the lowest cost was
+    tried, and a partial was left out when it was not physical).
 What is kept per partial: the indices of the N modes (by ascending frequency), the strings' detunings f_i - mean
 (Hz) and Y. The engine plays the measured modes as they are, and moves them by what the model gives for another
 strike (the soft pedal: the hammer misses one string) or another unison tuning (the detunings scaled).
@@ -96,28 +98,45 @@ def fit_partial(modes: list, n: int) -> dict | None:
         # Which string is which pole: the eigenvalues of the model, by ascending frequency, match the modes'.
         return {"modes": [int(i) for i in idx], "detune_hz": [float(x) for x in detune], "y": [float(Y.real), float(Y.imag)]}
     scale = max(float(np.max(np.abs(rel))), 1e-3)
+    for y in _fit3(rel, scale):  # by ascending cost: the first physical one
+        Y = (y[0] + 1j * y[1]) * scale
+        s = _strings_for(rel, Y) + centre
+        if np.max(np.abs(_residual3(rel, scale, y))) > MAX_SPREAD_TOLERANCE or Y.real >= 0 or s.real.mean() > 0:
+            continue
+        detune = (s.imag - s.imag.mean()) / (2 * np.pi)
+        return {"modes": [int(i) for i in idx], "detune_hz": [float(x) for x in np.sort(detune)],
+                "y": [float(Y.real), float(Y.imag)]}
+    return None
 
-    def residual(y):
-        s = _strings_for(rel, (y[0] + 1j * y[1]) * scale)
-        return (s.real - s.real.mean()) / scale
 
-    best = None
+def _residual3(rel: np.ndarray, scale: float, y) -> np.ndarray:
+    """Three strings: how far apart their dampings are, for the bridge Y = (y0 + i y1) scale."""
+    s = _strings_for(rel, (y[0] + 1j * y[1]) * scale)
+    return (s.real - s.real.mean()) / scale
+
+
+def _fit3(rel: np.ndarray, scale: float) -> list[np.ndarray]:
+    """The fits from the starting points, by ascending cost: native when the forge's library is built
+    (tools/forge/native/unison.cpp, the same least squares on a closed-form cubic), _fit3_python otherwise."""
+    from forge import native
+
+    if native.available:
+        found = native.unison3(rel, scale)
+        return [y for _, y in sorted(found, key=lambda f: f[0])]
+    return _fit3_python(rel, scale)
+
+
+def _fit3_python(rel: np.ndarray, scale: float) -> list[np.ndarray]:
+    """The reference: scipy's Levenberg-Marquardt from six starting points, by ascending cost."""
+    found = []
     for g0 in (-0.3, -1.0, -3.0):
         for b0 in (0.0, 0.3):
             try:
-                r = least_squares(residual, [g0, b0], method="lm")
+                r = least_squares(lambda y: _residual3(rel, scale, y), [g0, b0], method="lm")
             except (ValueError, np.linalg.LinAlgError):
                 continue
-            if best is None or r.cost < best.cost:
-                best = r
-    if best is None:
-        return None
-    Y = (best.x[0] + 1j * best.x[1]) * scale
-    s = _strings_for(rel, Y) + centre
-    if np.max(np.abs(residual(best.x))) > MAX_SPREAD_TOLERANCE or Y.real >= 0 or s.real.mean() > 0:
-        return None
-    detune = (s.imag - s.imag.mean()) / (2 * np.pi)
-    return {"modes": [int(i) for i in idx], "detune_hz": [float(x) for x in np.sort(detune)], "y": [float(Y.real), float(Y.imag)]}
+            found.append((r.cost, r.x))
+    return [x for _, x in sorted(found, key=lambda f: f[0])]
 
 
 def model(detune_hz: np.ndarray, Y: complex, spread: float = 1.0, h: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:

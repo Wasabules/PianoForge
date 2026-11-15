@@ -32,6 +32,7 @@ import soundfile as sf
 from forge import soundboard
 from forge.modes import BandExtractor
 from forge import progress
+from forge.takes import sound_end
 
 HOLDS_USED = (0.5, 2.0)   # after a short hold the strike's own body still rings, which the difference also holds
 LONG_HOLD_S, LONG_HOLD_VELOCITY = 10.0, 40  # the interactions session's pedal-up takes (single-notes has v40)
@@ -63,9 +64,28 @@ def run(corpus: Path, jobs: int = 0, interactions: Path | None = None) -> list[P
     freqs, decays, _ = soundboard.load(corpus / f"soundboard-v{soundboard.POLES_VELOCITY:03d}.json")
     modes, tasks = {}, []
 
+    measured = sorted(int(p.stem.split("-v")[1]) for p in corpus.glob("modes-v*.json"))
+    skipped = 0
+
+    def usable(meta: dict, held_meta: dict, at: int, at_held: int, fs: int) -> bool:
+        """Both takes hold the note through the fit window: the held one is no shorter than it, and neither
+        recording stops inside it (an SFZ sample cut short: the difference would be the whole note, not the knock)."""
+        end = int(round(LENGTH_S * fs))
+        length = int(round(held_meta.get("duration_s", 0.0) * fs)) or None
+        if length is not None and at_held + end > length:
+            return False
+        for m, a in ((meta, at), (held_meta, at_held)):
+            stop = sound_end(m)
+            if stop is not None and stop < a + end:
+                return False
+        return True
+
     def modes_of(v: int) -> dict:
+        """The modes at velocity v, or at the nearest velocity measured (a bank measured on fewer layers: the
+        partials sit at the same frequencies, which is what the body fit needs to leave out)."""
         if v not in modes:
-            modes[v] = {n["midi"]: n for n in json.loads((corpus / f"modes-v{v:03d}.json").read_text(encoding="utf-8"))["notes"]}
+            nearest = min(measured, key=lambda m: abs(m - v)) if measured else v
+            modes[v] = {n["midi"]: n for n in json.loads((corpus / f"modes-v{nearest:03d}.json").read_text(encoding="utf-8"))["notes"]}
         return modes[v]
 
     for meta_path in sorted((corpus / "releases").glob("*.json")):
@@ -77,6 +97,10 @@ def run(corpus: Path, jobs: int = 0, interactions: Path | None = None) -> list[P
         held = next((corpus / "single-notes").glob(f"{note:03d}-*_v{v:03d}_h*.flac"), None)
         if held is None or note not in modes_of(v):
             continue
+        held_meta = json.loads(held.with_suffix(".json").read_text(encoding="utf-8"))
+        if not usable(meta, held_meta, meta["note_off_sample"], meta["note_off_sample"], sf.info(str(held)).samplerate):
+            skipped += 1
+            continue
         tasks.append((str(meta_path.with_suffix(".flac")), str(held), meta["note_off_sample"], meta["note_off_sample"],
                       modes_of(v)[note], freqs.tolist(), decays.tolist(), v, hold))
     # The long holds: key released after 10 s without the pedal, against the single-notes take of the same velocity
@@ -87,10 +111,16 @@ def run(corpus: Path, jobs: int = 0, interactions: Path | None = None) -> list[P
         held = next((corpus / "single-notes").glob(f"{note:03d}-*_v{LONG_HOLD_VELOCITY:03d}_h*.flac"), None)
         if held is None or note not in modes_of(LONG_HOLD_VELOCITY) or round(meta["hold"], 1) != LONG_HOLD_S:
             continue
-        on_held = json.loads(held.with_suffix(".json").read_text(encoding="utf-8"))["note_on_sample"]
+        held_meta = json.loads(held.with_suffix(".json").read_text(encoding="utf-8"))
+        on_held = held_meta["note_on_sample"]
         off = meta["note_off_sample"]
+        if not usable(meta, held_meta, off, off - meta["note_on_sample"] + on_held, sf.info(str(held)).samplerate):
+            skipped += 1
+            continue
         tasks.append((str(take), str(held), off, off - meta["note_on_sample"] + on_held, modes_of(LONG_HOLD_VELOCITY)[note],
                       freqs.tolist(), decays.tolist(), LONG_HOLD_VELOCITY, LONG_HOLD_S))
+    if skipped:
+        print(f"  {skipped} takes left out: a recording stops before the end of the fit window")
     with ProcessPoolExecutor(max_workers=jobs or None) as pool:
         fitted = list(progress.track(pool.map(_fit_task, tasks), len(tasks), "takes", "release knocks"))
     t = np.arange(int(44100 * 1.0)) / 44100.0

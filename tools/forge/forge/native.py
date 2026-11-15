@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-VERSION = 3  # 2: the resonator bank; 3: sums of damped sinusoids
+VERSION = 5  # 2: the resonator bank; 3: sums of damped sinusoids; 4-5: the three-string unison
 _FILES = {"win32": "pianoforge_forge_native.dll", "darwin": "libpianoforge_forge_native.dylib"}
 
 
@@ -37,6 +37,8 @@ def _load():
                                      ctypes.c_int, p, p]
         lib.pf_resonator_bank.restype = None
         lib.pf_resonator_bank.argtypes = [p, ctypes.c_int, ctypes.c_double, p, ctypes.c_int, p, p, p]
+        lib.pf_unison3_fits.restype = None
+        lib.pf_unison3_fits.argtypes = [p, ctypes.c_double, p, p]
         lib.pf_damped_sum.restype = None
         lib.pf_damped_sum.argtypes = [p, p, p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_double,
                                       ctypes.c_longlong, p]
@@ -100,3 +102,13 @@ def damped_sum(freqs: np.ndarray, decays: np.ndarray, amps: np.ndarray, length: 
     _LIB.pf_damped_sum(_ptr(freqs), _ptr(decays), _ptr(amps.view(np.float64)), k, channels, int(length), float(fs),
                        int(start), _ptr(out))
     return out
+
+
+def unison3(rel: np.ndarray, scale: float) -> list[tuple[float, np.ndarray]]:
+    """unison.py's three-string least squares, native: (cost, y) from each of the six starting points that gave a
+    finite fit."""
+    rel = np.ascontiguousarray(rel, dtype=np.complex128)
+    y = np.zeros((6, 2))
+    cost = np.zeros(6)
+    _LIB.pf_unison3_fits(_ptr(rel.view(np.float64)), float(scale), _ptr(y), _ptr(cost))
+    return [(float(c), y[i].copy()) for i, c in enumerate(cost) if np.isfinite(c)]

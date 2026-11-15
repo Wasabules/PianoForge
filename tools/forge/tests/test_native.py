@@ -126,5 +126,34 @@ class DampedSums(unittest.TestCase):
         np.testing.assert_allclose(body, ref, atol=1e-12)
 
 
+@unittest.skipUnless(native.available, "the forge's native library is not built")
+class Unison(unittest.TestCase):
+    def test_against_scipy(self):
+        """Trichords made by the model (known detunings and bridge): the native fit finds what scipy finds."""
+        from forge import unison
+
+        rng = np.random.default_rng(11)
+        agree = 0
+        for _ in range(60):
+            detune = np.sort(rng.normal(0.0, 0.4, 3))
+            detune -= detune.mean()
+            Y = complex(-rng.uniform(0.5, 4.0), rng.uniform(-1.0, 1.0))
+            lam, _ = unison.model(detune, Y)
+            sigma = rng.uniform(0.3, 2.0)
+            rel = lam - sigma - np.mean(lam - sigma)
+            scale = max(float(np.max(np.abs(rel))), 1e-3)
+            ref = unison._fit3_python(rel, scale)[0]
+            got = unison._fit3(rel, scale)[0]
+            r_ref = np.max(np.abs(unison._residual3(rel, scale, ref)))
+            r_got = np.max(np.abs(unison._residual3(rel, scale, got)))
+            # As good a fit: near-double roots of the cubic (two strings damped alike) are only known to about
+            # sqrt(eps), by Cardano as by numpy's eigenvalues; the model's own tolerance is 0.2.
+            self.assertLessEqual(r_got, max(r_ref * 1.01, 1e-5))
+            if r_ref < 1e-6:
+                Y_ref, Y_got = (ref[0] + 1j * ref[1]) * scale, (got[0] + 1j * got[1]) * scale
+                agree += abs(Y_got - Y_ref) <= 1e-4 * max(abs(Y_ref), 1.0)
+        self.assertGreaterEqual(agree, 50)  # the same bridge, where the model is exact
+
+
 if __name__ == "__main__":
     unittest.main()

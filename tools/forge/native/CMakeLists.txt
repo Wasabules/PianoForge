@@ -9,7 +9,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
 endif()
 
-add_library(pianoforge_forge_native SHARED vp_refine.cpp resonators.cpp synth.cpp)
+add_library(pianoforge_forge_native SHARED vp_refine.cpp resonators.cpp synth.cpp unison.cpp)
 set_target_properties(pianoforge_forge_native PROPERTIES CXX_VISIBILITY_PRESET hidden)
 # x86-64: AVX2 (the resonators' eight lanes); every machine the bench runs on has it (the engine needs it too).
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" forge_native_cpu)
@@ -26,6 +26,6 @@ endif()
 
 set(forge_native_dir "${CMAKE_CURRENT_SOURCE_DIR}/../forge/_native")
 add_custom_command(TARGET pianoforge_forge_native POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${forge_native_dir}"
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:pianoforge_forge_native> "${forge_native_dir}/"
+    COMMAND ${CMAKE_COMMAND} -DLIB=$<TARGET_FILE:pianoforge_forge_native> -DDEST=${forge_native_dir}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/install_native.cmake
     COMMENT "Copying the forge's native kernels next to the forge package")

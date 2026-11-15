@@ -261,7 +261,7 @@ double norm(const std::vector<double>& v)
 
 } // namespace
 
-PF_EXPORT int pf_native_version() { return 3; } // 2: the resonator bank; 3: sums of damped sinusoids
+PF_EXPORT int pf_native_version() { return 5; } // 2: resonators; 3: damped sums; 4-5: three-string unison
 
 /// seg: channels x n complex (re, im interleaved), the partial at baseband over its window; weight: n; theta0: 2k
 /// (log decays, offsets in Hz). Writes theta (2k) and the amplitudes at the window start (channels x k complex).
