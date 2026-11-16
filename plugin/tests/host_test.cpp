@@ -120,6 +120,28 @@ void set(juce::AudioPluginInstance& p, const juce::String& name, float value)
     parameter->endChangeGesture();
 }
 
+/// One block of silence: a parameter or a program set from the host reaches an LV2 plugin with the audio (an atom
+/// message in its next run()), and its new values come back the same way, which JUCE's LV2 host hands to its
+/// parameters on the message thread; VST3 takes them at once.
+void settle(juce::AudioPluginInstance& p)
+{
+    render(p, 512, {}, { 512 });
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(50);
+}
+
+/// Back to silence, as a host does between two takes: reset() (VST3 maps it to the plugin's own); LV2 has none, its
+/// hosts deactivate and activate the plugin, and JUCE's LV2 host leaves reset() empty: the same, done here.
+void restart(juce::AudioPluginInstance& p)
+{
+    p.reset();
+    if (p.getPluginDescription().pluginFormatName == "LV2") {
+        const double rate = p.getSampleRate();
+        const int block = p.getBlockSize();
+        p.releaseResources();
+        p.prepareToPlay(rate, block);
+    }
+}
+
 /// Waits for the plugin's profile: a note until it sounds (it loads in the background).
 bool waitForSound(juce::AudioPluginInstance& p, double rate, double seconds)
 {
@@ -128,7 +150,7 @@ bool waitForSound(juce::AudioPluginInstance& p, double rate, double seconds)
         const auto s = render(p, (int) (0.3 * rate), { { 0, juce::MidiMessage::noteOn(1, 60, (juce::uint8) 100) },
                                                        { (int) (0.1 * rate), juce::MidiMessage::noteOff(1, 60) } }, { 512 });
         if (energy(s) > 1e-6) {
-            p.reset();
+            restart(p);
             render(p, (int) (2.0 * rate), {}, { 512 }); // let it fade
             return true;
         }
@@ -137,7 +159,7 @@ bool waitForSound(juce::AudioPluginInstance& p, double rate, double seconds)
     return false;
 }
 
-std::unique_ptr<juce::AudioPluginInstance> create(juce::VST3PluginFormat& format, const juce::PluginDescription& d, double rate, int block)
+std::unique_ptr<juce::AudioPluginInstance> create(juce::AudioPluginFormat& format, const juce::PluginDescription& d, double rate, int block)
 {
     juce::String error;
     auto instance = format.createInstanceFromDescription(d, rate, block, error);
@@ -163,9 +185,23 @@ int main(int argc, char* argv[])
     }
     // Resolved (a path ending in "/../.." is not found by the VST3 scanner).
     const auto bundle = juce::File::getCurrentWorkingDirectory().getChildFile(juce::String::fromUTF8(argv[1])).getFullPathName();
-    juce::VST3PluginFormat format;
+    // The VST3 bundle, or (Linux) the LV2 one: the same checks through either format.
+    const bool lv2 = bundle.endsWithIgnoreCase(".lv2");
+    std::unique_ptr<juce::AudioPluginFormat> formatOwned;
+#if JUCE_PLUGINHOST_LV2
+    if (lv2) { // found by its URI, in the folders of LV2_PATH: the bundle's own
+        const char* specs = std::getenv("LV2_PATH"); // (ctest: JUCE's copy of LV2's specifications, the class hierarchy)
+        const auto path = juce::File(bundle).getParentDirectory().getFullPathName() + (specs != nullptr ? ":" + juce::String(specs) : juce::String());
+        setenv("LV2_PATH", path.toRawUTF8(), 1);
+        formatOwned = std::make_unique<juce::LV2PluginFormat>();
+    }
+#endif
+    if (formatOwned == nullptr)
+        formatOwned = std::make_unique<juce::VST3PluginFormat>();
+    auto& format = *formatOwned;
+    const juce::String formatName = lv2 ? "LV2" : "VST3";
     juce::OwnedArray<juce::PluginDescription> types;
-    format.findAllTypesForFile(types, bundle);
+    format.findAllTypesForFile(types, lv2 ? juce::String("urn:pianoforge:piano") : bundle);
     check(types.size() == 1, "found in " + bundle + ": " + juce::String(types.size()) + " plugin");
     if (types.isEmpty())
         return 1;
@@ -186,7 +222,7 @@ int main(int argc, char* argv[])
     }
 
     // 1. What it declares.
-    check(d.isInstrument && d.name == "PianoForge" && d.pluginFormatName == "VST3" && d.manufacturerName == "PianoForge",
+    check(d.isInstrument && d.name == "PianoForge" && d.pluginFormatName == formatName && d.manufacturerName == "PianoForge",
           "an instrument: " + d.name + " by " + d.manufacturerName + " (" + d.pluginFormatName + ", " + d.category + ")");
     auto p = create(format, d, 48000.0, 512);
     if (p == nullptr)
@@ -206,7 +242,7 @@ int main(int argc, char* argv[])
     for (const auto* name : { "Volume", "Sympathetic resonance", "Unison tuning", "Room", "Room decay", "Distance", "Heard on",
                               "A4", "Temperament", "Output limiter", "Voicing treble", "Dynamic range", "Lid", "Presence" })
         all = all && names.contains(name);
-    check(all && names.size() == 37 && controllers >= 128,
+    check(all && names.size() == 37 && (lv2 || controllers >= 128), // (LV2 carries MIDI controllers as they are)
           juce::String(names.size()) + " automatable parameters (" + names.joinIntoString(", ") + "); MIDI controllers (CC64, CC66, CC67...) "
               "reach it through " + juce::String(controllers) + " hidden ones, as VST3 carries them");
 
@@ -240,7 +276,7 @@ int main(int argc, char* argv[])
         if (profile != nullptr) {
             set(*p, "Room", 0.0f);
             set(*p, "Output limiter", 0.0f);
-            p->reset();
+            restart(*p);
             render(*p, 512, {}, { 512 }); // the parameters applied
             const auto plugin = render(*p, total, phrase, { 512 });
             pf::ModalEngine engine;
@@ -277,10 +313,10 @@ int main(int argc, char* argv[])
     std::vector<int> odd;
     for (int i = 0; i < 400; ++i)
         odd.push_back(i % 7 == 0 ? 1 + (int) (rng() % 7) : 1 + (int) (rng() % 512));
-    p->reset();
+    restart(*p);
     render(*p, (int) rate, {}, { 512 });
     const auto fixed = render(*p, total, phrase, { 512 });
-    p->reset();
+    restart(*p);
     render(*p, (int) rate, {}, { 512 });
     const auto varied = render(*p, total, phrase, odd);
     // The engine takes a few decisions at its block boundaries (a partial's fade starting, the soundboard going to
@@ -294,7 +330,7 @@ int main(int argc, char* argv[])
 
     // 5. Automation: the volume 6 dB down.
     set(*p, "Volume", 0.0f);
-    p->reset();
+    restart(*p);
     render(*p, (int) rate, {}, { 512 });
     const auto softer = render(*p, total, phrase, { 512 });
     const double change = db(energy(softer) / energy(fixed));
@@ -303,7 +339,7 @@ int main(int argc, char* argv[])
 
     // 6. Heard on headphones: another rendering, the same energy within 1.5 dB.
     set(*p, "Heard on", 1.0f);
-    p->reset();
+    restart(*p);
     render(*p, (int) rate, {}, { 512 });
     const auto ears = render(*p, total, phrase, { 512 });
     const double earsChange = db(energy(ears) / energy(fixed));
@@ -314,9 +350,10 @@ int main(int argc, char* argv[])
         return failures ? 1 : 0;
     // 7. A project saved and opened again: the state gives the same parameters and the same sound.
     set(*p, "Volume", 0.0f);
+    settle(*p);
     juce::MemoryBlock state;
     p->getStateInformation(state);
-    p->reset();
+    restart(*p);
     render(*p, (int) rate, {}, { 512 });
     const auto before = render(*p, total, phrase, { 512 });
     auto second = create(format, d, rate, 512);
@@ -324,7 +361,7 @@ int main(int argc, char* argv[])
     second->setStateInformation(state.getData(), (int) state.getSize());
     const bool secondReady = waitForSound(*second, rate, 10.0);
     const double secondLoad = std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count();
-    second->reset();
+    restart(*second);
     render(*second, (int) rate, {}, { 512 });
     const auto after = render(*second, total, phrase, { 512 });
     const auto* heard = find(*second, "Heard on");
@@ -342,10 +379,10 @@ int main(int argc, char* argv[])
         for (const auto& note : phrase) // the same instants (multiples of 4 samples: on the engine's frames)
             phrase4.push_back({ note.at * 4, note.message });
         const int total4 = total * 4;
-        fast->reset();
+        restart(*fast);
         render(*fast, 192000, {}, { 1024 });
         const auto big = render(*fast, total4, phrase4, { 1024 });
-        fast->reset();
+        restart(*fast);
         render(*fast, 192000, {}, { 1024 });
         std::vector<int> tiny;
         for (int i = 0; i < 300; ++i)
@@ -365,7 +402,7 @@ int main(int argc, char* argv[])
         std::vector<Note> busy { { 0, juce::MidiMessage::controllerEvent(1, 64, 127) } };
         for (int i = 0; i < 64; ++i)
             busy.push_back({ i * 480, juce::MidiMessage::noteOn(1, 21 + (i * 7) % 88, (juce::uint8) 80) });
-        p->reset();
+        restart(*p);
         const auto t2 = std::chrono::steady_clock::now();
         render(*p, (int) (10.0 * rate), busy, { 128 });
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t2).count();
@@ -385,21 +422,27 @@ int main(int argc, char* argv[])
             return parameter != nullptr ? parameter->getText(parameter->getValue(), 64) : juce::String("?");
         };
         bool nightOk = false, backOk = false;
+        juce::String nightSeen, backSeen; // what the host shows, when it is not so
         double quieter = 0.0;
         if (night >= 0 && measured >= 0) {
             p->setCurrentProgram(night);
-            nightOk = text("Lid") == "Closed" && text("Dynamic range").startsWith("60");
-            p->reset();
+            settle(*p);
+            // (LV2 has no text for a value: its hosts show the number, 0 for the lid closed, 100 open.)
+            nightOk = (text("Lid") == "Closed" || text("Lid") == "0") && text("Dynamic range").startsWith("60");
+            nightSeen = "lid " + text("Lid") + ", dynamics " + text("Dynamic range");
+            restart(*p);
             render(*p, 512, {}, { 512 });
             const auto closed = render(*p, total, phrase, { 512 });
             p->setCurrentProgram(measured);
-            backOk = text("Lid") == "Open" && text("Dynamic range").startsWith("100");
+            settle(*p);
+            backOk = (text("Lid") == "Open" || text("Lid") == "100") && text("Dynamic range").startsWith("100");
+            backSeen = "lid " + text("Lid") + ", dynamics " + text("Dynamic range");
             set(*p, "Lid", 0.0f);
-            p->reset();
+            restart(*p);
             render(*p, 512, {}, { 512 });
             const auto lidOnly = render(*p, total, phrase, { 512 });
             set(*p, "Lid", 100.0f);
-            p->reset();
+            restart(*p);
             render(*p, 512, {}, { 512 });
             const auto open = render(*p, total, phrase, { 512 });
             quieter = db(energy(open) / std::max(energy(lidOnly), 1e-30));
@@ -407,8 +450,8 @@ int main(int argc, char* argv[])
         }
         check(programs.size() >= 10 && nightOk && backOk && quieter > 1.0,
               juce::String(programs.size()) + " programs (the application's factory presets: " + programs.joinIntoString(", ")
-                  + "); Night practice sets the lid closed and the dynamics at 60 %" + (nightOk ? "" : " (NOT so)") + ", As measured puts them back"
-                  + (backOk ? "" : " (NOT so)") + "; the lid closed: the phrase " + juce::String(quieter, 1) + " dB quieter (expected > 1)");
+                  + "); Night practice sets the lid closed and the dynamics at 60 %" + (nightOk ? "" : " (NOT so: " + nightSeen + ")")
+                  + ", As measured puts them back" + (backOk ? "" : " (NOT so: " + backSeen + ")") + "; the lid closed: the phrase " + juce::String(quieter, 1) + " dB quieter (expected > 1)");
     }
 
     p->releaseResources();

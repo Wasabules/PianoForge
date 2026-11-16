@@ -5,6 +5,7 @@
 #include "../../app/src/CurveText.h"
 #include "../../app/src/Presets.h"
 #include "../../app/src/RoomPresets.h"
+#include "../../app/src/SettingsLocation.h"
 #include "../../app/src/Tuning.h"
 
 #include <chrono>
@@ -132,11 +133,7 @@ std::shared_ptr<const pf::ModalProfile> sharedProfile(const juce::File& file, st
 
 juce::PropertiesFile::Options applicationSettings()
 {
-    juce::PropertiesFile::Options o; // as the application stores them
-    o.applicationName = "PianoForge";
-    o.folderName = "PianoForge";
-    o.filenameSuffix = ".settings";
-    return o;
+    return pf::app::settingsOptions(); // as the application stores them
 }
 
 } // namespace
