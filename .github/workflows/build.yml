@@ -78,7 +78,7 @@ jobs:
           cmake --build build/forge-native
       - name: Test the forge
         run: pytest -q tools/forge/tests
-      - name: Test the bench (no Kontakt needed: its protocol, checks, storage and SFZ player)
+      - name: 'Test the bench (no Kontakt needed: its protocol, checks, storage and SFZ player)'
         run: python -m unittest discover -s tools/bench/tests
       - name: Test the profile builder (its recipes, what it reads in a bank, its download checks)
         run: |
