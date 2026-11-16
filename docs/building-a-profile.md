@@ -239,7 +239,7 @@ Measured on a 12-core machine (8 used), native kernels built:
 
 | Bank | Renders | Forge | Space (renders and measures) |
 |---|---|---|---|
-| Piano in 162 (5 layers) | 2 min | about 20 min | 1.5 GB |
+| Piano in 162 (5 layers) | 2 min | about 15 min | 1.5 GB |
 | Salamander (16 layers) | 10 to 20 min | about 50 min | 2 GB |
 
 A forge without its native kernels takes about ten times as long.
