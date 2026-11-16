@@ -18,6 +18,8 @@ switches between that reference and the modal engine while playing.
 | `app/` | Standalone application (JUCE 9): listening lab with an 88-key keyboard, MIDI input, audio device selection. |
 | `tools/bench/` | Reference bench (Python): renders a VST3 instrument through measurement sessions and checks the takes. |
 | `tools/forge/` | Forge (Python): analysis and calibration, from the reference corpus to engine data. |
+| `tools/profile/` | Profile builder (Python): a sample bank to a modal profile in one resumable command (`pianoforge-profile`). |
+| `docs/` | Building a profile from a sample bank: the tool, the method, the checks. |
 | `studies/` | Standalone computations and spikes behind design decisions (resonator precision, CPU budget, resynthesis). |
 | `plugin/` | The VST3 instrument (JUCE): the same engine, room, headphones, output tone and limiter in a host. |
 | `obs/` | OBS Studio plugin: the PianoForge sound (on speakers, as heard or dry, its own level), keyboard (lit keys and pedals, rounded notes, lights and sparkles, with the sound) and text sources, and chapter markers in OBS's recordings; fed by the application through shared memory. |
@@ -292,18 +294,21 @@ with its credit).
 | [Salamander Grand Piano V3](https://github.com/sfzinstruments/SalamanderGrandPiano) | Yamaha C5 | Alexander Holm: 48 kHz, 24-bit, 16 velocity layers every minor third, an AB pair of AKG C414; SFZ by SFZ Instruments | [CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/) | `salamander-dry` |
 | [Piano in 162](https://www.ivyaudio.com/Piano-in-162) | Steinway B | Ivy Audio: 44.1 kHz, 24-bit, every key, 5 dynamics, 2 round robins, pedal up and down, close and ambient microphones; SFZ by Marcelo Colina | free for personal and commercial use (no licence text comes with it) | `in162-close` |
 
-The banks are not in the repository: put them under `corpus/sources/` (Salamander: the SFZ Instruments repository;
-Piano in 162: Ivy Audio's SFZ download), then:
+The banks are not in the repository, nor are the profiles made from them. Anyone can make them again, or make one
+from any other SFZ piano, with the profile builder. It fetches the bank (Salamander automatically; Piano in 162 by
+hand, from Ivy Audio's torrent), renders it through the bench, measures it with the forge, and resumes after a stop:
 
 ```
-.venv\Scripts\bench prepare-sfz --state salamander-dry --sfz "corpus\sources\salamander\SalamanderGrandPiano\Salamander Grand Piano V3.sfz" --hdcc 21=0 --hdcc 22=0 --align-onsets 3 --license "CC-BY 3.0"
-.venv\Scripts\bench prepare-sfz --state in162-close --sfz "corpus\sources\piano-in-162\Ivy Audio - Piano in 162 sfz\IvyAudio-PianoIn162-Close.sfz" --align-onsets 3
-.venv\Scripts\bench render tools\bench\sessions\reference.toml --state salamander-dry
-.venv\Scripts\bench render tools\bench\sessions\interactions.toml --state salamander-dry
+.venv\Scripts\python -m pip install -e tools\bench -e tools\forge -e tools\profile
+.venv\Scripts\pianoforge-profile doctor
+.venv\Scripts\pianoforge-profile build salamander
+.venv\Scripts\pianoforge-profile build --sfz "D:\Banks\My Grand.sfz" --state my-grand --license "..."
 ```
 
-(`salamander-dry`: the key-release and pedal noises off, as for Noire's dry state.) `studies/compare_banks.py` sets
-their measures side by side: tuning, inharmonicity, sustain, brightness, dynamics, dampers.
+The forge monitor's *New profile...* does the same in a window. **[docs/building-a-profile.md](docs/building-a-profile.md)**
+explains the whole method: what the bench renders, what each forge step measures and how, the choices and how to
+change them, how to check a profile, times, space and licences. `studies/compare_banks.py` sets the banks' measures
+side by side: tuning, inharmonicity, sustain, brightness, dynamics, dampers.
 
 ## Forge
 
@@ -329,8 +334,9 @@ to `progress.json` in the state's folder:
 .venv\Scripts\forge pipeline --corpus corpus\reference\in162-close --layers 64,32,80,96,127 --skip sympathetic
 ```
 
-(`--resume` keeps the layers already measured since the last render.) The forge monitor follows every pipeline of
-a corpus: the steps, the one under way, the time left and the end of the log:
+(`--resume` keeps the layers already measured since the last render.) The forge monitor follows every pipeline and
+every profile build of a corpus (the steps, the one under way, the time left and the end of the log), and starts
+new builds (New profile..., see docs/building-a-profile.md):
 
 ```
 cmake --build --preset windows-release --target PianoForgeForgeMonitor

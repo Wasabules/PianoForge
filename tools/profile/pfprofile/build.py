@@ -34,7 +34,7 @@ SESSIONS = PROJECT_ROOT / "tools" / "bench" / "sessions"
 REFERENCE_PASSES = "single-notes,releases"
 INTERACTION_PASSES = "pedal-down,pedal-up,half-pedal"
 MAGIC = b"PFMODAL1"
-MIN_FREE_GB = 15.0
+MIN_FREE_GB = 5.0
 
 
 class BuildError(Exception):
@@ -221,7 +221,7 @@ def build(bank: Bank, options: Options) -> int:
                                      f"the 88 keys, 21 (A0) to 108 (C8)")
                 free = shutil.disk_usage(corpus).free / 1e9
                 if free < MIN_FREE_GB:
-                    log(f"  !! {free:.0f} GB free on the corpus' disk: the renders and measures take 5 to 15 GB")
+                    log(f"  !! {free:.0f} GB free on the corpus' disk: the renders and measures take about 2 GB")
                 message = (f"{info.regions} regions, {info.samples} samples, keys {info.keys[0]}-{info.keys[1]}, "
                            f"{len(info.ranges)} velocity layers, pedal-down samples: "
                            f"{'yes' if info.has_pedal_down else 'no'}")

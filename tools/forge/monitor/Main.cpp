@@ -1,12 +1,15 @@
 // The forge monitor: follows the forge pipelines (forge pipeline, tools/forge/forge/pipeline.py) of every corpus state
 // from their progress.json, once a second: each pipeline's steps, the one under way and how far it is, how long it
-// should still take, and the end of its log.
+// should still take, and the end of its log. And the profile builds (pianoforge-profile build, tools/profile) from
+// their build.json: New profile... starts one (a bank the tool knows, or any SFZ piano), Stop ends it.
 //
 //   PianoForgeForgeMonitor [corpus folder]   (default: the corpus folder above the working directory or the program)
 //
 // The time left: for the step under way, from its pace so far (items done against the time they took); for the steps
 // to come, from the steps of the same kind already over (the modes of another layer...). A pipeline silent for more
 // than three minutes is shown as such (stopped from outside, or the machine asleep).
+
+#include "Builder.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -52,8 +55,9 @@ struct Step {
 };
 
 struct Pipeline {
-    juce::File folder;
-    juce::String state, status;
+    juce::File folder, log;
+    juce::String state, status, name; // name: the state, or "<state> (build)"
+    bool build = false;               // a profile build (build.json), not a forge pipeline (progress.json)
     double started = 0.0, updated = 0.0;
     std::vector<Step> steps;
 
@@ -87,6 +91,34 @@ bool read(const juce::File& file, Pipeline& p)
         return false;
     p.folder = file.getParentDirectory();
     p.state = json.getProperty("state", p.folder.getFileName()).toString();
+    if (const auto* stages = json.getProperty("stages", {}).getArray()) { // a profile build
+        p.build = true;
+        p.name = p.state + " (build)";
+        p.log = p.folder.getChildFile("build-log.txt");
+        p.status = json.getProperty("result", "").toString();
+        p.started = number(json, "started");
+        // Its last sign of life: the log (the renders and the forge write to it as they go), the forge's progress.
+        p.updated = (double) juce::jmax(p.log.getLastModificationTime().toMilliseconds(), file.getLastModificationTime().toMilliseconds(),
+                                        p.folder.getChildFile("progress.json").getLastModificationTime().toMilliseconds())
+                    / 1000.0;
+        p.steps.clear();
+        for (const auto& s : *stages) {
+            Step step;
+            step.name = s.getProperty("name", "").toString();
+            const auto status = s.getProperty("status", "waiting").toString();
+            step.status = status == "waiting" ? "pending" : status == "stopped" ? "failed" : status;
+            step.error = s.getProperty("message", "").toString();
+            if (step.status == "running")
+                step.phase = step.error;
+            step.seconds = number(s, "seconds", -1.0);
+            step.started = number(s, "started");
+            step.phaseStarted = step.started;
+            p.steps.push_back(step);
+        }
+        return true;
+    }
+    p.name = p.state;
+    p.log = p.folder.getChildFile("forge-log.txt");
     p.status = json.getProperty("status", "").toString();
     p.started = number(json, "started");
     p.updated = number(json, "updated");
@@ -186,7 +218,7 @@ public:
         auto header = r.removeFromTop(24);
         g.setColour(colours::text);
         g.setFont(font(17.0f, true));
-        g.drawText(p.state, header.removeFromLeft(220), juce::Justification::centredLeft);
+        g.drawText(p.name, header.removeFromLeft(260), juce::Justification::centredLeft);
         const bool silent = p.silent();
         const auto status = silent ? "silent for " + duration(now() - p.updated) : p.status;
         const auto statusColour = silent ? colours::silent
@@ -231,10 +263,13 @@ public:
                 g.fillRoundedRectangle(bar.withWidth(bar.getWidth() * (float) s->done / (float) s->total), 5.0f);
             }
         } else {
-            juce::String what = p.status == "done" ? "every step done" : p.status;
+            juce::String what = p.status == "done" ? (p.build ? "the profile is ready: " + p.folder.getChildFile("modal-profile.bin").getFullPathName()
+                                                              : juce::String("every step done"))
+                                                   : p.status;
             for (const auto& step : p.steps)
                 if (step.status == "failed")
-                    what = step.name + " failed: " + step.error;
+                    what = step.name + (step.error == "stopped" ? juce::String(": stopped (New profile... with the same bank resumes it)")
+                                                                : " failed: " + step.error);
             g.setColour(p.status == "failed" ? colours::failed : colours::secondary);
             g.drawText(what, line, juce::Justification::centredLeft);
             r.removeFromTop(10);
@@ -274,6 +309,15 @@ public:
             if (const auto* c = selectedCard())
                 c->pipeline.folder.startAsProcess();
         };
+        addAndMakeVisible(newProfile);
+        newProfile.onClick = [this] { openBuilder(); };
+        addAndMakeVisible(stop);
+        stop.onClick = [this] {
+            if (const auto* c = selectedCard(); c != nullptr && c->pipeline.build)
+                tools.run(corpus, { "stop", c->pipeline.state });
+            refresh();
+        };
+        tools = builder::Toolchain::find(corpus);
         addAndMakeVisible(viewport);
         viewport.setViewedComponent(&list, false);
         viewport.setScrollBarsShown(true, false);
@@ -301,6 +345,10 @@ public:
         openFolder.setBounds(top.removeFromRight(130));
         top.removeFromRight(8);
         choose.setBounds(top.removeFromRight(150));
+        top.removeFromRight(8);
+        stop.setBounds(top.removeFromRight(70));
+        top.removeFromRight(8);
+        newProfile.setBounds(top.removeFromRight(130));
         title.setBounds(top);
         r.removeFromTop(8);
         log.setBounds(r.removeFromBottom(juce::jmax(140, r.getHeight() / 3)));
@@ -313,7 +361,8 @@ public:
 private:
     juce::File corpus;
     juce::Label title, empty;
-    juce::TextButton choose { "Choose corpus..." }, openFolder { "Open its folder" };
+    juce::TextButton choose { "Choose corpus..." }, openFolder { "Open its folder" }, newProfile { "New profile..." }, stop { "Stop" };
+    builder::Toolchain tools;
     juce::Viewport viewport;
     juce::Component list;
     juce::TextEditor log;
@@ -325,9 +374,33 @@ private:
     PipelineCard* selectedCard() const
     {
         for (const auto& c : cards)
-            if (c->pipeline.state == selectedState)
+            if (c->pipeline.name == selectedState)
                 return c.get();
         return nullptr;
+    }
+
+    void openBuilder()
+    {
+        auto* dialog = new builder::BuildDialog(tools, corpus);
+        dialog->onBuild = [this](const juce::StringArray& args, const juce::String& state) {
+            if (!tools.launch(corpus, args))
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "New profile",
+                                                       "The profile tool could not be started (" + tools.python.getFullPathName() + ").");
+            selectedState = state + " (build)";
+            juce::Timer::callAfterDelay(1500, [safe = juce::Component::SafePointer<MonitorComponent>(this)] {
+                if (safe != nullptr)
+                    safe->refresh();
+            });
+        };
+        juce::DialogWindow::LaunchOptions o;
+        o.content.setOwned(dialog);
+        o.dialogTitle = "New profile";
+        o.dialogBackgroundColour = colours::background;
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        o.resizable = false;
+        o.componentToCentreAround = this;
+        o.launchAsync();
     }
 
     void chooseCorpus()
@@ -337,6 +410,7 @@ private:
                              [this](const juce::FileChooser& fc) {
                                  if (fc.getResult().isDirectory()) {
                                      corpus = fc.getResult();
+                                     tools = builder::Toolchain::find(corpus);
                                      refresh();
                                  }
                              });
@@ -346,15 +420,20 @@ private:
 
     void refresh()
     {
-        title.setText("Forge pipelines in " + corpus.getFullPathName(), juce::dontSendNotification);
+        title.setText("Forge pipelines and profile builds in " + corpus.getFullPathName(), juce::dontSendNotification);
+        newProfile.setEnabled(tools.found());
+        newProfile.setTooltip(tools.found() ? "A bank the profile tool knows, or any SFZ piano, to a modal profile (pianoforge-profile build)"
+                                            : "No Python environment with the profile tool above this corpus (<project>/.venv, "
+                                              "pip install -e tools/bench -e tools/forge -e tools/profile)");
         std::vector<Pipeline> found;
         for (const auto& session : corpus.findChildFiles(juce::File::findDirectories, false))
-            for (const auto& state : session.findChildFiles(juce::File::findDirectories, false)) {
-                const auto file = state.getChildFile("progress.json");
-                Pipeline p;
-                if (file.existsAsFile() && read(file, p))
-                    found.push_back(std::move(p));
-            }
+            for (const auto& state : session.findChildFiles(juce::File::findDirectories, false))
+                for (const auto* name : { "build.json", "progress.json" }) {
+                    const auto file = state.getChildFile(name);
+                    Pipeline p;
+                    if (file.existsAsFile() && read(file, p))
+                        found.push_back(std::move(p));
+                }
         std::sort(found.begin(), found.end(), [](const Pipeline& a, const Pipeline& b) {
             const bool ra = a.status == "running", rb = b.status == "running";
             return ra != rb ? ra : a.updated > b.updated;
@@ -367,20 +446,23 @@ private:
             auto card = std::make_unique<PipelineCard>();
             auto* raw = card.get();
             card->onSelect = [this, raw] {
-                selectedState = raw->pipeline.state;
+                selectedState = raw->pipeline.name;
                 refresh();
             };
             list.addAndMakeVisible(*card);
             cards.push_back(std::move(card));
         }
         if (selectedState.isEmpty() && !found.empty())
-            selectedState = found.front().state;
+            selectedState = found.front().name;
         for (std::size_t i = 0; i < found.size(); ++i) {
             cards[i]->pipeline = std::move(found[i]);
-            cards[i]->selected = cards[i]->pipeline.state == selectedState;
+            cards[i]->selected = cards[i]->pipeline.name == selectedState;
             cards[i]->repaint();
         }
-        empty.setText(cards.empty() ? "No forge pipeline in this corpus yet (forge pipeline --corpus corpus/reference/<state>)"
+        const auto* chosen = selectedCard();
+        stop.setEnabled(chosen != nullptr && chosen->pipeline.build && chosen->pipeline.status == "running");
+        stop.setTooltip("Ends the build selected, with every process it started (the same bank, built again, resumes it)");
+        empty.setText(cards.empty() ? "Nothing built in this corpus yet: New profile... (or pianoforge-profile build)"
                                     : juce::String(), juce::dontSendNotification);
         empty.setVisible(cards.empty());
         layoutCards();
@@ -402,7 +484,7 @@ private:
             log.setText({}, false);
             return;
         }
-        const auto file = c->pipeline.folder.getChildFile("forge-log.txt");
+        const auto file = c->pipeline.log;
         juce::StringArray lines;
         lines.addLines(file.loadFileAsString());
         lines.removeEmptyStrings();
@@ -410,7 +492,7 @@ private:
         juce::StringArray tail;
         for (int i = from; i < lines.size(); ++i)
             tail.add(lines[i]);
-        const auto text = c->pipeline.state + "  -  " + file.getFullPathName() + "\n" + tail.joinIntoString("\n");
+        const auto text = c->pipeline.name + "  -  " + file.getFullPathName() + "\n" + tail.joinIntoString("\n");
         if (text != log.getText()) {
             log.setText(text, false);
             log.moveCaretToEnd();
@@ -460,7 +542,7 @@ private:
     class Window final : public juce::DocumentWindow {
     public:
         explicit Window(juce::File corpus)
-            : DocumentWindow("PianoForge - forge monitor", colours::background, DocumentWindow::allButtons)
+            : DocumentWindow("PianoForge - forge monitor and profile builder", colours::background, DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar(true);
             setContentOwned(new MonitorComponent(std::move(corpus)), false);

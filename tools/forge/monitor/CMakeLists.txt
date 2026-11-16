@@ -1,5 +1,6 @@
 # The forge monitor (JUCE): a small window that follows the forge pipelines of a corpus (their progress.json, written
-# by forge pipeline): each one's steps, the one under way and its progress, the time left, the end of its log.
+# by forge pipeline) and its profile builds (build.json, pianoforge-profile build): each one's steps, the one under
+# way and its progress, the time left, the end of its log; New profile... starts a build, Stop ends one.
 #   cmake --build --preset windows-release --target PianoForgeForgeMonitor
 #   build/windows-msvc/tools/forge/monitor/PianoForgeForgeMonitor_artefacts/Release/PianoForgeForgeMonitor.exe [corpus]
 juce_add_gui_app(PianoForgeForgeMonitor
@@ -9,7 +10,7 @@ juce_add_gui_app(PianoForgeForgeMonitor
     ICON_SMALL "${PROJECT_SOURCE_DIR}/app/resources/icon-32.png"
     VERSION ${PROJECT_VERSION})
 
-target_sources(PianoForgeForgeMonitor PRIVATE Main.cpp)
+target_sources(PianoForgeForgeMonitor PRIVATE Main.cpp Builder.h)
 target_compile_definitions(PianoForgeForgeMonitor PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_compile_options(PianoForgeForgeMonitor PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_link_libraries(PianoForgeForgeMonitor

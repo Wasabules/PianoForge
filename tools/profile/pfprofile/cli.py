@@ -6,6 +6,7 @@
   pianoforge-profile build piano-in-162        the whole chain, resumable (the same command again after a stop)
   pianoforge-profile build --sfz my.sfz --state my-piano --license "..."   any SFZ piano
   pianoforge-profile status in162-close        where a build is
+  pianoforge-profile stop in162-close          a build stopped (with every process it started)
 
 Every command takes --corpus (default: <project>/corpus, or $PIANOFORGE_CORPUS). See docs/building-a-profile.md.
 """
@@ -66,8 +67,8 @@ def cmd_doctor(args) -> int:
     corpus = _corpus(args)
     corpus.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(corpus).free / 1e9
-    line(free >= 15, f"corpus {corpus}: {free:.0f} GB free (a bank's renders and measures take 5 to 15 GB; the bank "
-                     f"itself 1 to 10 GB)")
+    line(free >= 5, f"corpus {corpus}: {free:.0f} GB free (a bank's renders and measures take about 2 GB; the bank "
+                    f"itself 1 to 10 GB)")
     exe = "PianoForge.exe" if os.name == "nt" else "PianoForge"
     apps = [p for p in (PROJECT_ROOT / "build").glob(f"*/app/PianoForgeApp_artefacts/*/{exe}")] + \
            [p for p in (PROJECT_ROOT / "build").glob("*/app/PianoForgeApp_artefacts/*/PianoForge.app")]
@@ -98,6 +99,16 @@ def _status_of(bank: Bank, corpus: Path) -> str:
 
 def cmd_banks(args) -> int:
     corpus = _corpus(args)
+    if args.json:  # for the forge monitor's builder
+        out = []
+        for bank in load_banks().values():
+            out.append({"id": bank.id, "name": bank.name, "piano": bank.piano, "license": bank.license,
+                        "state": bank.state, "size": bank.size, "source": bank.source,
+                        "status": _status_of(bank, corpus), "present": bank.sfz_path(corpus).exists(),
+                        "fetch": bank.fetch.get("kind", ""),
+                        "instructions": bank.fetch.get("instructions", "").replace("<corpus>", str(corpus))})
+        print(json.dumps(out, ensure_ascii=False))
+        return 0
     for bank in load_banks().values():
         print(f"{bank.id:14} {bank.name} ({bank.piano}); {bank.license}")
         print(f"{'':14} state {bank.state}: {_status_of(bank, corpus)}; source {bank.source}; {bank.size}")
@@ -150,6 +161,42 @@ def cmd_build(args) -> int:
     return build(bank, options)
 
 
+def cmd_stop(args) -> int:
+    import signal
+    import subprocess
+    import time
+
+    corpus = _corpus(args)
+    bank = find(args.state)
+    state = bank.state if bank else args.state
+    path = corpus / "reference" / state / "build.json"
+    if not path.exists():
+        print(f"{state}: no build")
+        return 1
+    data = json.loads(path.read_text(encoding="utf-8"))
+    pid = data.get("pid")
+    if data.get("result") != "running" or not pid:
+        print(f"{state}: not running ({data.get('result')})")
+        return 1
+    if os.name == "nt":  # the tool, the bench or the forge it runs, and their workers
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+    else:
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGINT)
+        except (ProcessLookupError, PermissionError):
+            pass
+    time.sleep(0.5)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("result") == "running":  # (killed before it could say so)
+        i = data.get("current")
+        if i is not None:
+            data["stages"][i].update(status="stopped", message="stopped")
+        data.update(result="stopped", current=None, ended=time.time())
+        path.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    print(f"{state}: stopped (the same build command resumes it)")
+    return 0
+
+
 def cmd_status(args) -> int:
     corpus = _corpus(args)
     bank = find(args.state)
@@ -177,11 +224,13 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="pianoforge-profile", description=__doc__.split("\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument("--corpus", help="corpus folder (default: <project>/corpus or $PIANOFORGE_CORPUS)")
+    ap.add_argument("--quiet", action="store_true", help="nothing written but the log files (the forge monitor)")
     sub = ap.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("doctor", help="what is installed and built, what is missing")
     p.set_defaults(func=cmd_doctor)
     p = sub.add_parser("banks", help="the banks the tool knows, and how far each one is")
+    p.add_argument("--json", action="store_true", help="as JSON (for the forge monitor)")
     p.set_defaults(func=cmd_banks)
     p = sub.add_parser("fetch", help="download a bank (checked file by file), or say how to get it")
     p.add_argument("bank", help="a bank's id (see banks)")
@@ -211,8 +260,20 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("status", help="where a build is")
     p.add_argument("state", help="a bank's id or a state's name")
     p.set_defaults(func=cmd_status)
+    p = sub.add_parser("stop", help="stop a build, with every process it started")
+    p.add_argument("state", help="a bank's id or a state's name")
+    p.set_defaults(func=cmd_stop)
 
     args = ap.parse_args(argv)
+    if args.quiet:
+        # Started by the forge monitor: nothing on a console (the log file has it all), and on Linux or macOS a
+        # process group of its own (stop ends it and its children, not the monitor).
+        sys.stdout = sys.stderr = open(os.devnull, "w", encoding="utf-8")
+        if os.name != "nt":
+            try:
+                os.setsid()
+            except OSError:
+                pass
     if getattr(args, "align_onsets", None) is not None and args.align_onsets < 0:
         args.align_onsets = None
     return args.func(args)
