@@ -55,7 +55,9 @@ PianoForge.exe --selftest corpus/reference/noire-dry/single-notes selftest.txt
 
 Windows is where PianoForge is used and tested every day. The code is written for Linux and macOS too, and the
 continuous integration (`.github/workflows/build.yml`: Windows, Ubuntu, macOS on Apple silicon, the forge's tests,
-the WebAssembly build) builds and tests it on all three at every push; what it has not done yet is run on them.
+the WebAssembly build) builds and tests it on all three when started by hand (Actions > build > Run workflow, or
+`gh workflow run build.yml`: the repository is private and its minutes are counted); what it has not done yet is run
+on them.
 
 | | Windows | Linux | macOS |
 |---|---|---|---|

@@ -1,5 +1,6 @@
 # Builds PianoForge and runs its tests on Windows, Ubuntu and macOS (and the forge's tests, and the WebAssembly
-# build) at every push and pull request.
+# build), when started by hand (Actions > build > Run workflow, or `gh workflow run build.yml`): the repository is
+# private, and its Actions minutes are counted (Windows twice, macOS ten times), so not at every push.
 #
 # The reference corpus and the profiles calibrated on it are never in the repository (rendered from a commercial
 # library, their licence forbids passing them on): the tests that need them skip (the plugin's sound tests, the web
@@ -8,8 +9,6 @@
 name: build
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 
 jobs:
