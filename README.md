@@ -19,7 +19,7 @@ switches between that reference and the modal engine while playing.
 | `tools/bench/` | Reference bench (Python): renders a VST3 instrument through measurement sessions and checks the takes. |
 | `tools/forge/` | Forge (Python): analysis and calibration, from the reference corpus to engine data. |
 | `studies/` | Standalone computations and spikes behind design decisions (resonator precision, CPU budget, resynthesis). |
-| `plugin/` | The VST3 instrument (JUCE): the same engine, room, headphones and limiter in a host. |
+| `plugin/` | The VST3 instrument (JUCE): the same engine, room, headphones, output tone and limiter in a host. |
 | `obs/` | OBS Studio plugin: the PianoForge sound (on speakers, as heard or dry, its own level), keyboard (lit keys and pedals, rounded notes, lights and sparkles, with the sound) and text sources, and chapter markers in OBS's recordings; fed by the application through shared memory. |
 | `web/` | The modal engine and the room in WebAssembly, played from a browser page. |
 | `installer/` | The Windows installer (Inno Setup 6) and the update manifest it comes with. |
@@ -160,8 +160,8 @@ Shaping the instrument and the output, at 0 or 100 % the sound as measured, bit 
   - A stream compressor: it works on what leaves for OBS and the mirror output only; what is heard and recorded
     stays as it is.
 
-  The first three are in the instrument presets and the take renders. The plugin keeps the sound as measured for
-  now.
+  The first three are in the instrument presets and the take renders. The plugin has the voicing, the touch, the
+  lid and the output tone as parameters, and the factory presets as its programs.
 
 In a browser (WebAssembly, the modal engine and the room, Web MIDI): see `web/README.md`.
 
@@ -183,8 +183,11 @@ host that has it loaded keeps its copy (moved aside) until it loads the plugin a
 host the first time. The installer offers it too.
 
 - The sound is the application's: the modal engine, the room and the listening position (headphones included), the
-  limiter, with the same settings as automatable parameters (volume, what the engine models, sympathetic level,
-  unison tuning, re-strike absorption, room, distance, keep loudness, speakers or headphones, A4, temperament, limiter).
+  output tone, the limiter, with the same settings as automatable parameters (volume, what the engine models,
+  sympathetic level, unison tuning, re-strike absorption, the hammers' voicing, the dynamic range, the sustain, the
+  dampers, the attack, the lid, room, distance, keep loudness, speakers or headphones, bass, presence, air, A4,
+  temperament, limiter). The application's factory presets are its programs (the host's preset list, or the Preset
+  menu in its window): the sound only; the tuning, the volume, the limiter and the curve stay.
   MIDI: notes, CC64 continuous sustain, CC66 sostenuto, CC67 soft pedal. A velocity curve of its own, drawn, or the
   application's (Keyboard > Velocity curve) copied in.
 - The modal profile is never inside the plugin: it plays the one of the application's corpus (its settings say

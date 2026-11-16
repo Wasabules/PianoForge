@@ -186,6 +186,38 @@ Editor::Editor(Processor& p) : juce::AudioProcessorEditor(p), processor(p)
     roomSummary.setJustificationType(juce::Justification::topLeft);
 
     setupRow(a4, param::a4, "A4", "The reference pitch");
+
+    // The character.
+    const juce::String voicingTip = "The hammers of this register: below 0 dB needled (softer, rounder), above hardened (brighter); "
+                                    "the partials above the corner move, the fundamental stays (linear between A0, C4 and C8)";
+    setupRow(voicingBass, param::voicingBass, "Bass", voicingTip);
+    setupRow(voicingMiddle, param::voicingMiddle, "Middle", voicingTip);
+    setupRow(voicingTreble, param::voicingTreble, "Treble", voicingTip);
+    setupRow(voicingFollow, param::voicingFollow, "Follows", "How much of the voicing follows the velocity: 0 % alike at every "
+                                                            "velocity, 100 % in proportion (a needled felt changes the forte most)");
+    setupRow(voicingCorner, param::voicingCorner, "From", "Where the voicing sets in, in partials of the note: lower reaches more of the tone");
+    setupRow(dynamicRange, param::dynamicRange, "Dynamics", "Each strike's distance below the note's loudest: 100 % as measured, 50 % "
+                                                             "the pianissimo half as far below the fortissimo");
+    setupRow(sustainLength, param::sustainLength, "Sustain", "The strings' decay times: 1 x as measured");
+    setupRow(damperSpeed, param::damperSpeed, "Dampers", "How fast the dampers stop the strings: 0.5 x a slower, longer release");
+    setupRow(attackSoft, param::attackSoft, "Attack", "The strike's brightness above 1.2 kHz at the attack, fading out: below 0 dB "
+                                                      "a softer attack, above a harder one");
+    setupRow(attackLength, param::attackLength, "Attack time", "Over how long the attack's softness fades out");
+    setupRow(lid, param::lid, "Lid", "Open as measured; on the half stick or closed, the treble (above 1.5 kHz) down to 9 dB and the "
+                                     "whole by up to 2 dB");
+    setupRow(toneBass, param::toneBass, "Bass", "A low shelf at 120 Hz: the bass of the whole output");
+    setupRow(tonePresence, param::tonePresence, "Presence", "A broad bell at 2.5 kHz: where a piano can sound hard (down) or recessed (up)");
+    setupRow(toneAir, param::toneAir, "Air", "A high shelf at 10 kHz: the air above the piano's tone");
+    presetLabel.setText("Preset", juce::dontSendNotification);
+    presetLabel.setColour(juce::Label::textColourId, theme::dim);
+    for (int i = 0; i < processor.getNumPrograms(); ++i)
+        preset.addItem(processor.getProgramName(i), i + 1);
+    preset.setTooltip("The application's factory presets: the sound only (the engine's models, the voicing, the touch, the tone, "
+                      "the room and the position); the tuning, the volume, the limiter and the curve stay. Also the host's programs.");
+    preset.onChange = [this] {
+        if (const int id = preset.getSelectedId(); id >= 1)
+            processor.applyProgram(id - 1);
+    };
     setupChoice(temperament, param::temperament, "Temperament", "Historical temperaments; A keeps its frequency");
     setupChoice(root, param::root, "Root", "The temperament's root");
 
@@ -227,13 +259,14 @@ Editor::Editor(Processor& p) : juce::AudioProcessorEditor(p), processor(p)
     footer.setFont(theme::font(11.5f));
     footer.setColour(juce::Label::textColourId, theme::dim);
 
-    for (auto* c : std::initializer_list<juce::Component*> { &title, &profileLine, &chooseProfile, &applicationProfile, &roomPresetLabel,
+    for (auto* c : std::initializer_list<juce::Component*> { &title, &profileLine, &chooseProfile, &applicationProfile, &presetLabel, &preset,
+                                                             &roomPresetLabel,
                                                              &roomPreset, &positionLabel, &position, &roomSummary, curveGraph.get(),
                                                              &softest, &hardest, &softestLabel, &hardestLabel, &linearCurve, &appCurve, &footer })
         addAndMakeVisible(*c);
 
     refreshPresets();
-    setSize(980, 640);
+    setSize(1320, 670);
     timerCallback();
     startTimerHz(15);
 }
@@ -364,6 +397,8 @@ void Editor::timerCallback()
                                                      : status.text.startsWith("Loading") ? theme::busy : theme::bad);
     profileLine.setTooltip(status.path);
     applicationProfile.setEnabled(status.chosen);
+    if (preset.getSelectedId() != processor.getCurrentProgram() + 1)
+        preset.setSelectedId(processor.getCurrentProgram() + 1, juce::dontSendNotification);
 
     refreshPresets();
     const auto s = currentRoom();
@@ -424,6 +459,9 @@ void Editor::paint(juce::Graphics& g)
     theme::drawCard(g, positionCard, "Listening position");
     theme::drawCard(g, tuningCard, "Tuning");
     theme::drawCard(g, curveCard, "Velocity curve");
+    theme::drawCard(g, voicingCard, "Voicing: the hammers");
+    theme::drawCard(g, touchCard, "Touch and lid");
+    theme::drawCard(g, toneCard, "Output tone");
     // The output's peak (the engine's, before the room): -60 to 0 dBFS.
     auto bar = meterArea.toFloat();
     g.setColour(theme::background);
@@ -433,10 +471,10 @@ void Editor::paint(juce::Graphics& g)
     g.fillRoundedRectangle(bar.withWidth(bar.getWidth() * level), 3.0f);
 }
 
-void Editor::layoutRow(Row& row, juce::Rectangle<int>& area)
+void Editor::layoutRow(Row& row, juce::Rectangle<int>& area, int labelWidth)
 {
     auto r = area.removeFromTop(30);
-    row.label.setBounds(r.removeFromLeft(84));
+    row.label.setBounds(r.removeFromLeft(labelWidth));
     row.slider.setBounds(r.reduced(0, 3));
 }
 
@@ -447,22 +485,49 @@ void Editor::resized()
     {
         auto h = header.reduced(12, 8);
         h.removeFromLeft(header.getHeight() - 8);
-        auto buttons = h.removeFromRight(330);
+        auto buttons = h.removeFromRight(330 + 330);
         applicationProfile.setBounds(buttons.removeFromRight(160).withSizeKeepingCentre(160, 28));
         buttons.removeFromRight(8);
         chooseProfile.setBounds(buttons.removeFromRight(150).withSizeKeepingCentre(150, 28));
+        buttons.removeFromRight(24);
+        preset.setBounds(buttons.removeFromRight(250).withSizeKeepingCentre(250, 28));
+        presetLabel.setBounds(buttons.removeFromRight(54).withSizeKeepingCentre(54, 28));
         title.setBounds(h.removeFromTop(24));
         profileLine.setBounds(h);
     }
     footer.setBounds(area.removeFromBottom(26).reduced(12, 0));
     area.reduce(12, 10);
     const int gap = 12;
-    const int w1 = 300, w2 = 340;
+    const int w1 = 300, w2 = 340, w4 = 330;
+    auto col4 = area.removeFromRight(w4);
+    area.removeFromRight(gap);
     auto col1 = area.removeFromLeft(w1);
     area.removeFromLeft(gap);
     auto col2 = area.removeFromLeft(w2);
     area.removeFromLeft(gap);
     auto col3 = area;
+
+    // The character: the voicing, the touch and the lid, the output's tone.
+    const auto card = [](int rows) { return 16 + 22 + rows * 30; };
+    voicingCard = col4.removeFromTop(card(5));
+    col4.removeFromTop(gap);
+    touchCard = col4.removeFromTop(card(6));
+    col4.removeFromTop(gap);
+    toneCard = col4.removeFromTop(card(3));
+    {
+        auto in = voicingCard.reduced(12, 8);
+        in.removeFromTop(22);
+        for (auto* r : { &voicingBass, &voicingMiddle, &voicingTreble, &voicingFollow, &voicingCorner })
+            layoutRow(*r, in, 90);
+        in = touchCard.reduced(12, 8);
+        in.removeFromTop(22);
+        for (auto* r : { &dynamicRange, &sustainLength, &damperSpeed, &attackSoft, &attackLength, &lid })
+            layoutRow(*r, in, 90);
+        in = toneCard.reduced(12, 8);
+        in.removeFromTop(22);
+        for (auto* r : { &toneBass, &tonePresence, &toneAir })
+            layoutRow(*r, in, 90);
+    }
 
     // Sound and output.
     outputCard = col1.removeFromBottom(84);

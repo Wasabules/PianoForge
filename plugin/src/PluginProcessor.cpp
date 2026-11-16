@@ -3,6 +3,7 @@
 #include "PluginEditor.h"
 
 #include "../../app/src/CurveText.h"
+#include "../../app/src/Presets.h"
 #include "../../app/src/RoomPresets.h"
 #include "../../app/src/Tuning.h"
 
@@ -68,6 +69,42 @@ juce::AudioProcessorValueTreeState::ParameterLayout parameterLayout()
     list.push_back(std::make_unique<AudioParameterChoice>(ParameterID { param::root, 1 }, "Temperament root",
                                                           StringArray { "C", "C#", "D", "Eb", "E", "F", "F#", "G", "G#", "A", "Bb", "B" }, 0));
     addBool(param::limiter, "Output limiter", true);
+
+    // The hammers' voicing, the touch and the lid, the output's tone (the application's Engine and Tone sections).
+    const auto partial = [](float v, int) { return "partial " + String(v, 1); };
+    const auto times = [](float v, int) { return String(v, 2) + " x"; };
+    const auto ms = [](float v, int) { return String(roundToInt(v)) + " ms"; };
+    addFloat(param::voicingBass, "Voicing bass", { -18.0f, 12.0f, 0.5f }, 0.0f, "dB", db);
+    addFloat(param::voicingMiddle, "Voicing middle", { -18.0f, 12.0f, 0.5f }, 0.0f, "dB", db);
+    addFloat(param::voicingTreble, "Voicing treble", { -18.0f, 12.0f, 0.5f }, 0.0f, "dB", db);
+    addFloat(param::voicingFollow, "Voicing follows velocity", { 0.0f, 100.0f, 1.0f }, 100.0f * pf::ModalEngine::kDefaultVoicingVelocity,
+             "%", percent);
+    addFloat(param::voicingCorner, "Voicing from partial", { 2.0f, 10.0f, 0.5f }, pf::ModalEngine::kDefaultVoicingCorner, "", partial);
+    addFloat(param::dynamicRange, "Dynamic range", { 25.0f, 150.0f, 1.0f }, 100.0f, "%", percent);
+    addFloat(param::sustainLength, "Sustain length", skewed(0.25f, 4.0f, 0.01f, 1.0f), 1.0f, "x", times);
+    addFloat(param::damperSpeed, "Damper speed", skewed(0.2f, 5.0f, 0.01f, 1.0f), 1.0f, "x", times);
+    addFloat(param::attackSoft, "Attack", { -24.0f, 12.0f, 0.5f }, 0.0f, "dB", db);
+    addFloat(param::attackLength, "Attack length", skewed(5.0f, 300.0f, 1.0f, 40.0f), pf::ModalEngine::kDefaultAttackSoftMs, "ms", ms);
+    list.push_back(std::make_unique<AudioParameterFloat>(
+        ParameterID { param::lid, 1 }, "Lid", NormalisableRange<float>(0.0f, 100.0f, 1.0f), 100.0f,
+        AudioParameterFloatAttributes()
+            .withLabel("%")
+            .withStringFromValueFunction([](float v, int) {
+                return v >= 99.5f ? String("Open") : std::abs(v - 50.0f) < 0.5f ? String("Half stick") : v <= 0.5f ? String("Closed")
+                                                                                                           : String(roundToInt(v)) + " % open";
+            })
+            .withValueFromStringFunction([](const String& t) {
+                if (t.containsIgnoreCase("half"))
+                    return 50.0f;
+                if (t.containsIgnoreCase("closed"))
+                    return 0.0f;
+                if (t.containsIgnoreCase("open") && !t.containsAnyOf("0123456789"))
+                    return 100.0f;
+                return t.getFloatValue();
+            })));
+    addFloat(param::toneBass, "Bass", { -12.0f, 12.0f, 0.5f }, 0.0f, "dB", db);
+    addFloat(param::tonePresence, "Presence", { -12.0f, 12.0f, 0.5f }, 0.0f, "dB", db);
+    addFloat(param::toneAir, "Air", { -12.0f, 12.0f, 0.5f }, 0.0f, "dB", db);
     return { list.begin(), list.end() };
 }
 
@@ -132,6 +169,20 @@ Processor::Processor()
     temperament = raw(param::temperament);
     root = raw(param::root);
     limiter = raw(param::limiter);
+    voicingBass = raw(param::voicingBass);
+    voicingMiddle = raw(param::voicingMiddle);
+    voicingTreble = raw(param::voicingTreble);
+    voicingFollow = raw(param::voicingFollow);
+    voicingCorner = raw(param::voicingCorner);
+    dynamicRange = raw(param::dynamicRange);
+    sustainLength = raw(param::sustainLength);
+    damperSpeed = raw(param::damperSpeed);
+    attackSoft = raw(param::attackSoft);
+    attackLength = raw(param::attackLength);
+    lid = raw(param::lid);
+    toneBass = raw(param::toneBass);
+    tonePresence = raw(param::tonePresence);
+    toneAir = raw(param::toneAir);
     roomPresetName = app::kRoomPresets[(size_t) app::kDefaultRoomPreset].name;
     positionName = app::kListeningPositions[(size_t) app::kDefaultPosition].name;
     events.resize(8192);
@@ -295,6 +346,20 @@ void Processor::applyParameters() noexcept
     e.sympatheticGain = juce::Decibels::decibelsToGain(sympatheticLevel.get());
     e.unisonSpread = unison.get() / 100.0f;
     e.restrikeAbsorption = absorption.get() / 100.0f;
+    e.voicingBassDb = voicingBass.get();
+    e.voicingMiddleDb = voicingMiddle.get();
+    e.voicingTrebleDb = voicingTreble.get();
+    e.voicingVelocity = voicingFollow.get() / 100.0f;
+    e.voicingCorner = voicingCorner.get();
+    e.dynamicRange = dynamicRange.get() / 100.0f;
+    e.sustainLength = sustainLength.get();
+    e.damperRate = damperSpeed.get();
+    e.attackSoftDb = attackSoft.get();
+    e.attackSoftMs = attackLength.get();
+    e.lidOpen = lid.get() / 100.0f;
+    runner.toneBassDb = toneBass.get();
+    runner.tonePresenceDb = tonePresence.get();
+    runner.toneAirDb = toneAir.get();
     pf::Room::Settings r;
     r.enabled = room.on();
     r.size = roomSize.get();
@@ -389,6 +454,7 @@ void Processor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty("velocityCurve", app::formatCurveText(curve), nullptr);
     state.setProperty("roomPreset", roomPresetName, nullptr);
     state.setProperty("position", positionName, nullptr);
+    state.setProperty("program", currentProgram, nullptr);
     if (const auto xml = state.createXml())
         copyXmlToBinary(*xml, destData);
 }
@@ -403,8 +469,92 @@ void Processor::setStateInformation(const void* data, int sizeInBytes)
     setCurve(app::parseCurveText(tree.getProperty("velocityCurve").toString()));
     roomPresetName = tree.getProperty("roomPreset", roomPresetName).toString();
     positionName = tree.getProperty("position", positionName).toString();
+    currentProgram = juce::jlimit(0, getNumPrograms() - 1, (int) tree.getProperty("program", 0));
     const auto path = tree.getProperty("profile").toString();
     chooseProfile(juce::File::isAbsolutePath(path) ? juce::File(path) : juce::File());
+}
+
+// ---- Programs: the application's factory presets ----
+
+int Processor::getNumPrograms()
+{
+    return (int) app::factoryPresets().size();
+}
+
+const juce::String Processor::getProgramName(int index)
+{
+    const auto& list = app::factoryPresets();
+    return index >= 0 && index < (int) list.size() ? juce::String(list[(size_t) index].name) : juce::String();
+}
+
+void Processor::setCurrentProgram(int index)
+{
+    if (index != currentProgram)
+        applyProgram(index);
+}
+
+void Processor::applyProgram(int index)
+{
+    const auto& list = app::factoryPresets();
+    if (index < 0 || index >= (int) list.size())
+        return;
+    const auto& preset = list[(size_t) index];
+    auto set = [this](const char* id, float value) {
+        if (auto* p = parameters.getParameter(id)) {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(p->convertTo0to1(value));
+            p->endChangeGesture();
+        }
+    };
+    // The application's settings as the plugin's parameters (their key, the parameter, the scale between them).
+    struct Link {
+        const char* key;
+        const char* id;
+        float scale;
+    };
+    static constexpr Link kLinks[] = {
+        { "modalBody", param::body, 1.0f }, { "modalResidual", param::residual, 1.0f }, { "modalSympathetic", param::sympathetic, 1.0f },
+        { "modalHeldKeys", param::heldKeys, 1.0f }, { "modalPedalCatch", param::pedalCatch, 1.0f },
+        { "modalReleaseNoise", param::releaseNoise, 1.0f }, { "sympatheticDb", param::sympatheticLevel, 1.0f },
+        { "unisonSpread", param::unison, 100.0f }, { "restrikeAbsorption", param::absorption, 100.0f },
+        { "voicingBassDb", param::voicingBass, 1.0f }, { "voicingMiddleDb", param::voicingMiddle, 1.0f },
+        { "voicingTrebleDb", param::voicingTreble, 1.0f }, { "voicingVelocity", param::voicingFollow, 100.0f },
+        { "voicingCorner", param::voicingCorner, 1.0f }, { "dynamicRange", param::dynamicRange, 100.0f },
+        { "sustainLength", param::sustainLength, 1.0f }, { "damperRate", param::damperSpeed, 1.0f },
+        { "attackSoftDb", param::attackSoft, 1.0f }, { "attackSoftMs", param::attackLength, 1.0f }, { "lidOpen", param::lid, 100.0f },
+        { "toneBassDb", param::toneBass, 1.0f }, { "tonePresenceDb", param::tonePresence, 1.0f }, { "toneAirDb", param::toneAir, 1.0f },
+        { "roomOn", param::room, 1.0f }, { "roomKeepLoudness", param::keepLoudness, 1.0f }, { "roomLevel", param::roomLevel, 1.0f },
+    };
+    // The sound back to its defaults first: what the preset does not name is as measured.
+    for (const auto& link : kLinks)
+        if (auto* p = parameters.getParameter(link.id))
+            set(link.id, p->convertFrom0to1(p->getDefaultValue()));
+    int roomIndex = app::kDefaultRoomPreset;
+    float metres = app::kListeningPositions[(size_t) app::kDefaultPosition].distance;
+    for (const auto& [key, value] : preset.values) {
+        const juce::String k(key);
+        if (k == "roomPreset")
+            roomIndex = juce::jlimit(0, (int) app::kRoomPresets.size() - 1, (int) value - 1);
+        else if (k == "roomDistance")
+            metres = (float) (double) value;
+        else
+            for (const auto& link : kLinks)
+                if (k == link.key)
+                    set(link.id, (float) (double) value * link.scale);
+    }
+    const auto& hall = app::kRoomPresets[(size_t) roomIndex];
+    set(param::roomSize, hall.size);
+    set(param::roomDecay, hall.decay);
+    set(param::roomBrightness, hall.brightness);
+    set(param::roomWidth, hall.width);
+    set(param::distance, metres);
+    roomPresetName = hall.name;
+    positionName = "Custom";
+    for (const auto& p : app::kListeningPositions)
+        if (std::abs(p.distance - metres) < 0.05f)
+            positionName = p.name;
+    currentProgram = index;
+    updateHostDisplay(ChangeDetails().withProgramChanged(true));
 }
 
 juce::AudioProcessorEditor* Processor::createEditor()

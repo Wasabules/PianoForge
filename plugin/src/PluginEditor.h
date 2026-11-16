@@ -16,9 +16,10 @@ namespace theme = pf::app::theme;
 
 class CurveGraph;
 
-/// The plugin's window, in the application's look: the profile (where it comes from, choose another), the sound
-/// (volume, what the engine models), the room and the listening position (presets, speakers or headphones), the
-/// tuning, the velocity curve (drawn, or the application's), the limiter; voices, engine rate and latency below.
+/// The plugin's window, in the application's look: the profile (where it comes from, choose another) and the preset,
+/// the sound (volume, what the engine models), the room and the listening position (presets, speakers or headphones),
+/// the tuning, the velocity curve (drawn, or the application's), the character (the hammers' voicing, the touch, the
+/// lid, the output's tone), the limiter; voices, engine rate and latency below.
 class Editor final : public juce::AudioProcessorEditor, private juce::Timer {
 public:
     explicit Editor(Processor&);
@@ -58,7 +59,7 @@ private:
     void choosePosition();
     void refreshPresets();
     void refreshCurveControls();
-    void layoutRow(Row&, juce::Rectangle<int>& area);
+    void layoutRow(Row&, juce::Rectangle<int>& area, int labelWidth = 84);
 
     Processor& processor;
     theme::LookAndFeel lookAndFeel;
@@ -76,6 +77,12 @@ private:
     Row roomSize, roomDecay, roomBrightness, roomWidth, roomLevel, distance;
     Choice heardOn, temperament, root;
     Row a4;
+    // The character: the hammers' voicing, the touch and the lid, the output's tone.
+    Row voicingBass, voicingMiddle, voicingTreble, voicingFollow, voicingCorner;
+    Row dynamicRange, sustainLength, damperSpeed, attackSoft, attackLength, lid;
+    Row toneBass, tonePresence, toneAir;
+    juce::Label presetLabel;
+    juce::ComboBox preset; // the factory presets (the plugin's programs)
 
     std::unique_ptr<CurveGraph> curveGraph;
     juce::Slider softest, hardest;
@@ -83,7 +90,8 @@ private:
     juce::TextButton linearCurve { "Linear" }, appCurve { "Application's curve" };
 
     float meter = 0.0f; // the output's peak, dBFS, falling slowly
-    juce::Rectangle<int> header, soundCard, outputCard, roomCard, positionCard, tuningCard, curveCard, meterArea;
+    juce::Rectangle<int> header, soundCard, outputCard, roomCard, positionCard, tuningCard, curveCard, voicingCard, touchCard, toneCard,
+        meterArea;
     std::unique_ptr<juce::FileChooser> fileChooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Editor)

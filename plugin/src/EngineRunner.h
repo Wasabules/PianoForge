@@ -3,6 +3,7 @@
 #include <pianoforge/engine.hpp>
 #include <pianoforge/limiter.hpp>
 #include <pianoforge/modal_engine.hpp>
+#include <pianoforge/output_eq.hpp>
 #include <pianoforge/room.hpp>
 #include <pianoforge/upsampler.hpp>
 
@@ -14,7 +15,8 @@
 
 namespace pf::plugin {
 
-/// The application's sound chain, for a host: the modal engine, the room (headphones included) and the limiter.
+/// The application's sound chain, for a host: the modal engine, the room (headphones included), the output's tone
+/// and the limiter.
 /// At the host's rate, or, over 50 kHz as in the application, at that rate divided by 2, 4 or 8 and brought up to it
 /// (pf::Upsampler: a latency of (64 k - 1) / 2 samples, which the plugin reports to the host).
 /// Any block size, down to one sample (hosts split blocks at automation points): the samples rendered and not yet
@@ -27,6 +29,8 @@ public:
     pf::ModalEngine engine;
     pf::Room room;
     pf::Limiter limiter;
+    /// The output's tone (dB), set on the audio thread before process().
+    float toneBassDb = 0.0f, tonePresenceDb = 0.0f, toneAirDb = 0.0f;
 
     void prepare(double hostRate, int maxBlock)
     {
@@ -65,6 +69,7 @@ public:
     {
         engine.reset();
         room.reset();
+        eq.reset();
         limiter.reset();
         upsampleL.reset();
         upsampleR.reset();
@@ -126,6 +131,8 @@ private:
         float* outputs[2] = { left, right };
         engine.process(outputs, 2, n, events, numEvents);
         room.process(left, right, n);
+        eq.update(rate, toneBassDb, tonePresenceDb, toneAirDb);
+        eq.process(left, right, n);
         limiter.process(left, right, n);
     }
 
@@ -133,6 +140,7 @@ private:
     double rate = 0.0;
     std::vector<float> engineL, engineR, upL, upR;
     pf::Upsampler upsampleL, upsampleR;
+    pf::OutputEq eq;
     std::array<std::array<float, 8>, 2> carried {};
     std::array<pf::Event, kMaxEvents> mapped {}, waitingEvents {};
 };

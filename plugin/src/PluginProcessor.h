@@ -40,11 +40,26 @@ inline constexpr const char* a4 = "a4";
 inline constexpr const char* temperament = "temperament";
 inline constexpr const char* root = "root";
 inline constexpr const char* limiter = "limiter";
+// The hammers' voicing, the touch and the lid (the modal engine), the output's tone.
+inline constexpr const char* voicingBass = "voicingBass";
+inline constexpr const char* voicingMiddle = "voicingMiddle";
+inline constexpr const char* voicingTreble = "voicingTreble";
+inline constexpr const char* voicingFollow = "voicingFollow";
+inline constexpr const char* voicingCorner = "voicingCorner";
+inline constexpr const char* dynamicRange = "dynamicRange";
+inline constexpr const char* sustainLength = "sustainLength";
+inline constexpr const char* damperSpeed = "damperSpeed";
+inline constexpr const char* attackSoft = "attackSoft";
+inline constexpr const char* attackLength = "attackLength";
+inline constexpr const char* lid = "lid";
+inline constexpr const char* toneBass = "toneBass";
+inline constexpr const char* tonePresence = "tonePresence";
+inline constexpr const char* toneAir = "toneAir";
 } // namespace param
 
-/// PianoForge as an instrument plugin (VST3): the application's modal engine, room, headphones and limiter, played
-/// from the host's MIDI (notes, CC64 continuous sustain, CC66 sostenuto, CC67 soft pedal), with the same settings as
-/// automatable parameters. The modal profile is never inside the plugin: it is the one of the application's corpus
+/// PianoForge as an instrument plugin (VST3): the application's modal engine, room, headphones, output tone and
+/// limiter, played from the host's MIDI (notes, CC64 continuous sustain, CC66 sostenuto, CC67 soft pedal), with the
+/// same settings as automatable parameters, and the application's factory presets as the plugin's programs. The modal profile is never inside the plugin: it is the one of the application's corpus
 /// (its settings say where), or a modal-profile.bin chosen in the plugin and kept in the project. It loads in the
 /// background, once per process for every instance (they share it).
 class Processor final : public juce::AudioProcessor {
@@ -65,10 +80,14 @@ public:
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override;
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram(int) override {}
-    const juce::String getProgramName(int) override { return "Default"; }
+    // The application's factory presets (the sound only: the tuning, the volume, the limiter and the curve stay). A
+    // host asking for the program already current changes nothing (some ask again after opening a project).
+    int getNumPrograms() override;
+    int getCurrentProgram() override { return currentProgram; }
+    void setCurrentProgram(int index) override;
+    const juce::String getProgramName(int index) override;
+    /// The program's settings, whatever the current one (the editor's list: a preset chosen again is reapplied).
+    void applyProgram(int index);
     void changeProgramName(int, const juce::String&) override {}
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
@@ -138,7 +157,10 @@ private:
         bool on() const noexcept { return get() >= 0.5f; }
     };
     Raw volume, body, residual, sympathetic, heldKeys, pedalCatch, releaseNoise, sympatheticLevel, unison, absorption, room,
-        roomSize, roomDecay, roomBrightness, roomWidth, roomLevel, distance, keepLoudness, heardOn, a4, temperament, root, limiter;
+        roomSize, roomDecay, roomBrightness, roomWidth, roomLevel, distance, keepLoudness, heardOn, a4, temperament, root, limiter,
+        voicingBass, voicingMiddle, voicingTreble, voicingFollow, voicingCorner, dynamicRange, sustainLength, damperSpeed,
+        attackSoft, attackLength, lid, toneBass, tonePresence, toneAir;
+    int currentProgram = 0; // message thread
     float appliedA4 = -1.0f;
     int appliedTemperament = -1, appliedRoot = -1;
 

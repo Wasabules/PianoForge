@@ -193,20 +193,20 @@ int main(int argc, char* argv[])
         return 1;
     check(p->getTotalNumInputChannels() == 0 && p->getTotalNumOutputChannels() == 2 && p->acceptsMidi() && p->hasEditor(),
           "no input, stereo output, MIDI in, an editor (" + juce::String(p->getTotalNumOutputChannels()) + " outputs)");
-    juce::StringArray names; // ours (the VST3 wrapper adds Bypass, and hidden ones that carry MIDI controllers)
+    juce::StringArray names; // ours (the VST3 wrapper adds Bypass, Program, and hidden ones that carry MIDI controllers)
     int controllers = 0;
     for (auto* parameter : p->getParameters()) {
         const auto name = parameter->getName(64);
         if (name.startsWith("MIDI CC"))
             ++controllers;
-        else if (name != "Bypass")
+        else if (name != "Bypass" && name != "Program") // (the programs, as VST3 carries them)
             names.add(name);
     }
     bool all = true;
     for (const auto* name : { "Volume", "Sympathetic resonance", "Unison tuning", "Room", "Room decay", "Distance", "Heard on",
-                              "A4", "Temperament", "Output limiter" })
+                              "A4", "Temperament", "Output limiter", "Voicing treble", "Dynamic range", "Lid", "Presence" })
         all = all && names.contains(name);
-    check(all && names.size() == 23 && controllers >= 128,
+    check(all && names.size() == 37 && controllers >= 128,
           juce::String(names.size()) + " automatable parameters (" + names.joinIntoString(", ") + "); MIDI controllers (CC64, CC66, CC67...) "
               "reach it through " + juce::String(controllers) + " hidden ones, as VST3 carries them");
 
@@ -370,6 +370,45 @@ int main(int argc, char* argv[])
         render(*p, (int) (10.0 * rate), busy, { 128 });
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t2).count();
         check(seconds < 5.0, "64 notes with the pedal down through the plugin: " + juce::String(100.0 * seconds / 10.0, 1) + " % of real time");
+    }
+
+    // 10. The factory presets as the plugin's programs: each by its name; one chosen sets the sound as the
+    //     application's would (Night practice: the lid closed, the dynamics at 60 %), another puts it back (As
+    //     measured: open, 100 %); the lid closed is heard (the same phrase quieter).
+    {
+        juce::StringArray programs;
+        for (int i = 0; i < p->getNumPrograms(); ++i)
+            programs.add(p->getProgramName(i));
+        const int night = programs.indexOf("Night practice"), measured = programs.indexOf("As measured");
+        auto text = [&](const char* name) {
+            const auto* parameter = find(*p, name);
+            return parameter != nullptr ? parameter->getText(parameter->getValue(), 64) : juce::String("?");
+        };
+        bool nightOk = false, backOk = false;
+        double quieter = 0.0;
+        if (night >= 0 && measured >= 0) {
+            p->setCurrentProgram(night);
+            nightOk = text("Lid") == "Closed" && text("Dynamic range").startsWith("60");
+            p->reset();
+            render(*p, 512, {}, { 512 });
+            const auto closed = render(*p, total, phrase, { 512 });
+            p->setCurrentProgram(measured);
+            backOk = text("Lid") == "Open" && text("Dynamic range").startsWith("100");
+            set(*p, "Lid", 0.0f);
+            p->reset();
+            render(*p, 512, {}, { 512 });
+            const auto lidOnly = render(*p, total, phrase, { 512 });
+            set(*p, "Lid", 100.0f);
+            p->reset();
+            render(*p, 512, {}, { 512 });
+            const auto open = render(*p, total, phrase, { 512 });
+            quieter = db(energy(open) / std::max(energy(lidOnly), 1e-30));
+            (void) closed;
+        }
+        check(programs.size() >= 10 && nightOk && backOk && quieter > 1.0,
+              juce::String(programs.size()) + " programs (the application's factory presets: " + programs.joinIntoString(", ")
+                  + "); Night practice sets the lid closed and the dynamics at 60 %" + (nightOk ? "" : " (NOT so)") + ", As measured puts them back"
+                  + (backOk ? "" : " (NOT so)") + "; the lid closed: the phrase " + juce::String(quieter, 1) + " dB quieter (expected > 1)");
     }
 
     p->releaseResources();
