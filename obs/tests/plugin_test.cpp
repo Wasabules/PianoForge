@@ -1,6 +1,6 @@
 // The plugin inside the installed libobs, without the OBS application: libobs started for audio (48 kHz) and video
-// (OBS's Direct3D 11 module, offscreen), the plugin loaded as OBS loads it (its locale too), OBS's text source beside
-// it, and the feed written as the application writes it: three mixes of a 1 kHz sine at 44.1 kHz in blocks of 128, on
+// (OBS's Direct3D 11 module on Windows, its OpenGL one on Linux, offscreen), the plugin loaded as OBS loads it (its
+// locale too), OBS's text source beside it, and the feed written as the application writes it: three mixes of a 1 kHz sine at 44.1 kHz in blocks of 128, on
 // a clock 200 ppm fast, the application's volume at -6 dB, and MIDI events (middle C held, the sustain pedal down).
 //   - the audio source: the speakers mix by default, at its level whatever the application's volume; continuous, with
 //     timestamps that follow the frames, at 1 kHz on OBS's clock, clean; its status (latency, key to OBS); a new
@@ -18,7 +18,9 @@
 // The feed has a name of its own (PIANOFORGE_AUDIO_FEED): the test runs beside a PianoForge and an OBS in use.
 //
 //   pianoforge-obs-test <plugin dll> <plugin data> <report file> <OBS folder> [feed rate, default 44100]
-//   (OBS's bin/64bit on the PATH)
+//   Windows: OBS's bin/64bit on the PATH. Linux: the OBS folder is its prefix (/usr, or /app inside a Flatpak OBS:
+//   flatpak run --devel --device=shm --command=... com.obsproject.Studio); OpenGL through the Wayland display when
+//   there is one, else X11's.
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -27,6 +29,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <dlfcn.h>
+#include <obs-nix-platform.h>
 #endif
 
 #include <obs-module.h>
@@ -156,11 +161,33 @@ int main(int argc, char** argv)
 #else
     setenv("PIANOFORGE_AUDIO_FEED", "PianoForgeFeedTest", 1);
 #endif
+#if defined(_WIN32)
     // libobs finds its effects from OBS's bin/64bit (../../data/libobs), and loads its modules (the graphics, the
     // plugin's frontend API) with a restricted search: OBS's folder added to it, as OBS's own executable there has it.
     std::filesystem::current_path(obsDir / "bin" / "64bit");
-#if defined(_WIN32)
     AddDllDirectory((obsDir / "bin" / "64bit").wstring().c_str());
+    const char* graphics = "Direct3D 11";
+#else
+    // OpenGL needs the display OBS would draw on (as OBS's own main sets it): Wayland's when there is one, else X11's
+    // (EGL). Their client libraries are loaded here: the test links nothing more than libobs.
+    const char* graphics = "OpenGL";
+    void* display = nullptr;
+    if (std::getenv("WAYLAND_DISPLAY") != nullptr)
+        if (void* wayland = dlopen("libwayland-client.so.0", RTLD_NOW | RTLD_GLOBAL))
+            if (auto connect = reinterpret_cast<void* (*)(const char*)>(dlsym(wayland, "wl_display_connect")))
+                if ((display = connect(nullptr)) != nullptr) {
+                    obs_set_nix_platform(OBS_NIX_PLATFORM_WAYLAND);
+                    graphics = "OpenGL, Wayland";
+                }
+    if (display == nullptr)
+        if (void* x11 = dlopen("libX11.so.6", RTLD_NOW | RTLD_GLOBAL))
+            if (auto open = reinterpret_cast<void* (*)(const char*)>(dlsym(x11, "XOpenDisplay")))
+                if ((display = open(nullptr)) != nullptr) {
+                    obs_set_nix_platform(OBS_NIX_PLATFORM_X11_EGL);
+                    graphics = "OpenGL, X11";
+                }
+    if (display != nullptr)
+        obs_set_nix_platform_display(display);
 #endif
     base_set_log_handler(onLog, nullptr);
     if (!obs_startup("en-US", nullptr, nullptr)) {
@@ -175,7 +202,11 @@ int main(int argc, char** argv)
         return 1;
     }
     obs_video_info videoInfo = {};
+#if defined(_WIN32)
     videoInfo.graphics_module = "libobs-d3d11";
+#else
+    videoInfo.graphics_module = "libobs-opengl";
+#endif
     videoInfo.fps_num = 30;
     videoInfo.fps_den = 1;
     videoInfo.base_width = videoInfo.output_width = 1280;
@@ -190,7 +221,13 @@ int main(int argc, char** argv)
         const std::lock_guard<std::mutex> guard(logLock);
         say(logText);
     }
-    check(video, "libobs video started (Direct3D 11, offscreen)");
+    std::string adapter; // the GPU it draws on, as libobs says it ("Loading up OpenGL on adapter ..."): the timings are its
+    {
+        const std::lock_guard<std::mutex> guard(logLock);
+        if (const auto at = logText.find(" on adapter "); at != std::string::npos)
+            adapter = ": " + logText.substr(at + 12, logText.find('\n', at) - at - 12);
+    }
+    check(video, "libobs video started (" + std::string(graphics) + ", offscreen" + adapter + ")");
     obs_module_t* module = nullptr;
     const int opened = obs_open_module(&module, pluginPath.c_str(), dataPath.c_str());
     if (opened != MODULE_SUCCESS || !obs_init_module(module)) {
@@ -200,8 +237,20 @@ int main(int argc, char** argv)
     }
     say("[PASS]  the plugin loads into libobs " + std::string(obs_get_version_string()));
     obs_module_t* textModule = nullptr;
+#if defined(_WIN32)
     const auto textDll = (obsDir / "core" / "obs-text" / "obs-text.dll").string();
     const auto textData = (obsDir / "core" / "obs-text" / "data").string();
+#else // FreeType 2's text source: OBS 33's layout (obs-modules/core), or the older one (obs-plugins)
+    auto textDll = (obsDir / "lib" / "obs-modules" / "core" / "text-freetype2.so").string();
+    auto textData = (obsDir / "share" / "obs" / "obs-modules" / "core" / "text-freetype2").string();
+    if (!std::filesystem::exists(textDll))
+        for (const char* lib : { "lib/obs-plugins", "lib/x86_64-linux-gnu/obs-plugins", "lib64/obs-plugins" })
+            if (std::filesystem::exists(obsDir / lib / "text-freetype2.so")) {
+                textDll = (obsDir / lib / "text-freetype2.so").string();
+                textData = (obsDir / "share" / "obs" / "obs-plugins" / "text-freetype2").string();
+                break;
+            }
+#endif
     const bool haveText = obs_open_module(&textModule, textDll.c_str(), textData.c_str()) == MODULE_SUCCESS && obs_init_module(textModule);
     check(haveText, "OBS's text source loads beside it");
 
@@ -1009,8 +1058,8 @@ int main(int argc, char** argv)
             const std::lock_guard<std::mutex> guard(logLock);
             const auto at = logText.find("device_draw");
             check(at == std::string::npos && logText.find("pianoforge-keyboard.effect") == std::string::npos,
-                  at == std::string::npos ? std::string("the keyboard drawn without a word from Direct3D or about its shader")
-                                          : "Direct3D: " + logText.substr(at, logText.find('\n', at) - at));
+                  at == std::string::npos ? "the keyboard drawn without a word from " + std::string(graphics) + " or about its shader"
+                                          : std::string(graphics) + ": " + logText.substr(at, logText.find('\n', at) - at));
         }
     } else {
         check(false, "the keyboard source exists and renders");

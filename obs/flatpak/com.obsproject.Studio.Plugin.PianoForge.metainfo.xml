@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="addon">
+  <id>com.obsproject.Studio.Plugin.PianoForge</id>
+  <extends>com.obsproject.Studio</extends>
+  <name>PianoForge</name>
+  <summary>PianoForge's sound, keyboard and text sources, read straight from the application</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <developer id="org.pianoforge">
+    <name>PianoForge</name>
+  </developer>
+  <description>
+    <p>The PianoForge piano in OBS without a cable: its sound at the stream's own level, a keyboard that lights up as
+    it plays, a text of what is played, and chapter markers in recordings. OBS must see the system's shared memory:
+    flatpak override --user --device=shm com.obsproject.Studio.</p>
+  </description>
+  <releases>
+    <release version="0.1.0" date="2026-11-16"/>
+  </releases>
+</component>

@@ -52,7 +52,7 @@ constexpr double kRippleSeconds = 0.45;   // a strike's ripple
 constexpr double kWashSeconds = 0.55;     // a powerful chord's light over the room
 constexpr double kWaveSeconds = 0.7;      // its wave along the keyboard
 constexpr double kShakeSeconds = 0.25;    // its shake
-constexpr int kLinePoints = 64;           // the melody's line: its points at most (the shader's array)
+constexpr int kLinePoints = 64;           // the melody's line: its points at most (the texels of its texture)
 constexpr int kLevelFrames = 1024;        // the loudness: over this many frames
 
 // The keyboard's own colours, as OBS keeps colours (0xAABBGGRR).
@@ -110,6 +110,11 @@ float strengthOf(int velocity, const Settings& s)
 struct Drawing {
     gs_effect_t* effect = nullptr;
     gs_vertbuffer_t *quad = nullptr, *sparks = nullptr;
+    // The melody's points, kLinePoints x 1 (the shader's line_points), in turns: OpenGL waits for the GPU to be done
+    // with a texture before writing it again (OBS maps its buffer as it is), and a frame's line is drawn while the last
+    // one's may still be on the GPU.
+    std::array<gs_texture_t*, 3> lineTextures {};
+    mutable std::size_t nextLineTexture = 0; // (the graphics thread's, drawing through a const Drawing)
     gs_technique_t *box = nullptr, *glow = nullptr, *beam = nullptr, *ring = nullptr, *sparkle = nullptr, *line = nullptr,
                    *aurora = nullptr, *image = nullptr, *bright = nullptr, *blur = nullptr, *bloom = nullptr;
     gs_eparam_t *quadOrigin = nullptr, *quadSize = nullptr, *boxCenter = nullptr, *boxHalf = nullptr, *boxRadius = nullptr,
@@ -123,7 +128,7 @@ struct Drawing {
 
     bool ready() const noexcept
     {
-        return effect != nullptr && quad != nullptr && sparks != nullptr && box && glow && beam && ring && sparkle
+        return effect != nullptr && quad != nullptr && sparks != nullptr && lineTextures[0] && lineTextures[1] && lineTextures[2] && box && glow && beam && ring && sparkle
                && quadOrigin && quadSize && boxCenter && boxHalf && boxRadius && boxBorder && boxSoft && fillTop
                && fillBottom && fillCurve && borderColor && lightColor && lightStrength && lightFrom && lightReach
                && fadeBand && time && seed && line && aurora && image && bright && blur && bloom && linePoints && lineCount
@@ -670,6 +675,11 @@ void freeDrawing(Drawing& d)
         gs_vertexbuffer_destroy(d.quad);
     if (d.sparks != nullptr)
         gs_vertexbuffer_destroy(d.sparks);
+    for (auto*& t : d.lineTextures) {
+        if (t != nullptr)
+            gs_texture_destroy(t);
+        t = nullptr;
+    }
     d.effect = nullptr;
     d.quad = nullptr;
     d.sparks = nullptr;
@@ -684,6 +694,8 @@ void loadDrawing(Drawing& d)
         auto param = [&](const char* name) { return gs_effect_get_param_by_name(d.effect, name); };
         d.quad = makeQuad();
         d.sparks = makeSparkBuffer();
+        for (auto*& t : d.lineTextures)
+            t = gs_texture_create(kLinePoints, 1, GS_RGBA32F, 1, nullptr, GS_DYNAMIC);
         d.box = gs_effect_get_technique(d.effect, "Box");
         d.glow = gs_effect_get_technique(d.effect, "Glow");
         d.beam = gs_effect_get_technique(d.effect, "Beam");
@@ -875,7 +887,10 @@ public:
             y0 = std::min(y0, points[i][1]);
             y1 = std::max(y1, points[i][1]);
         }
-        gs_effect_set_val(look.linePoints, data, sizeof(data));
+        gs_texture_t* pointTexture = look.lineTextures[look.nextLineTexture];
+        look.nextLineTexture = (look.nextLineTexture + 1) % look.lineTextures.size();
+        gs_texture_set_image(pointTexture, reinterpret_cast<const std::uint8_t*>(data), kLinePoints * 4 * sizeof(float), false);
+        gs_effect_set_texture(look.linePoints, pointTexture);
         gs_effect_set_float(look.lineCount, (float) n);
         color(look.lightColor, c, 1.0f);
         gs_effect_set_float(look.lightStrength, strength);

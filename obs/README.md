@@ -63,23 +63,56 @@ or `-DPIANOFORGE_OBS_DIR=...`). The libobs and frontend API headers of the match
 cmake --build build/windows-msvc --config Release --target install-obs-plugin
 ```
 
-### Linux and macOS
+copies it to `%ProgramData%/obs-studio/plugins/pianoforge-obs` (no administrator rights needed), OBS running or not:
+a plugin in use is moved aside (removed by a later install) and the new one loads at OBS's next start.
 
-Built against the system's libobs and frontend API (their CMake packages: `libobs-dev` and OBS's development files
-on Linux; OBS's own build on macOS), when found at configure time (`-DPIANOFORGE_OBS_PLUGIN=ON` forces it).
+### Linux
+
+**A Flatpak OBS** (Flathub's, the usual one on Ubuntu): the plugin is built inside that OBS's own SDK, against its
+libobs (the SDK of OBS's runtime, which `flatpak info com.obsproject.Studio` names: `flatpak install flathub
+org.freedesktop.Sdk//26.08` for OBS 33), and `install-obs-plugin` puts it where that OBS looks,
+`~/.var/app/com.obsproject.Studio/config/obs-studio/plugins/pianoforge-obs`:
+
+```
+flatpak run --devel --command=sh com.obsproject.Studio -c \
+  "cmake -S obs -B build/obs-flatpak -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/app && \
+   cmake --build build/obs-flatpak --target install-obs-plugin"
+flatpak override --user --device=shm com.obsproject.Studio
+```
+
+The override, once: a Flatpak keeps a `/dev/shm` of its own (OBS's `devices=all` notwithstanding), where
+PianoForge's feed is not; `--device=shm` gives it the system's. Without it, the sources wait for PianoForge for ever.
+The tests run there too (`ctest --test-dir build/obs-flatpak`, in the same `flatpak run --devel` shell): with OBS
+33.0.1 (OpenGL on Wayland, an Intel UHD 630), every check passes, a busy keyboard image drawn in about 2.5 ms.
+
+As a Flatpak extension, for Flathub (`obs/flatpak/com.obsproject.Studio.Plugin.PianoForge.json`, with its AppStream
+metadata): `flatpak-builder build/flatpak-obs obs/flatpak/com.obsproject.Studio.Plugin.PianoForge.json` builds it
+against that OBS and its SDK (lib/obs-plugins and share/obs/obs-plugins under /app/plugins/PianoForge, where OBS merges
+its extensions). An extension cannot grant OBS the shared memory: the override above stays the user's (PianoForge's
+Audio > OBS plugin offers it in one click).
+
+**A system OBS** (the distribution's, with its development files, `libobs-dev`; or OBS's PPA): built with the rest of
+the project when libobs is found at configure time (`-DPIANOFORGE_OBS_PLUGIN=ON` forces it), and
 
 ```
 cmake --build --preset linux-release --target install-obs-plugin
 ```
 
-copies it to `~/.config/obs-studio/plugins/pianoforge-obs` (`-DPIANOFORGE_OBS_PLUGINS_DIR=...` for a Flatpak OBS:
-`~/.var/app/com.obsproject.Studio/config/obs-studio/plugins`). On macOS it is a bundle, `pianoforge-obs.plugin` (its
-data in `Contents/Resources`), copied to `~/Library/Application Support/obs-studio/plugins`. Neither has run yet:
-OBS draws with OpenGL there, and the keyboard's shader has only been tried with Direct3D.
+copies it to `~/.config/obs-studio/plugins/pianoforge-obs` (`$XDG_CONFIG_HOME`); `cmake --install` puts it in a
+prefix's lib/obs-plugins (a package, component obs). Not tried yet.
 
-copies it to `%ProgramData%/obs-studio/plugins/pianoforge-obs` (no administrator rights needed), OBS running or not:
-a plugin in use is moved aside (removed by a later install) and the new one loads at OBS's next start. The
-application and the plugin must be of the same version (the feed's layout changed with this one: an older plugin
+The keyboard's shader is the same for OBS's two renderers: OpenGL takes no array of parameters (OBS writes `uniform
+float4 a[64]` as a single vec4, and the whole effect fails to load), so the melody's points reach it as a 64 x 1
+texture, three of them in turns (OpenGL waits for the GPU before writing a texture again).
+
+### macOS
+
+A bundle, `pianoforge-obs.plugin` (its data in `Contents/Resources`), copied to
+`~/Library/Application Support/obs-studio/plugins` by `install-obs-plugin`. Not run yet.
+
+### Then
+
+The application and the plugin must be of the same version (the feed's layout changed with this one: an older plugin
 waits for PianoForge, a newer application is not seen by it). Then add the sources: **PianoForge** (audio),
 **PianoForge keyboard** and **PianoForge text**. Turn the audio source's monitoring off in OBS (Advanced Audio
 Properties) so that it is not heard twice.

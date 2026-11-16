@@ -1,0 +1,34 @@
+{
+    "id": "com.obsproject.Studio.Plugin.PianoForge",
+    "runtime": "com.obsproject.Studio",
+    "runtime-version": "stable",
+    "sdk": "org.freedesktop.Sdk//26.08",
+    "build-extension": true,
+    "separate-locales": false,
+    "appstream-compose": false,
+    "build-options": {
+        "prefix": "/app/plugins/PianoForge"
+    },
+    "modules": [
+        {
+            "name": "pianoforge-obs",
+            "buildsystem": "cmake-ninja",
+            "subdir": "obs",
+            "config-opts": [
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DBUILD_TESTING=OFF",
+                "-DCMAKE_PREFIX_PATH=/app"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "../..",
+                    "skip": [".git", "build", "corpus", ".venv"]
+                }
+            ],
+            "post-install": [
+                "install -Dm644 flatpak/com.obsproject.Studio.Plugin.PianoForge.metainfo.xml -t ${FLATPAK_DEST}/share/metainfo"
+            ]
+        }
+    ]
+}

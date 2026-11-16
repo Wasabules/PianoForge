@@ -26,7 +26,8 @@ uniform float light_reach;     // a halo's reach beyond its box, pixels
 uniform float2 fade_band;      // from y = fade_band.x (nothing) to fade_band.y (whole): the shape fades upward
 uniform float time;            // seconds (shimmer, twinkle)
 uniform float seed;            // a shape's own phase
-uniform float4 line_points[64]; // a line's points (x, y: pixels; z: brightness), line_count of them
+uniform texture2d line_points; // a line's points, a texel each (x, y: pixels; z: brightness), line_count of them: a
+                               // texture, as OpenGL takes no array of parameters (OBS writes it as one vec4)
 uniform float line_count;
 uniform float4 aurora_left;    // the ambiance's colours, left and right
 uniform float4 aurora_right;
@@ -133,17 +134,20 @@ float4 PSLine(VertData v_in) : TARGET
 	float2 pix = pixel_of(v_in);
 	float best = 100000.0;
 	float bright = 0.0;
+	float4 p0 = line_points.Load(int3(0, 0, 0)); // each point read once: a segment's end is the next one's start
 	for (int i = 0; i < 63; i++) {
 		if (float(i) < line_count - 1.0) {
-			float2 a = line_points[i].xy;
-			float2 ab = line_points[i + 1].xy - a;
+			float4 p1 = line_points.Load(int3(i + 1, 0, 0));
+			float2 a = p0.xy;
+			float2 ab = p1.xy - a;
 			float2 ap = pix - a;
 			float h = saturate(dot(ap, ab) / max(dot(ab, ab), 0.0001));
 			float d = length(ap - ab * h);
 			if (d < best) {
 				best = d;
-				bright = lerp(line_points[i].z, line_points[i + 1].z, h);
+				bright = lerp(p0.z, p1.z, h);
 			}
+			p0 = p1;
 		}
 	}
 	float core = exp(-best * best / 1.4);
