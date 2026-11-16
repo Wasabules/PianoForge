@@ -6,6 +6,9 @@
 
 #include <cstdio>
 #include <cstdlib>
+#if !defined(_WIN32)
+#include <sys/mman.h>
+#endif
 #include <set>
 #include <string>
 #include <vector>
@@ -28,6 +31,10 @@ int main()
     _putenv_s("PIANOFORGE_AUDIO_FEED", "PianoForgeFeedLookTest");
 #else
     setenv("PIANOFORGE_AUDIO_FEED", "PianoForgeFeedLookTest", 1);
+    // POSIX shared memory outlives its processes (until shm_unlink, or a reboot): the last run's is still there. The
+    // test starts from none, as it would on Windows.
+    shm_unlink("/PianoForgeFeedLookTest");
+    shm_unlink("/PianoForgeFeedLookTestLook");
 #endif
     using namespace pf::look;
 

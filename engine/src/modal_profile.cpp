@@ -264,7 +264,7 @@ std::shared_ptr<const ModalProfile> parseModalProfile(std::vector<char> data, co
             for (auto& m : layer.modes) {
                 m.freq = r.get<double>();
                 m.decay = r.get<double>();
-                float a[4];
+                float a[4] {}; // (left as zeros if the file ends here: the profile is then refused)
                 r.bytes(a, sizeof(a));
                 m.left = { a[0], a[1] };
                 m.right = { a[2], a[3] };
@@ -273,7 +273,7 @@ std::shared_ptr<const ModalProfile> parseModalProfile(std::vector<char> data, co
             layer.bodyRight.resize(poles);
             double body = 0.0;
             for (std::uint32_t k = 0; k < poles; ++k) {
-                float a[4];
+                float a[4] {}; // (left as zeros if the file ends here: the profile is then refused)
                 r.bytes(a, sizeof(a));
                 layer.bodyLeft[k] = { a[0], a[1] };
                 layer.bodyRight[k] = { a[2], a[3] };
@@ -485,7 +485,7 @@ std::shared_ptr<const ModalProfile> parseModalProfile(std::vector<char> data, co
             noise.left.resize(count);
             noise.right.resize(count);
             for (std::size_t k = 0; k < count && r.ok(); ++k) {
-                float a[4];
+                float a[4] {}; // (left as zeros if the file ends here: the profile is then refused)
                 r.bytes(a, sizeof(a));
                 noise.left[k] = { a[0], a[1] };
                 noise.right[k] = { a[2], a[3] };

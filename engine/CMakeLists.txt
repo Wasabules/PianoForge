@@ -10,6 +10,8 @@ if(NOT EMSCRIPTEN)
     target_sources(pianoforge_engine PRIVATE src/modal_profile_file.cpp src/audio_feed.cpp src/look_channel.cpp)
 endif()
 add_library(pianoforge::engine ALIAS pianoforge_engine)
+# Linked into shared objects too (the VST3 plugin): position-independent code, which Linux and macOS require there.
+set_target_properties(pianoforge_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(pianoforge_engine PUBLIC include)
 target_compile_features(pianoforge_engine PUBLIC cxx_std_20)
 

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <string>
 
@@ -18,6 +19,7 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -199,6 +201,17 @@ bool AudioFeedWriter::create()
         return false;
     }
     ownerLock = lock;
+#else
+    // Likewise: a lock on the feed's own memory object (flock: let go when the process ends, a crash included, while
+    // the object itself stays for the readers).
+    const int lock = shm_open(("/" + feedName()).c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+    if (lock < 0)
+        return false;
+    if (flock(lock, LOCK_EX | LOCK_NB) != 0) {
+        ::close(lock);
+        return false;
+    }
+    ownerLock = reinterpret_cast<void*>((std::intptr_t) lock + 1); // (+1: a descriptor 0 is not "none")
 #endif
     void* view = mapShared(true, mapping);
     if (view == nullptr) {
@@ -262,6 +275,9 @@ void AudioFeedWriter::close()
 #if defined(_WIN32)
     if (ownerLock != nullptr)
         CloseHandle((HANDLE) ownerLock);
+#else
+    if (ownerLock != nullptr)
+        ::close((int) (reinterpret_cast<std::intptr_t>(ownerLock) - 1));
 #endif
     ownerLock = nullptr;
 }

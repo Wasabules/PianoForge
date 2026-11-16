@@ -5,6 +5,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#if !defined(_WIN32)
+#include <sys/mman.h>
+#endif
 #include <string>
 #include <vector>
 
@@ -27,6 +30,9 @@ int main()
     _putenv_s("PIANOFORGE_AUDIO_FEED", "PianoForgeFeedUnitTest");
 #else
     setenv("PIANOFORGE_AUDIO_FEED", "PianoForgeFeedUnitTest", 1);
+    // POSIX shared memory outlives its processes (until shm_unlink, or a reboot): the last run's is still there. The
+    // test starts from none, as it would on Windows.
+    shm_unlink("/PianoForgeFeedUnitTest");
 #endif
     pf::AudioFeedReader early;
     check(!early.open(), "no writer yet: nothing to open");
@@ -34,9 +40,7 @@ int main()
     pf::AudioFeedWriter writer;
     check(writer.create(), "the writer creates the feed");
     pf::AudioFeedWriter second;
-#if defined(_WIN32)
     check(!second.create(), "a second writer is refused (its blocks would interleave)");
-#endif
     pf::AudioFeedReader reader;
     check(reader.open(), "the reader opens it");
     pf::AudioFeedReader::Format format;
