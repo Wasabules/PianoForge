@@ -28,6 +28,7 @@ target_sources(PianoForgeApp PRIVATE
     src/ui/StreamLookPanel.cpp
     src/StreamLook.cpp
     src/ui/GalleryPanel.cpp
+    src/ui/LevelStrip.cpp
     src/ui/NamingDialog.cpp
     src/ui/RecordingPanel.cpp
     src/Gallery.cpp

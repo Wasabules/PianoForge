@@ -77,6 +77,19 @@ Play a MIDI file live: File > Open MIDI file (Ctrl+O), drop it on the window, or
 Tracks... picks the parts to play (a part is a track's channel; drums off by default); -oct, -, +, +oct
 transpose the file by semitones or octaves.
 
+The player's buttons:
+
+- previous and next file of the list. The list is the MIDI files of the folder opened from, or what the gallery
+  shows when "Play with the engine" starts there. Previous, after the first 3 s of a file, goes back to its start;
+- 5 s back and on;
+- the speed, 25 to 200 %, with - and + by 5 %;
+- auto-play: a file starts as soon as it is opened, and the next one starts at its end;
+- repeat: off, all (the list from its start again), or one (the file).
+
+Under the position, the level along the piece shows where it is loud. It is read from the recording next to the
+MIDI file (the same name: WAV, FLAC, MP3, Opus, or a take's render); without one, it is estimated from the notes'
+velocities. A click on it moves there.
+
 Presets saves the whole instrument under a name (the engine and its settings, the tuning, the room and the
 listening position, the curves, the volume) and switches between them; Presets > Export settings / Import settings
 keeps them, the curves and the rooms of one's own in a .pfsettings file (the audio device and the folders of the

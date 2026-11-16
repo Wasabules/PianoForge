@@ -402,7 +402,11 @@ int runUiSnapshots(const juce::StringArray& arguments)
         sequence->notes = 1406;
         sequence->tracks = 2;
         sequence->length = 271.0;
-        sequence->events.push_back({ 0.0, 0x90, 60, 64 });
+        for (int i = 0; i < 1406; ++i) { // a nocturne's shape: quiet, a climax two thirds in, quiet again
+            const double t = 0.19 * i, arc = std::sin(3.14159 * std::pow(t / 271.0, 1.4));
+            const auto velocity = (std::uint8_t) juce::jlimit(1, 127, (int) (30 + 90 * arc * arc + 10 * std::sin(t * 1.7)));
+            sequence->events.push_back({ t, 0x90, (std::uint8_t) (48 + i % 36), velocity });
+        }
         for (const char* hand : { "Right hand", "Left hand" }) {
             pf::MidiSequence::Part part;
             part.track = (int) sequence->parts.size() + 1;
@@ -413,7 +417,7 @@ int runUiSnapshots(const juce::StringArray& arguments)
         }
         host.filePlayer.load(sequence);
         bar.fileChanged();
-        bar.setBounds(0, 0, 1416, 72);
+        bar.setBounds(0, 0, 1416, 108);
         save(bar, "player-bar");
         bar.setSpeed(1.5); // the time at the speed, and the file's
         bar.refresh();

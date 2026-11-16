@@ -195,6 +195,7 @@ MainComponent::MainComponent()
     }
     playerBar = std::make_unique<PlayerBar>(host.filePlayer, *settings);
     playerBar->onOpen = [this] { chooseMidiFile(); };
+    playerBar->onLoadFile = [this](const juce::File& f) { return loadMidi(f); };
     playerBar->onClicked = [this] { keyboard.grabKeyboardFocus(); };
     addAndMakeVisible(*playerBar);
 
@@ -286,7 +287,7 @@ MainComponent::MainComponent()
     else
         showMessage("No corpus found: File > Change corpus..., and pick corpus/reference/noire-dry/single-notes", theme::busy);
 
-    setSize(1440, 600);
+    setSize(1440, 640);
     constructed = true;
     startTimerHz(20);
 #if JUCE_WINDOWS
@@ -1686,9 +1687,9 @@ void MainComponent::openTakes()
         GalleryPanel::Hooks hooks;
         hooks.naming = [this] { return recordingPanel->naming(); };
         hooks.openNamingSettings = [this] { showSettings(SettingsPanel::Section::recording); };
-        hooks.playMidi = [this](const juce::File& midi) {
-            openMidiFile(midi);
-            if (!host.filePlayer.isPlaying())
+        hooks.playMidi = [this](const juce::File& midi, std::vector<juce::File> list) {
+            openMidiFile(midi, std::move(list));
+            if (!host.filePlayer.wantsToPlay())
                 playerBar->togglePlay();
         };
         hooks.renderAgain = [this](const juce::File& midiFile) {
@@ -1880,13 +1881,29 @@ void MainComponent::chooseMidiFile()
                              });
 }
 
-void MainComponent::openMidiFile(const juce::File& file)
+void MainComponent::openMidiFile(const juce::File& file, std::vector<juce::File> list)
+{
+    if (!loadMidi(file))
+        return;
+    if (list.empty()) { // its folder's MIDI files, by name
+        auto found = file.getParentDirectory().findChildFiles(juce::File::findFiles, false, "*.mid;*.midi;*.smf;*.kar");
+        std::sort(found.begin(), found.end(), [](const juce::File& a, const juce::File& b) {
+            return a.getFileName().compareNatural(b.getFileName()) < 0;
+        });
+        list.assign(found.begin(), found.end());
+    }
+    playerBar->setPlaylist(std::move(list), file);
+    if (playerBar->autoPlays() && !host.filePlayer.wantsToPlay())
+        playerBar->togglePlay();
+}
+
+bool MainComponent::loadMidi(const juce::File& file)
 {
     juce::String error;
     auto sequence = MidiFilePlayer::read(file, error); // small files: read here, in a few milliseconds
     if (sequence == nullptr) {
         showMessage("Cannot open the MIDI file: " + error, theme::bad);
-        return;
+        return false;
     }
     const int seconds = juce::roundToInt(sequence->length);
     const auto summary = juce::String::fromUTF8(sequence->name.c_str()) + " (" + juce::String(sequence->notes) + " notes, "
@@ -1897,6 +1914,7 @@ void MainComponent::openMidiFile(const juce::File& file)
     settings->setValue("midiFolder", file.getParentDirectory().getFullPathName());
     settings->saveIfNeeded();
     showMessage("Opened " + summary + ": Ctrl+Space plays it, with its own velocities (no velocity curve).", theme::good);
+    return true;
 }
 
 void MainComponent::closeMidiFile()
@@ -2386,7 +2404,7 @@ void MainComponent::resized()
 
     // Keyboard and its hint.
     area.reduce(12, 0);
-    auto keys = area.removeFromBottom(juce::jlimit(120, 280, area.getHeight() - 118 - 12 - 26 - 16 - 82));
+    auto keys = area.removeFromBottom(juce::jlimit(120, 280, area.getHeight() - 118 - 12 - 26 - 16 - 118)); // (the player: 108 + 10)
     keyboard.setBounds(keys);
     keyboard.setKeyWidth((float) keys.getWidth() / 52.0f); // 52 white keys from A0 to C8
     area.removeFromBottom(4);
@@ -2401,7 +2419,7 @@ void MainComponent::resized()
         cards.removeFromLeft(gap);
     }
     area.removeFromTop(10);
-    playerBar->setBounds(area.removeFromTop(72));
+    playerBar->setBounds(area.removeFromTop(108));
 }
 
 } // namespace pf::app

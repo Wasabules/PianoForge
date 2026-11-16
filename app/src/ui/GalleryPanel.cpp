@@ -261,8 +261,13 @@ GalleryPanel::GalleryPanel(TakePlayback& p, std::vector<std::pair<juce::File, bo
     sideButton.onClick = [this] { playback.setSide(playback.currentSide() == 0 ? 1 : 0); };
     midiButton.setTooltip("Plays its MIDI through the engine, with the settings heard now (the MIDI file player)");
     midiButton.onClick = [this] {
-        if (const auto s = selected(); !s.empty() && hooks.playMidi)
-            hooks.playMidi(s.front()->midi());
+        if (const auto s = selected(); !s.empty() && hooks.playMidi) {
+            std::vector<juce::File> list; // what is shown, in its order: previous / next in the player go through it
+            for (const int i : shown)
+                if (const auto m = items[(size_t) i].midi(); m.existsAsFile())
+                    list.push_back(m);
+            hooks.playMidi(s.front()->midi(), std::move(list));
+        }
     };
     renderButton.setTooltip("A new WAV from its MIDI, with the engine, the room and the limiter as they are now");
     renderButton.onClick = [this] {

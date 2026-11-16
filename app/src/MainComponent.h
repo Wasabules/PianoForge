@@ -61,7 +61,10 @@ public:
     void menuItemSelected(int id, int) override;
 
     /// Opens a MIDI file in the player (menus, drag and drop, or the command line: "Open with" PianoForge).
-    void openMidiFile(const juce::File& file);
+    /// Opens a MIDI file in the player, `list` the files previous / next go through (none: the MIDI files of its
+    /// folder); with auto-play, it starts.
+    void openMidiFile(const juce::File& file, std::vector<juce::File> list = {});
+    bool loadMidi(const juce::File& file); // the file into the player (the list as it is)
 
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
     void filesDropped(const juce::StringArray& files, int, int) override;

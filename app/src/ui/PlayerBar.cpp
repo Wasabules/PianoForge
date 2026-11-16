@@ -57,6 +57,26 @@ void TransportButton::paintButton(juce::Graphics& g, bool over, bool down)
     case Icon::stop:
         g.fillRect(juce::Rectangle<float>(c.x - h * 0.4f, c.y - h * 0.4f, h * 0.8f, h * 0.8f));
         break;
+    case Icon::previous:
+    case Icon::next: { // a bar and a triangle
+        const float s = icon == Icon::next ? 1.0f : -1.0f;
+        juce::Path p;
+        p.addTriangle(c.x - s * h * 0.45f, c.y - h * 0.5f, c.x - s * h * 0.45f, c.y + h * 0.5f, c.x + s * h * 0.3f, c.y);
+        g.fillPath(p);
+        g.fillRect(juce::Rectangle<float>(icon == Icon::next ? c.x + h * 0.3f : c.x - h * 0.45f, c.y - h * 0.5f, h * 0.15f, h));
+        break;
+    }
+    case Icon::back:
+    case Icon::forward: { // two triangles
+        const float s = icon == Icon::forward ? 1.0f : -1.0f;
+        for (const float shift : { -0.42f, 0.08f }) {
+            juce::Path p;
+            const float x = c.x + s * h * shift;
+            p.addTriangle(x - s * h * 0.0f, c.y - h * 0.42f, x, c.y + h * 0.42f, x + s * h * 0.42f, c.y);
+            g.fillPath(p);
+        }
+        break;
+    }
     }
 }
 
@@ -160,6 +180,29 @@ PlayerBar::PlayerBar(MidiFilePlayer& p, juce::PropertiesFile& s) : player(p), se
     playButton.onClick = [this] { togglePlay(); };
     stopButton.setTooltip("Stop and back to the start (Ctrl+Home)");
     stopButton.onClick = [this] { stop(); };
+    previousButton.setTooltip("The previous file of the list (in the first 3 s of a file; later: its start again)");
+    previousButton.onClick = [this] { previous(); };
+    nextButton.setTooltip("The next file of the list (its folder's MIDI files, or what the gallery shows)");
+    nextButton.onClick = [this] { next(); };
+    backButton.setTooltip("5 s back (Ctrl+Left)");
+    backButton.onClick = [this] {
+        nudge(-5.0);
+        if (onClicked)
+            onClicked();
+    };
+    forwardButton.setTooltip("5 s on (Ctrl+Right)");
+    forwardButton.onClick = [this] {
+        nudge(5.0);
+        if (onClicked)
+            onClicked();
+    };
+    strip.onSeek = [this](double t) {
+        player.seek(t);
+        refresh();
+    };
+    strip.xOf = [this](double t) {
+        return (float) (position.getX() - strip.getX()) + (float) position.getPositionOfValue(juce::jlimit(position.getMinimum(), position.getMaximum(), t));
+    };
 
     nameLabel.setFont(theme::font(13.0f));
     nameLabel.setMinimumHorizontalScale(0.7f);
@@ -205,15 +248,31 @@ PlayerBar::PlayerBar(MidiFilePlayer& p, juce::PropertiesFile& s) : player(p), se
     };
     speed.setValue(juce::jlimit(25.0, 200.0, settings.getDoubleValue("playerSpeed", 100.0)), juce::sendNotificationSync);
 
-    loopButton.setTooltip("Start again at the end (Ctrl+L)");
-    loopButton.setToggleState(settings.getBoolValue("playerLoop", false), juce::dontSendNotification);
-    player.setLoop(loopButton.getToggleState());
-    loopButton.onClick = [this] {
-        player.setLoop(loopButton.getToggleState());
+    slower.setTooltip("5 % slower");
+    faster.setTooltip("5 % faster");
+    slower.onClick = [this] { speed.setValue(speed.getValue() - 5.0, juce::sendNotificationSync); };
+    faster.onClick = [this] { speed.setValue(speed.getValue() + 5.0, juce::sendNotificationSync); };
+
+    autoButton.setTooltip("A file starts as soon as it is opened, and at its end the next one of the list starts");
+    autoButton.setToggleState(settings.getBoolValue("playerAutoPlay", false), juce::dontSendNotification);
+    autoButton.onClick = [this] {
         save();
         if (onClicked)
             onClicked();
     };
+    repeatButton.setTooltip("Off: stop at the end. All: the list from its start again after its last file. One: this file "
+                            "again (Ctrl+L)");
+    repeatButton.onClick = [this] {
+        setRepeat(repeat == Repeat::off ? Repeat::all : repeat == Repeat::all ? Repeat::one : Repeat::off);
+        if (onClicked)
+            onClicked();
+    };
+    {
+        const int saved = settings.getIntValue("playerRepeat", settings.getBoolValue("playerLoop", false) ? 2 : 0);
+        repeat = saved == 1 ? Repeat::all : saved == 2 ? Repeat::one : Repeat::off;
+        player.setLoop(repeat == Repeat::one);
+        repeatButton.setButtonText(repeat == Repeat::off ? "Repeat: off" : repeat == Repeat::all ? "Repeat: all" : "Repeat: one");
+    }
 
     partsButton.setTooltip("The parts of the file (its instruments) to play: every one but the drums at first");
     partsButton.onClick = [this] { showParts(); };
@@ -233,8 +292,9 @@ PlayerBar::PlayerBar(MidiFilePlayer& p, juce::PropertiesFile& s) : player(p), se
     semitoneUp.setTooltip("A semitone up");
 
     // The keyboard keeps the focus: the computer keyboard goes on playing after a click here.
-    for (auto* c : std::initializer_list<juce::Component*> { &openButton, &playButton, &stopButton, &position, &loopButton,
-                                                             &partsButton, &octaveDown, &semitoneDown, &semitoneUp, &octaveUp }) {
+    for (auto* c : std::initializer_list<juce::Component*> { &openButton, &playButton, &stopButton, &position, &autoButton, &repeatButton,
+                                                             &partsButton, &octaveDown, &semitoneDown, &semitoneUp, &octaveUp, &previousButton,
+                                                             &nextButton, &backButton, &forwardButton, &slower, &faster, &strip }) {
         c->setWantsKeyboardFocus(false);
         c->setMouseClickGrabsKeyboardFocus(false);
         addAndMakeVisible(*c);
@@ -278,9 +338,83 @@ void PlayerBar::setSpeed(double factor)
 
 void PlayerBar::setLoop(bool on)
 {
-    loopButton.setToggleState(on, juce::dontSendNotification);
-    player.setLoop(on);
+    setRepeat(on ? Repeat::one : Repeat::off);
+}
+
+void PlayerBar::setRepeat(Repeat r)
+{
+    repeat = r;
+    player.setLoop(r == Repeat::one);
+    repeatButton.setButtonText(r == Repeat::off ? "Repeat: off" : r == Repeat::all ? "Repeat: all" : "Repeat: one");
+    repeatButton.setToggleState(r != Repeat::off, juce::dontSendNotification);
     save();
+}
+
+void PlayerBar::setPlaylist(std::vector<juce::File> files, const juce::File& current)
+{
+    playlist = std::move(files);
+    playlistIndex = -1;
+    for (size_t i = 0; i < playlist.size(); ++i)
+        if (playlist[i] == current)
+            playlistIndex = (int) i;
+    if (playlistIndex < 0 && current.existsAsFile()) { // not among them: the list is that one file
+        playlist = { current };
+        playlistIndex = 0;
+    }
+    fileChanged(false);
+}
+
+juce::File PlayerBar::currentFile() const
+{
+    const auto s = player.sequence();
+    return s != nullptr ? juce::File(juce::String::fromUTF8(s->path.c_str())) : juce::File();
+}
+
+bool PlayerBar::openAt(int index, bool play)
+{
+    if (index < 0 || index >= (int) playlist.size() || !onLoadFile)
+        return false;
+    playlistIndex = index;
+    if (!onLoadFile(playlist[(size_t) index]))
+        return false;
+    if (play)
+        player.play();
+    wasPlaying = player.wantsToPlay();
+    refresh();
+    return true;
+}
+
+void PlayerBar::next(bool fromEnd)
+{
+    if (playlist.empty())
+        return;
+    const bool play = fromEnd || player.wantsToPlay() || autoButton.getToggleState();
+    int i = playlistIndex + 1;
+    if (i >= (int) playlist.size()) { // past the last one: the first again with repeat all, at the end; else nothing
+        if (!(fromEnd && repeat == Repeat::all)) {
+            refresh();
+            return;
+        }
+        i = 0;
+    }
+    // A file that cannot be read (moved, renamed): the following one, once round the list.
+    for (int tries = 0; tries < (int) playlist.size(); ++tries, i = (i + 1) % (int) playlist.size())
+        if (openAt(i, play))
+            break;
+    if (onClicked)
+        onClicked();
+}
+
+void PlayerBar::previous()
+{
+    if (player.position() > 3.0 || playlistIndex <= 0) { // into the file: its start again
+        player.seek(0.0);
+        refresh();
+    } else {
+        openAt(playlistIndex - 1, player.wantsToPlay() || autoButton.getToggleState());
+    }
+    if (onClicked)
+        onClicked();
 }
 
 void PlayerBar::transposeBy(int semitones)
@@ -322,8 +456,12 @@ void PlayerBar::fileChanged(bool newFile)
     const auto s = player.sequence();
     const bool loaded = s != nullptr;
     for (auto* c : std::initializer_list<juce::Component*> { &playButton, &stopButton, &position, &partsButton, &octaveDown,
-                                                             &semitoneDown, &semitoneUp, &octaveUp })
+                                                             &semitoneDown, &semitoneUp, &octaveUp, &backButton, &forwardButton, &strip })
         c->setEnabled(loaded);
+    previousButton.setEnabled(loaded);
+    nextButton.setEnabled(loaded && playlistIndex + 1 < (int) playlist.size());
+    if (newFile)
+        strip.load(currentFile(), s);
     position.setAlpha(loaded ? 1.0f : 0.35f);
     showTranspose();
     if (loaded) {
@@ -334,6 +472,8 @@ void PlayerBar::fileChanged(bool newFile)
         juce::String details = juce::String(s->notes) + " notes, " + juce::String(s->tracks) + (s->tracks == 1 ? " track" : " tracks");
         if (s->parts.size() > 1)
             details << ", " << playing << " of " << (int) s->parts.size() << " parts played";
+        if (playlist.size() > 1 && playlistIndex >= 0)
+            details << "; " << (playlistIndex + 1) << " of " << (int) playlist.size();
         partsButton.setButtonText(s->parts.size() > 1 ? "Tracks " + juce::String(playing) + "/" + juce::String((int) s->parts.size()) + "..."
                                                       : juce::String("Tracks..."));
         nameLabel.setText(juce::String::fromUTF8(s->name.c_str()) + "   (" + details + ")", juce::dontSendNotification);
@@ -359,8 +499,18 @@ void PlayerBar::refresh()
     playButton.setToggleState(playing, juce::dontSendNotification);
     if (s == nullptr) {
         timeLabel.setText("-:-- / -:--", juce::dontSendNotification);
+        wasPlaying = false;
         return;
     }
+    // The end of a file (not a pause: the position is at its end): the next one, with auto-play or repeat all.
+    if (wasPlaying && !playing && repeat != Repeat::one && player.position() >= s->length - 1e-6
+        && (autoButton.getToggleState() || repeat == Repeat::all)) {
+        wasPlaying = false;
+        next(true);
+        return;
+    }
+    wasPlaying = playing;
+    strip.setPosition(dragging ? position.getValue() : player.position());
     if (!dragging) {
         position.setValue(player.position(), juce::dontSendNotification);
         timeLabel.setText(timeText(player.position(), s->length, player.getSpeed()), juce::dontSendNotification);
@@ -370,7 +520,9 @@ void PlayerBar::refresh()
 void PlayerBar::save()
 {
     settings.setValue("playerSpeed", speed.getValue());
-    settings.setValue("playerLoop", loopButton.getToggleState());
+    settings.setValue("playerRepeat", repeat == Repeat::all ? 1 : repeat == Repeat::one ? 2 : 0);
+    settings.setValue("playerLoop", repeat == Repeat::one);
+    settings.setValue("playerAutoPlay", autoButton.getToggleState());
     settings.saveIfNeeded();
 }
 
@@ -384,6 +536,7 @@ void PlayerBar::paint(juce::Graphics& g)
     g.setColour(theme::dim);
     g.setFont(theme::font(11.0f, true));
     g.drawText("MIDI FILE", getLocalBounds().reduced(12, 6).removeFromTop(28).removeFromLeft(70), juce::Justification::centredLeft);
+    g.drawText("LEVEL", juce::Rectangle<int>(12, strip.getY(), 70, strip.getHeight()), juce::Justification::centredLeft);
 }
 
 void PlayerBar::resized()
@@ -393,10 +546,11 @@ void PlayerBar::resized()
     area.removeFromLeft(70); // the title
     openButton.setBounds(area.removeFromLeft(104).reduced(0, 1));
     area.removeFromLeft(10);
-    playButton.setBounds(area.removeFromLeft(40).reduced(0, 1));
-    area.removeFromLeft(4);
-    stopButton.setBounds(area.removeFromLeft(40).reduced(0, 1));
-    area.removeFromLeft(12);
+    for (auto* b : { &previousButton, &backButton, &playButton, &stopButton, &forwardButton, &nextButton }) {
+        b->setBounds(area.removeFromLeft(b == &playButton ? 44 : 36).reduced(0, 1));
+        area.removeFromLeft(3);
+    }
+    area.removeFromLeft(9);
     octaveUp.setBounds(area.removeFromRight(46).reduced(0, 1));
     semitoneUp.setBounds(area.removeFromRight(30).reduced(0, 1));
     transposeValue.setBounds(area.removeFromRight(96));
@@ -408,15 +562,26 @@ void PlayerBar::resized()
     area.removeFromRight(12);
     nameLabel.setBounds(area);
     all.removeFromTop(6);
-    area = all.removeFromTop(26); // second row: position, time, speed, loop
+    // Second row: the position and the time; third: the level along the piece under it, and on the right the speed,
+    // auto-play and repeat.
+    constexpr int kRight = 470;
+    area = all.removeFromTop(26);
     area.removeFromLeft(70);
-    loopButton.setBounds(area.removeFromRight(64));
-    area.removeFromRight(8);
-    speed.setBounds(area.removeFromRight(170));
-    speedLabel.setBounds(area.removeFromRight(50));
+    timeLabel.setBounds(area.removeFromRight(kRight)); // the time at the speed, and the file's
     area.removeFromRight(12);
-    timeLabel.setBounds(area.removeFromRight(235)); // the time at the speed, and the file's
     position.setBounds(area);
+    all.removeFromTop(3);
+    area = all.removeFromTop(30);
+    auto right = area.removeFromRight(kRight).reduced(0, 2);
+    repeatButton.setBounds(right.removeFromRight(104).reduced(0, 1));
+    right.removeFromRight(6);
+    autoButton.setBounds(right.removeFromRight(92));
+    right.removeFromRight(8);
+    faster.setBounds(right.removeFromRight(24).reduced(0, 1));
+    speed.setBounds(right.removeFromRight(150));
+    slower.setBounds(right.removeFromRight(24).reduced(0, 1));
+    speedLabel.setBounds(right.removeFromRight(50));
+    strip.setBounds(area.withLeft(position.getX()).withRight(position.getRight()));
 }
 
 } // namespace pf::app

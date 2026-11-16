@@ -13,6 +13,7 @@
 #include "ui/TonePanel.h"
 #include "Presets.h"
 #include "Gallery.h"
+#include "ui/LevelStrip.h"
 #include "ui/StreamLookPanel.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
@@ -1317,6 +1318,43 @@ int runSelfTest(const juce::StringArray& arguments)
                     + s2 + "\", \"" + s3 + "\"" + (named ? "" : " (NOT as expected)") + "; filed in its piece's folder with its metadata"
                     + (filed ? "" : " (NOT so)") + ", a second one \" (2)\"" + (second ? "" : " (NOT so)") + "; filters by length, search, kind, "
                     + "format and naming" + (filtered ? "" : " (NOT as expected)"));
+        base.deleteRecursively();
+    }
+
+    // 8h4. The MIDI player's level strip: the sound next to a MIDI file found (its WAV, same name), its level read
+    //      (a first half 24 dB quieter than the second: so measured); without a sound, the notes' estimate (louder
+    //      velocities, a higher level).
+    {
+        const auto base = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("pianoforge-selftest-level");
+        base.deleteRecursively();
+        base.createDirectory();
+        juce::AudioBuffer<float> halves(2, 4 * 48000);
+        for (int k = 0; k < halves.getNumSamples(); ++k) {
+            const float a = k < 2 * 48000 ? 0.0316f : 0.5f; // -30 dB, then -6 dB
+            halves.setSample(0, k, a * (float) std::sin(0.0576 * k));
+            halves.setSample(1, k, a * (float) std::sin(0.0576 * k));
+        }
+        writeWav(halves, 48000.0, base.getChildFile("piece.wav"));
+        base.getChildFile("piece.mid").replaceWithText("not read here");
+        const auto sound = LevelStrip::soundOf(base.getChildFile("piece.mid"));
+        std::atomic<bool> never { false };
+        const auto e = LevelStrip::fromSound(sound, never);
+        double quiet = 0.0, loud = 0.0;
+        if (e != nullptr && !e->rms.empty()) {
+            const size_t half = e->rms.size() / 2;
+            quiet = e->rms[half / 2];
+            loud = e->rms[half + half / 2];
+        }
+        const double gap = quiet > 0.0 ? 20.0 * std::log10(loud / quiet) : 0.0;
+        pf::MidiSequence notes;
+        for (int n = 0; n < 40; ++n)
+            notes.events.push_back({ 0.25 * n, 0x90, 60, (std::uint8_t) (n < 20 ? 30 : 110) });
+        notes.length = 10.0;
+        const auto m = LevelStrip::fromNotes(notes);
+        const bool midiOk = m != nullptr && m->rms.size() > 150 && m->rms[150] > 2.0f * m->rms[80]; // at 7.5 s against 4 s
+        r.check(sound.getFileName() == "piece.wav" && e != nullptr && std::abs(gap - 24.0) < 0.5 && midiOk,
+                "level strip: the recording next to a MIDI file found (" + sound.getFileName() + "), its halves " + juce::String(gap, 1)
+                    + " dB apart (expected 24); from the notes, the louder ones higher" + (midiOk ? "" : " (NOT so)"));
         base.deleteRecursively();
     }
 

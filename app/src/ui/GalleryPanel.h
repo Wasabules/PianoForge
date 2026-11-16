@@ -20,7 +20,8 @@ namespace pf::app {
 class GalleryPanel final : public juce::Component, private juce::TableListBoxModel, private juce::Timer {
 public:
     struct Hooks {
-        std::function<void(const juce::File&)> playMidi;    // the MIDI through the engine (the file player)
+        /// The MIDI through the engine (the file player), the list being the MIDI files of what is shown.
+        std::function<void(const juce::File&, std::vector<juce::File>)> playMidi;
         std::function<void(const juce::File&)> renderAgain; // a new WAV from the MIDI, the settings heard now
         std::function<GalleryNaming()> naming;              // the name pattern (Settings > Recording)
         std::function<void()> openNamingSettings;
