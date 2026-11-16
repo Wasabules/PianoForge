@@ -11,6 +11,7 @@ dependencies = [
     "numpy>=2.0",
     "soundfile>=0.12",
     "scipy>=1.13",
+    "matplotlib>=3.8",       # the plots each step writes beside its measures (modes-v064.png...)
 ]
 
 [project.scripts]
