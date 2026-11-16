@@ -1,5 +1,7 @@
 #include "MirrorOutput.h"
 
+#include "PipeWireAudio.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -60,6 +62,11 @@ std::unique_ptr<juce::AudioIODeviceType> MirrorOutput::createType(bool lowLatenc
     return std::unique_ptr<juce::AudioIODeviceType>(juce::AudioIODeviceType::createAudioIODeviceType_WASAPI(
         lowLatency ? juce::WASAPIDeviceMode::sharedLowLatency : juce::WASAPIDeviceMode::shared));
 #elif JUCE_LINUX
+    // PipeWire's own type where it runs (any of its outputs, a virtual sink for a cable among them; the same clock as
+    // the main output), else ALSA's.
+    (void) lowLatency;
+    if (auto pipewire = pipewire::createDeviceType(false))
+        return pipewire;
     return std::unique_ptr<juce::AudioIODeviceType>(juce::AudioIODeviceType::createAudioIODeviceType_ALSA());
 #elif JUCE_MAC
     (void) lowLatency;
@@ -98,7 +105,11 @@ juce::Result MirrorOutput::open(const juce::String& deviceName, double inputRate
         const auto rates = device->getAvailableSampleRates();
         const double rate = rates.contains(inputRate) ? inputRate : (rates.contains(48000.0) ? 48000.0 : (rates.isEmpty() ? 48000.0 : rates[0]));
         const auto sizes = device->getAvailableBufferSizes();
+#if JUCE_WINDOWS // the low-latency shared mode's shortest period
         const int size = lowLatency && !sizes.isEmpty() ? sizes[0] : device->getDefaultBufferSize();
+#else
+        const int size = device->getDefaultBufferSize();
+#endif
         juce::BigInteger outputs;
         outputs.setRange(0, 2, true);
         error = device->open({}, outputs, rate, size);

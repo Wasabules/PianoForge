@@ -6,12 +6,15 @@
 
 namespace pf::app {
 
-/// MP3 files through Windows Media Foundation's MP3 encoder (Windows 8 and later; absent from the "N" editions
-/// without the Media Feature Pack, and from other systems): constant bit rate, 32, 44.1 or 48 kHz, mono or
-/// stereo. The float input is brought to 16 bits (what the encoder takes) with a triangular dither.
+/// MP3 files, constant bit rate, 32, 44.1 or 48 kHz, mono or stereo.
+/// - Windows: Media Foundation's MP3 encoder (Windows 8 and later; absent from the "N" editions without the Media
+///   Feature Pack). The float input is brought to 16 bits (what the encoder takes) with a triangular dither.
+/// - Linux, macOS: LAME (libmp3lame), loaded at run time when installed (Debian/Ubuntu libmp3lame0, Fedora
+///   lame-libs, Arch lame, Homebrew lame); it takes the float input as it is, and the file gets a LAME tag (the
+///   encoder's delay and padding, which players remove).
 ///
-/// One encoder per file, on one thread (it initialises COM and Media Foundation on it). No JUCE here: the
-/// Windows headers stay out of the rest of the application.
+/// One encoder per file, on one thread (on Windows it initialises COM and Media Foundation on it). No JUCE here: the
+/// system headers stay out of the rest of the application.
 class Mp3Encoder {
 public:
     Mp3Encoder();

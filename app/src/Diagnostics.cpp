@@ -1,9 +1,12 @@
 #include "UpdateChecker.h"
 #include "Diagnostics.h"
 
+#include "AudioDevices.h"
 #include "AudioHost.h"
 #include "MirrorOutput.h"
+#include "DesktopIntegration.h"
 #include "ui/AudioPanel.h"
+#include "ui/DesktopPanel.h"
 #include "ui/GalleryPanel.h"
 #include "ui/NamingDialog.h"
 #include "ui/RecordingPanel.h"
@@ -19,6 +22,10 @@
 #include "VelocityCurveEditor.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
+#include "DesktopBus.h"
+#include "ObsFlatpak.h"
+#include "PipeWireAudio.h"
+#include "SettingsLocation.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -149,7 +156,7 @@ int runListAudio(const juce::StringArray& arguments)
     const int i = arguments.indexOf("--list-audio");
     const juce::File reportFile(arguments[i + 1].isNotEmpty() ? arguments[i + 1] : "audio-devices.txt");
     juce::String report;
-    juce::AudioDeviceManager manager;
+    DeviceManager manager;
     for (auto* type : manager.getAvailableDeviceTypes()) {
         type->scanForDevices();
         report << type->getTypeName() << ":\n";
@@ -164,14 +171,10 @@ int runAudioHold(const juce::StringArray& arguments)
 {
     // Test aid: holds the saved audio device for a while (as a closing application or another program would).
     const double seconds = arguments[arguments.indexOf("--audio-hold") + 1].getDoubleValue();
-    juce::PropertiesFile::Options options;
-    options.applicationName = "PianoForge";
-    options.folderName = "PianoForge";
-    options.filenameSuffix = ".settings";
     juce::ApplicationProperties properties;
-    properties.setStorageParameters(options);
+    properties.setStorageParameters(settingsOptions());
     const auto saved = properties.getUserSettings()->getXmlValue("audio");
-    juce::AudioDeviceManager manager;
+    DeviceManager manager;
     manager.initialise(0, 2, saved.get(), false);
     juce::Thread::sleep((int) (std::max(0.0, seconds) * 1000.0));
     manager.closeAudioDevice();
@@ -183,12 +186,8 @@ int runAudioRestore(const juce::StringArray& arguments)
     // What the application does at start: the saved device, the preferred setup otherwise.
     const int i = arguments.indexOf("--audio-restore");
     const juce::File reportFile(arguments[i + 1].isNotEmpty() ? arguments[i + 1] : "audio-restore.txt");
-    juce::PropertiesFile::Options options;
-    options.applicationName = "PianoForge";
-    options.folderName = "PianoForge";
-    options.filenameSuffix = ".settings";
     juce::ApplicationProperties properties;
-    properties.setStorageParameters(options);
+    properties.setStorageParameters(settingsOptions());
     const auto saved = properties.getUserSettings()->getXmlValue("audio");
     juce::String report;
     report << "saved: " << (saved != nullptr ? saved->toString(juce::XmlElement::TextFormat().singleLine()) : juce::String("none")) << "\n";
@@ -196,7 +195,7 @@ int runAudioRestore(const juce::StringArray& arguments)
     preferred.sampleRate = 44100.0;
     preferred.bufferSize = 128;
     for (const bool fallback : { false, true }) {
-        juce::AudioDeviceManager manager;
+        DeviceManager manager;
         const auto error = manager.initialise(0, 2, saved.get(), fallback, {}, &preferred);
         auto* d = manager.getCurrentAudioDevice();
         report << (fallback ? "with" : "without") << " the default on failure: error '" << error << "', opened "
@@ -208,6 +207,224 @@ int runAudioRestore(const juce::StringArray& arguments)
     }
     reportFile.replaceWithText(report, false, false, "\n");
     return 0;
+}
+
+namespace {
+
+/// Plays silence and measures the callbacks: their blocks, the time between them, the thread they run on.
+class AudioProbe final : public juce::AudioIODeviceCallback {
+public:
+    void audioDeviceAboutToStart(juce::AudioIODevice*) override {}
+    void audioDeviceStopped() override {}
+    void audioDeviceIOCallbackWithContext(const float* const*, int, float* const* outputs, int numOutputs, int n,
+                                          const juce::AudioIODeviceCallbackContext&) override
+    {
+        const auto now = juce::Time::getHighResolutionTicks();
+        for (int c = 0; c < numOutputs; ++c)
+            if (outputs[c] != nullptr)
+                juce::FloatVectorOperations::clear(outputs[c], n);
+        thread.store(linuxaudio::threadId(), std::memory_order_relaxed);
+        if (resetPending.exchange(false)) {
+            callbacks = 0;
+            frames = 0;
+            minBlock = 1 << 30;
+            maxBlock = 0;
+            maxGap = 0.0;
+            last = 0;
+            started = now;
+        }
+        if (last != 0)
+            maxGap = std::max(maxGap.load(), juce::Time::highResolutionTicksToSeconds(now - last));
+        last = now;
+        callbacks.fetch_add(1);
+        frames.fetch_add(n);
+        minBlock = std::min(minBlock.load(), n);
+        maxBlock = std::max(maxBlock.load(), n);
+        ended = now;
+    }
+    std::atomic<bool> resetPending { true };
+    std::atomic<std::int64_t> thread { 0 }, callbacks { 0 }, frames { 0 }, started { 0 }, ended { 0 };
+    std::atomic<int> minBlock { 1 << 30 }, maxBlock { 0 };
+    std::atomic<double> maxGap { 0.0 };
+    std::int64_t last = 0; // audio thread
+};
+
+} // namespace
+
+int runDesktopCheck(const juce::StringArray& arguments)
+{
+    const int i = arguments.indexOf("--desktop-check");
+    const int holdAt = arguments.indexOf("--hold");
+    const int hold = holdAt >= 0 ? arguments[holdAt + 1].getIntValue() : 3;
+    juce::String reportPath;
+    for (int k = i + 1; k < arguments.size(); ++k) {
+        if (arguments[k] == "--hold")
+            ++k;
+        else if (!arguments[k].startsWith("--")) {
+            reportPath = arguments[k];
+            break;
+        }
+    }
+    const juce::File reportFile(reportPath.isNotEmpty() ? reportPath : "desktop-check.txt");
+    juce::String report;
+    report << "PianoForge desktop check - " << juce::Time::getCurrentTime().toString(true, true) << "\n"
+           << "session bus (GIO): " << (desktop::available() ? "yes" : "no") << "\n";
+
+    desktop::KeepAwake awake;
+    desktop::PerformanceProfile performance;
+    const bool awakeHeld = awake.set(true, "PianoForge desktop check");
+    const bool performanceHeld = performance.set(true, "PianoForge desktop check");
+    report << "keep awake: " << (awakeHeld ? "held" : "not held") << " (" << juce::String(awake.how()) << ")\n"
+           << "performance profile: " << (performanceHeld ? "held" : "not held") << " (" << juce::String(performance.how()) << ")\n";
+    desktop::MediaControls media({});
+    for (int k = 0; k < 40 && !media.active(); ++k)
+        juce::Thread::sleep(50);
+    report << "media controls (MPRIS): " << (media.active() ? "registered" : "not registered") << "\n";
+    juce::Thread::sleep(1000 * std::max(0, hold)); // (time to look at them from outside)
+    awake.set(false, {});
+    performance.set(false, {});
+    if (arguments.contains("--notify"))
+        report << "notification: " << (desktop::notify("PianoForge", "Desktop check: notifications reach the desktop") ? "shown" : "not shown")
+               << "\n";
+#if JUCE_LINUX || JUCE_MAC
+    struct Ignore final : juce::MidiInputCallback {
+        void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage&) override {}
+    } ignore;
+    const auto input = juce::MidiInput::createNewDevice("PianoForge check", &ignore);
+    report << "virtual MIDI input: " << (input != nullptr ? "made" : "not available") << "\n";
+#endif
+#if JUCE_LINUX
+    const auto obs = obsflatpak::query();
+    report << "Flathub's OBS: " << (obs.installed ? "installed" : "not installed");
+    if (obs.installed)
+        report << ", plugin " << (obs.plugin ? "in it" : "not in it") << ", shared memory " << (obs.sharedMemory ? "granted" : "not granted");
+    report << "\n";
+    if (const auto type = pipewire::createDeviceType(false)) {
+        const auto out = pipewire::output(nullptr);
+        report << "PipeWire's default output: " << (out.known ? juce::String::fromUTF8(out.description.c_str()) : juce::String("unknown"))
+               << (out.bluetooth ? " (Bluetooth)" : "") << "\n";
+    }
+#endif
+    reportFile.replaceWithText(report, false, false, "\n");
+    return 0;
+}
+
+int runAudioCheck(const juce::StringArray& arguments)
+{
+    auto option = [&](const char* name) {
+        const int at = arguments.indexOf(name);
+        return at >= 0 ? arguments[at + 1] : juce::String();
+    };
+    const int i = arguments.indexOf("--audio-check");
+    juce::String reportPath;
+    for (int k = i + 1; k < arguments.size(); ++k) { // the report: the first argument that is neither an option nor a value
+        if (juce::StringArray { "--type", "--device", "--rate", "--block", "--seconds" }.contains(arguments[k]))
+            ++k;
+        else if (!arguments[k].startsWith("--")) {
+            reportPath = arguments[k];
+            break;
+        }
+    }
+    const juce::File reportFile(reportPath.isNotEmpty() ? reportPath : "audio-check.txt");
+    const double seconds = option("--seconds").isNotEmpty() ? option("--seconds").getDoubleValue() : 10.0;
+
+    juce::ApplicationProperties properties;
+    properties.setStorageParameters(settingsOptions());
+    auto* settings = properties.getUserSettings();
+    pipewire::forceQuantum() = arguments.contains("--no-force") ? false
+                               : arguments.contains("--force") ? true
+                                                               : settings->getBoolValue("pipewireForceQuantum", true);
+    DeviceManager manager;
+    juce::String report, error;
+    const auto saved = settings->getXmlValue("audio");
+    juce::AudioDeviceManager::AudioDeviceSetup preferred;
+    preferred.sampleRate = 48000.0;
+    preferred.bufferSize = 128;
+    if (option("--type").isEmpty() && saved != nullptr) {
+        error = manager.initialise(0, 2, saved.get(), false, {}, &preferred);
+    } else {
+        error = manager.initialise(0, 2, nullptr, false, {}, &preferred);
+        if (option("--type").isNotEmpty())
+            manager.setCurrentAudioDeviceType(option("--type"), true);
+    }
+    auto setup = manager.getAudioDeviceSetup();
+    if (option("--device").isNotEmpty())
+        setup.outputDeviceName = option("--device");
+    if (option("--rate").isNotEmpty())
+        setup.sampleRate = option("--rate").getDoubleValue();
+    if (option("--block").isNotEmpty())
+        setup.bufferSize = option("--block").getIntValue();
+    setup.inputDeviceName = {};
+    setup.useDefaultInputChannels = false;
+    setup.inputChannels.clear();
+    if (option("--type").isNotEmpty() || option("--device").isNotEmpty() || option("--rate").isNotEmpty() || option("--block").isNotEmpty())
+        error = manager.setAudioDeviceSetup(setup, true);
+
+    juce::StringArray types;
+    for (auto* t : manager.getAvailableDeviceTypes())
+        types.add(t->getTypeName());
+    report << "PianoForge audio check - " << juce::Time::getCurrentTime().toString(true, true) << "\n"
+           << "device types: " << types.joinIntoString(", ") << "\n"
+           << "PipeWire's block asked for (node.force-quantum): " << (pipewire::forceQuantum().load() ? "yes" : "no") << "\n";
+#if JUCE_LINUX
+    if (const auto clock = linuxaudio::pipewireClock(); clock.running)
+        report << "PipeWire's settings: rate " << clock.rate << ", min-quantum " << clock.minQuantum << ", max-quantum "
+               << clock.maxQuantum << ", force-quantum " << clock.forceQuantum << "\n";
+    if (!linuxaudio::jackSetup().empty())
+        report << "JACK: " << juce::String(linuxaudio::jackSetup()) << "\n";
+#endif
+    auto* d = manager.getCurrentAudioDevice();
+    if (d == nullptr || error.isNotEmpty()) {
+        const auto type = option("--type").isNotEmpty() ? option("--type") : manager.getCurrentAudioDeviceType();
+        juce::String why = error.isNotEmpty() ? error : juce::String("no device opened");
+#if JUCE_LINUX
+        if (type == "JACK" && error.isEmpty()) // no device at all: no server answered
+            why = linuxaudio::pipewireRunning() && !linuxaudio::pipewireJack()
+                      ? "no JACK server: with PipeWire, its JACK library makes one (the package pipewire-jack)"
+                      : "no JACK server answered";
+#endif
+        report << "[FAIL]  " << type << " / " << setup.outputDeviceName << ": " << why << "\n";
+        reportFile.replaceWithText(report, false, false, "\n");
+        return 1;
+    }
+
+    AudioProbe probe;
+    manager.addAudioCallback(&probe);
+    juce::Thread::sleep(600);
+    linuxaudio::Scheduling scheduling;
+    if (const auto tid = probe.thread.load(); tid != 0) // as the application does
+        scheduling = linuxaudio::makeRealtime(tid);
+    juce::Thread::sleep(400);
+    probe.resetPending = true; // the device started: from now on
+    juce::Thread::sleep(juce::roundToInt(1000.0 * seconds));
+    const double fs = d->getCurrentSampleRate();
+    const int block = d->getCurrentBufferSizeSamples();
+    const double elapsed = juce::Time::highResolutionTicksToSeconds(probe.ended.load() - probe.started.load());
+    const double latency = 1000.0 * d->getOutputLatencyInSamples() / fs;
+    const auto pw = pipewire::status(d);
+    manager.removeAudioCallback(&probe);
+
+    report << "device: " << manager.getCurrentAudioDeviceType() << " / " << d->getName() << "\n"
+           << "rate " << fs << " Hz, block " << block << " (" << juce::String(1000.0 * block / fs, 2) << " ms)\n"
+           << "callbacks: " << probe.callbacks.load() << " over " << juce::String(elapsed, 2) << " s, blocks of "
+           << probe.minBlock.load() << " to " << probe.maxBlock.load() << " samples, "
+           << juce::String(elapsed > 0.0 ? (double) probe.frames.load() / elapsed : 0.0, 1) << " samples/s\n"
+           << "longest wait between callbacks: " << juce::String(1000.0 * probe.maxGap.load(), 2) << " ms\n"
+           << "output latency the device reports: " << juce::String(latency, 2) << " ms";
+    if (pw.has_value())
+        report << " (PipeWire's measure, to the device)\n"
+               << "PipeWire's graph: " << pw->graphBlock << " samples at " << pw->graphRate << " Hz ("
+               << juce::String(pw->graphRate > 0.0 ? 1000.0 * pw->graphBlock / pw->graphRate : 0.0, 2) << " ms), "
+               << (pw->forced ? "asked for" : "its own") << ", " << (int) pw->xruns << " xruns\n"
+               << "key to sound, estimated: a block of input timing + the output latency = "
+               << juce::String(1000.0 * block / fs + latency, 1) << " ms\n";
+    else
+        report << " (its own figure: through PipeWire, the graph's own delay comes on top)\n";
+    report << "xruns the device counted: " << d->getXRunCount() << "\n"
+           << "audio thread: " << juce::String(scheduling.how.empty() ? std::string("unknown") : scheduling.how) << "\n";
+    manager.closeAudioDevice();
+    reportFile.replaceWithText(report, false, false, "\n");
+    return probe.callbacks.load() > 0 ? 0 : 1;
 }
 
 
@@ -350,10 +567,13 @@ int runUiSnapshots(const juce::StringArray& arguments)
         juce::PropertiesFile settings(folder.getChildFile("snapshot.settings"), options);
         EnginePanel engine(modal, player, settings);
         save(engine, "engine-settings");
-        juce::AudioDeviceManager devices; // not initialised: no device opened
+        DeviceManager devices; // not initialised: no device opened
         AudioHost host(modal);
         AudioPanel audio(devices, host, settings);
         save(audio, "audio-settings");
+        DesktopIntegration integration(settings, {});
+        DesktopPanel desktopSettings(settings, integration);
+        save(desktopSettings, "desktop-settings");
         TonePanel tone(modal, host, settings);
         save(tone, "tone-and-dynamics");
         {

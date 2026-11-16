@@ -1,9 +1,11 @@
 #include "Mp3Encoder.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <type_traits>
 #include <vector>
 
 #if defined(_WIN32)
@@ -256,31 +258,204 @@ bool Mp3Encoder::close(std::string& error)
 
 } // namespace pf::app
 
-#else // no Media Foundation: no MP3
+#else // Linux, macOS: LAME, loaded at run time
+
+#include <dlfcn.h>
 
 namespace pf::app {
 
-struct Mp3Encoder::Impl {};
+namespace {
+
+/// LAME (libmp3lame, LGPL), looked for when MP3 is first asked for: no build dependency, and nothing linked into the
+/// application. Its packages are everywhere (Debian and Ubuntu libmp3lame0, Fedora lame-libs, Arch lame, Homebrew
+/// lame); without it, MP3 is simply not offered. Only the few functions used here are declared: LAME's interface has
+/// kept them since 3.99 (2011).
+struct Lame {
+    using Flags = void*; // lame_global_flags*
+    Flags (*init)() = nullptr;
+    int (*setInSampleRate)(Flags, int) = nullptr;
+    int (*setNumChannels)(Flags, int) = nullptr;
+    int (*setMode)(Flags, int) = nullptr; // MPEG_mode: 1 joint stereo, 3 mono
+    int (*setBitRate)(Flags, int) = nullptr;
+    int (*setQuality)(Flags, int) = nullptr;
+    int (*setWriteVbrTag)(Flags, int) = nullptr;
+    int (*initParams)(Flags) = nullptr;
+    int (*encodeFloat)(Flags, const float*, const float*, int, unsigned char*, int) = nullptr; // [-1, 1]
+    int (*flush)(Flags, unsigned char*, int) = nullptr;
+    std::size_t (*lameTagFrame)(Flags, unsigned char*, std::size_t) = nullptr;
+    int (*close)(Flags) = nullptr;
+
+    static const Lame* get()
+    {
+        static const Lame lame = [] {
+            Lame l;
+            void* handle = nullptr;
+            for (const char* name : { "libmp3lame.so.0", "libmp3lame.so", "libmp3lame.0.dylib", "libmp3lame.dylib",
+                                      "/opt/homebrew/lib/libmp3lame.dylib", "/usr/local/lib/libmp3lame.dylib" })
+                if ((handle = dlopen(name, RTLD_NOW | RTLD_LOCAL)) != nullptr)
+                    break;
+            if (handle == nullptr)
+                return l;
+            auto load = [&](auto& f, const char* symbol) {
+                f = reinterpret_cast<std::remove_reference_t<decltype(f)>>(dlsym(handle, symbol));
+                return f != nullptr;
+            };
+            const bool all = load(l.init, "lame_init") && load(l.setInSampleRate, "lame_set_in_samplerate")
+                && load(l.setNumChannels, "lame_set_num_channels") && load(l.setMode, "lame_set_mode")
+                && load(l.setBitRate, "lame_set_brate") && load(l.setQuality, "lame_set_quality")
+                && load(l.setWriteVbrTag, "lame_set_bWriteVbrTag") && load(l.initParams, "lame_init_params")
+                && load(l.encodeFloat, "lame_encode_buffer_ieee_float") && load(l.flush, "lame_encode_flush")
+                && load(l.lameTagFrame, "lame_get_lametag_frame") && load(l.close, "lame_close");
+            if (!all)
+                l.init = nullptr; // too old a LAME: as if absent (the library stays loaded, as dlopen'd libraries may)
+            return l;
+        }();
+        return lame.init != nullptr ? &lame : nullptr;
+    }
+};
+
+/// MPEG-1 Layer III's bit rates (32, 44.1 and 48 kHz), kbit/s.
+constexpr int kBitRates[] = { 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320 };
+
+} // namespace
+
+struct Mp3Encoder::Impl {
+    const Lame* lame = nullptr;
+    Lame::Flags flags = nullptr;
+    std::FILE* file = nullptr;
+    int channels = 0, kbps = 0;
+    std::vector<unsigned char> out;
+
+    ~Impl()
+    {
+        if (flags != nullptr)
+            lame->close(flags);
+        if (file != nullptr)
+            std::fclose(file);
+    }
+    bool put(const unsigned char* data, int bytes, std::string& error)
+    {
+        if (bytes > 0 && std::fwrite(data, 1, (std::size_t) bytes, file) != (std::size_t) bytes) {
+            error = "writing the MP3 file failed (disk full?)";
+            return false;
+        }
+        return true;
+    }
+};
+
 Mp3Encoder::Mp3Encoder() = default;
 Mp3Encoder::~Mp3Encoder() = default;
-bool Mp3Encoder::available() { return false; }
-bool Mp3Encoder::takesRate(double) noexcept { return false; }
-int Mp3Encoder::bitRate() const noexcept { return 0; }
-void Mp3Encoder::abandon() noexcept {}
-bool Mp3Encoder::open(const std::string&, int, int, int, std::string& error)
+
+bool Mp3Encoder::available()
 {
-    error = "MP3 needs Windows' Media Foundation";
-    return false;
+    return Lame::get() != nullptr;
 }
-bool Mp3Encoder::write(const float* const*, int, std::string& error)
+
+bool Mp3Encoder::takesRate(double sampleRate) noexcept
 {
-    error = "MP3 needs Windows' Media Foundation";
-    return false;
+    return sampleRate == 32000.0 || sampleRate == 44100.0 || sampleRate == 48000.0;
 }
+
+int Mp3Encoder::bitRate() const noexcept
+{
+    return impl != nullptr ? impl->kbps : 0;
+}
+
+void Mp3Encoder::abandon() noexcept
+{
+    impl.reset();
+}
+
+bool Mp3Encoder::open(const std::string& path, int sampleRate, int channels, int kbps, std::string& error)
+{
+    impl.reset();
+    const Lame* lame = Lame::get();
+    if (lame == nullptr) {
+        error = "MP3 needs LAME (libmp3lame: the package libmp3lame0, lame-libs or lame)";
+        return false;
+    }
+    if (channels < 1 || channels > 2 || !takesRate(sampleRate)) {
+        error = "the MP3 encoder takes 32, 44.1 or 48 kHz, mono or stereo";
+        return false;
+    }
+    auto s = std::make_unique<Impl>();
+    s->lame = lame;
+    s->channels = channels;
+    s->kbps = kBitRates[0];
+    for (const int r : kBitRates)
+        if (r <= kbps)
+            s->kbps = r;
+    if ((s->flags = lame->init()) == nullptr) {
+        error = "the MP3 encoder could not start";
+        return false;
+    }
+    // Constant bit rate, as Media Foundation's; quality 2 (LAME's "near best"); the LAME tag (encoder delay and
+    // padding: players drop them, the recording starts and ends where it did), written at close().
+    lame->setInSampleRate(s->flags, sampleRate);
+    lame->setNumChannels(s->flags, channels);
+    lame->setMode(s->flags, channels == 1 ? 3 : 1);
+    lame->setBitRate(s->flags, s->kbps);
+    lame->setQuality(s->flags, 2);
+    lame->setWriteVbrTag(s->flags, 1);
+    if (lame->initParams(s->flags) < 0) {
+        error = "the MP3 encoder refused " + std::to_string(sampleRate) + " Hz at " + std::to_string(s->kbps) + " kbit/s";
+        return false;
+    }
+    if ((s->file = std::fopen(path.c_str(), "wb")) == nullptr) {
+        error = "creating the MP3 file failed: " + std::string(std::strerror(errno));
+        return false;
+    }
+    impl = std::move(s);
+    return true;
+}
+
+bool Mp3Encoder::write(const float* const* input, int frames, std::string& error)
+{
+    if (impl == nullptr || impl->file == nullptr) {
+        error = "the MP3 file is not open";
+        return false;
+    }
+    auto& s = *impl;
+    // LAME takes at most a few seconds per call comfortably; its output fits 1.25 x the frames + 7200 bytes.
+    for (int done = 0; done < frames;) {
+        const int n = std::min(frames - done, 65536);
+        s.out.resize((std::size_t) n * 5 / 4 + 7200);
+        const float* left = input[0] + done;
+        const float* right = s.channels == 2 ? input[1] + done : left;
+        const int bytes = s.lame->encodeFloat(s.flags, left, right, n, s.out.data(), (int) s.out.size());
+        if (bytes < 0) {
+            error = "encoding MP3 failed (" + std::to_string(bytes) + ")";
+            return false;
+        }
+        if (!s.put(s.out.data(), bytes, error))
+            return false;
+        done += n;
+    }
+    return true;
+}
+
 bool Mp3Encoder::close(std::string& error)
 {
-    error = "MP3 needs Windows' Media Foundation";
-    return false;
+    if (impl == nullptr || impl->file == nullptr) {
+        error = "the MP3 file is not open";
+        return false;
+    }
+    auto& s = *impl;
+    s.out.resize(7200);
+    const int bytes = s.lame->flush(s.flags, s.out.data(), (int) s.out.size());
+    bool ok = bytes >= 0 && s.put(s.out.data(), bytes, error);
+    if (ok) { // the LAME tag over the empty frame LAME left at the start
+        const std::size_t tag = s.lame->lameTagFrame(s.flags, s.out.data(), s.out.size());
+        if (tag > 0 && tag <= s.out.size() && std::fseek(s.file, 0, SEEK_SET) == 0)
+            ok = s.put(s.out.data(), (int) tag, error);
+    }
+    const bool closed = std::fclose(s.file) == 0;
+    s.file = nullptr;
+    if (ok && !closed)
+        error = "finishing the MP3 file failed (disk full?)";
+    else if (!ok && error.empty())
+        error = "finishing the MP3 file failed";
+    return ok && closed;
 }
 
 } // namespace pf::app

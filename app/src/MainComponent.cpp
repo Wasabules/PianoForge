@@ -4,7 +4,9 @@
 
 #include "CurveText.h"
 #include "OfflineRender.h"
+#include "PipeWireAudio.h"
 #include "Presets.h"
+#include "SettingsLocation.h"
 
 namespace pf::app {
 
@@ -43,18 +45,35 @@ bool isMidiFile(const juce::File& f)
     return f.hasFileExtension("mid;midi;smf;kar");
 }
 
+/// The pass to play in a corpus folder: noire-dry's (the reference the engine was studied on) when it is there; else
+/// the state with the newest modal profile (a free bank's, built by pianoforge-profile: on Linux and macOS, where
+/// Kontakt is not, the only kind there is).
+juce::File passIn(const juce::File& corpus)
+{
+    if (const auto d = corpus.getChildFile("reference/noire-dry/single-notes"); d.isDirectory())
+        return d;
+    juce::File best;
+    juce::Time newest;
+    for (const auto& state : corpus.getChildFile("reference").findChildFiles(juce::File::findDirectories, false))
+        if (const auto pass = state.getChildFile("single-notes"), profile = state.getChildFile("modal-profile.bin");
+            pass.isDirectory() && profile.existsAsFile() && profile.getLastModificationTime() > newest) {
+            best = pass;
+            newest = profile.getLastModificationTime();
+        }
+    return best;
+}
+
 /// Finds the corpus: saved setting, then $PIANOFORGE_CORPUS, then walking up from the executable.
 juce::File findCorpus(const juce::String& saved)
 {
     if (saved.isNotEmpty() && juce::File(saved).isDirectory())
         return juce::File(saved);
-    const auto pass = "reference/noire-dry/single-notes";
     if (const auto env = juce::SystemStats::getEnvironmentVariable("PIANOFORGE_CORPUS", {}); env.isNotEmpty())
-        if (const auto d = juce::File(env).getChildFile(pass); d.isDirectory())
+        if (const auto d = passIn(juce::File(env)); d.isDirectory())
             return d;
     auto dir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
     for (int i = 0; i < 10 && dir.exists(); ++i, dir = dir.getParentDirectory())
-        if (const auto d = dir.getChildFile("corpus").getChildFile(pass); d.isDirectory())
+        if (const auto d = passIn(dir.getChildFile("corpus")); d.isDirectory())
             return d;
     return {};
 }
@@ -93,12 +112,7 @@ juce::String thousands(int n)
 
 MainComponent::MainComponent()
 {
-    juce::PropertiesFile::Options options;
-    options.applicationName = "PianoForge";
-    options.folderName = "PianoForge";
-    options.filenameSuffix = ".settings";
-    options.osxLibrarySubFolder = "Application Support";
-    properties.setStorageParameters(options);
+    properties.setStorageParameters(settingsOptions());
     auto* settings = properties.getUserSettings();
 
     // Audio: ask for 44.1 kHz (the corpus rate) and a small buffer; the saved setting takes precedence, and the
@@ -106,6 +120,39 @@ MainComponent::MainComponent()
     preferredAudio.sampleRate = 44100.0;
     preferredAudio.bufferSize = 128;
     const auto savedAudio = settings->getXmlValue("audio");
+#if JUCE_LINUX
+    pipewire = linuxaudio::pipewireClock();
+    pipewireTypeAvailable = [&] {
+        for (auto* t : deviceManager.getAvailableDeviceTypes())
+            if (t->getTypeName() == pipewire::kTypeName)
+                return true;
+        return false;
+    }();
+    const bool pipewireType = pipewireTypeAvailable;
+    // Saved before PianoForge had PipeWire's own device type: an ALSA device that was PipeWire's plug-in (the same
+    // sound, four blocks later) becomes it, once.
+    bool movedToPipeWire = false;
+    if (savedAudio != nullptr && !settings->getBoolValue("pipewireMigrated", false)) {
+        settings->setValue("pipewireMigrated", true);
+        if (pipewireType && savedAudio->getStringAttribute("deviceType") == "ALSA"
+            && savedAudio->getStringAttribute("audioOutputDeviceName").containsIgnoreCase("PipeWire")) {
+            savedAudio->setAttribute("deviceType", pipewire::kTypeName);
+            savedAudio->setAttribute("audioOutputDeviceName", pipewire::kDefaultOutput);
+            savedAudio->setAttribute("audioInputDeviceName", juce::String());
+            // A larger block was needed under ALSA's ring (it must hold two of the graph's): not here.
+            if (savedAudio->getIntAttribute("audioDeviceBufferSize") > preferredAudio.bufferSize)
+                savedAudio->setAttribute("audioDeviceBufferSize", preferredAudio.bufferSize);
+            settings->setValue("audio", savedAudio.get());
+            movedToPipeWire = true;
+        }
+    }
+    // Without PipeWire's type or its block asked for, the graph never runs at blocks shorter than its
+    // clock.min-quantum (32 by default; often set to 1024 for high sample rates), and through ALSA, JUCE's buffer
+    // (four blocks) must hold two of them: at first start, a block that does not underrun there.
+    if (savedAudio == nullptr && !(pipewireType && pipewire::forceQuantum().load())
+        && pipewire.floorQuantum() > 2 * preferredAudio.bufferSize)
+        preferredAudio.bufferSize = juce::nextPowerOfTwo(pipewire.floorQuantum() / 2);
+#endif
     const auto audioError = deviceManager.initialise(0, 2, savedAudio.get(), true, {}, &preferredAudio);
     if (savedAudio != nullptr)
         wantedAudio = std::make_unique<juce::XmlElement>(*savedAudio);
@@ -123,6 +170,12 @@ MainComponent::MainComponent()
                         + " meanwhile, trying it again",
                     theme::busy);
     }
+#if JUCE_LINUX
+    if (movedToPipeWire && !audioFallback)
+        showMessage("Audio: now straight into PipeWire, through its own device (no ALSA buffer in between, less latency); "
+                    "Audio to choose another",
+                    theme::good);
+#endif
     curveSettings = parseCurve(settings->getValue("velocityCurve"));
     velocityCurve.set(curveSettings);
     pedalSettings = parsePedalCurve(settings->getValue("pedalCurve"));
@@ -145,6 +198,31 @@ MainComponent::MainComponent()
     };
     roomPanel = std::make_unique<RoomPanel>(host.room, *settings);
     gesturesPanel = std::make_unique<GesturesPanel>(keyboardInput, *settings);
+    { // The desktop's side: kept awake while playing, the media controls, notifications, a MIDI input for other programs.
+        DesktopIntegration::Hooks h;
+        h.sounding = [this] {
+            const int voices = modalSelected() ? modal.activeVoices.load() : player.activeVoices.load();
+            return voices > 0 || host.filePlayer.isPlaying() || host.live.recording();
+        };
+        h.player = [this] { return playerState(); };
+        h.commands.play = [this] { if (playerBar != nullptr && !host.filePlayer.isPlaying()) playerBar->togglePlay(); };
+        h.commands.pause = [this] { if (playerBar != nullptr && host.filePlayer.isPlaying()) playerBar->togglePlay(); };
+        h.commands.playPause = [this] { if (playerBar != nullptr) playerBar->togglePlay(); };
+        h.commands.stop = [this] { if (playerBar != nullptr) playerBar->stop(); };
+        h.commands.next = [this] { if (playerBar != nullptr) playerBar->next(); };
+        h.commands.previous = [this] { if (playerBar != nullptr) playerBar->previous(); };
+        h.commands.seekBy = [this](std::int64_t us) { if (playerBar != nullptr) playerBar->nudge((double) us * 1.0e-6); };
+        h.commands.seekTo = [this](std::int64_t us) {
+            host.filePlayer.seek(std::max(0.0, (double) us * 1.0e-6));
+            if (playerBar != nullptr)
+                playerBar->refresh();
+        };
+        h.commands.open = [this](const std::string& path) { openMidiFile(juce::File(juce::String::fromUTF8(path.c_str()))); };
+        h.commands.raise = [this] { raiseWindow(); };
+        h.virtualInput = &softwareMidi;
+        desktop = std::make_unique<DesktopIntegration>(*settings, std::move(h));
+        desktopPanel = std::make_unique<DesktopPanel>(*settings, *desktop);
+    }
     streamLook = std::make_unique<StreamLook>(*settings);
     streamLookPanel = std::make_unique<StreamLookPanel>(*streamLook);
     streamLook->onChanged = [this] { streamLookPanel->refresh(); };
@@ -190,8 +268,8 @@ MainComponent::MainComponent()
         settingsPanel = std::make_unique<SettingsPanel>(
             std::array<juce::Component*, (size_t) SettingsPanel::Section::count> { enginePanel.get(), tonePanel.get(), roomPanel.get(),
                                                                                   audioPanel.get(), recordingPanel.get(), gesturesPanel.get(),
-                                                                                  streamLookPanel.get() },
-            std::array<bool, (size_t) SettingsPanel::Section::count> { false, false, false, false, false, false, true }, std::move(hooks));
+                                                                                  streamLookPanel.get(), desktopPanel.get() },
+            std::array<bool, (size_t) SettingsPanel::Section::count> { false, false, false, false, false, false, true, false }, std::move(hooks));
     }
     playerBar = std::make_unique<PlayerBar>(host.filePlayer, *settings);
     playerBar->onOpen = [this] { chooseMidiFile(); };
@@ -237,6 +315,7 @@ MainComponent::MainComponent()
     volume.setTextValueSuffix(" dB");
     volume.setTextBoxStyle(juce::Slider::TextBoxRight, false, 62, 20);
     volume.setDoubleClickReturnValue(true, 6.0);
+    volume.setTooltip("Volume (a double click: +6 dB)");
     // After the room, in the host: the OBS plugin's feed takes the sound before it (the stream keeps its level).
     volume.onValueChange = [this] { host.volume = juce::Decibels::decibelsToGain((float) volume.getValue()); };
     volume.onDragEnd = [this] { saveSettings(); };
@@ -290,9 +369,9 @@ MainComponent::MainComponent()
     setSize(1440, 640);
     constructed = true;
     startTimerHz(20);
-#if JUCE_WINDOWS
-    // Updates at start, if asked for (Help > Update settings), once the window is up. (The update is the Windows
-    // installer: elsewhere, PianoForge is updated as it was installed.)
+#if JUCE_WINDOWS || JUCE_LINUX
+    // Updates at start, if asked for (Help > Update settings), once the window is up: Windows' installer, or on Linux
+    // the Debian package, opened by the system's software installer. (macOS: as it was installed.)
     juce::Timer::callAfterDelay(4000, [safe = juce::Component::SafePointer<MainComponent>(this)] {
         if (auto* self = safe.getComponent())
             self->checkForUpdates(false);
@@ -484,7 +563,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
     case 6:
         menu.addItem(item(kShortcuts, "Keyboard shortcuts", "F1"));
         menu.addItem(item(kAbout, "About PianoForge"));
-#if JUCE_WINDOWS
+#if JUCE_WINDOWS || JUCE_LINUX
         menu.addSeparator();
         menu.addItem(item(kCheckUpdates, "Check for updates..."));
         menu.addItem(item(kUpdateSettings, "Update settings..."));
@@ -744,8 +823,14 @@ void MainComponent::offerUpdate(const UpdateChecker::Release& release)
                                      .withTitle("PianoForge " + release.version)
                                      .withMessage("PianoForge " + release.version + " is available; this is " PIANOFORGE_VERSION ".\n\n"
                                                   + (notes.isNotEmpty() ? notes + "\n\n" : juce::String()) + "Download and install" + size
+#if JUCE_LINUX
+                                                  + ": the package is checked (SHA-256), then the system's software installer "
+                                                    "opens it (PianoForge stays open; restart it afterwards). The settings, "
+                                                    "takes and recordings stay.")
+#else
                                                   + ": the installer is checked (SHA-256), then PianoForge closes, installs it and opens "
                                                     "again. The settings, takes and recordings stay.")
+#endif
                                      .withButton("Download and install", 1)
                                      .withButton("Skip this version", 2)
                                      .withButton("Later", 0)
@@ -801,6 +886,15 @@ void MainComponent::installUpdate(const UpdateChecker::Release& release)
                 self->showMessage("Update downloaded: stop the recording, then Help > Check for updates", theme::busy);
                 return;
             }
+#if JUCE_LINUX
+            // The package, to the system's software installer (xdg-open): it asks for the right to install it.
+            if (!destination.startAsProcess())
+                self->showMessage("Downloaded " + destination.getFullPathName() + ": open it to install", theme::busy);
+            else
+                self->showMessage("PianoForge's package opened in the software installer: restart PianoForge once installed",
+                                  theme::good);
+            return;
+#endif
             // The installer waits for PianoForge to have closed (it closes what uses its files), installs, and opens it.
             if (!destination.startAsProcess(UpdateChecker::installerArguments())) {
                 self->showMessage("Cannot start the installer " + destination.getFullPathName(), theme::bad);
@@ -1621,6 +1715,8 @@ void MainComponent::saveLastTake(std::int64_t before)
     const bool withModal = modalSelected() && profile != nullptr;
     if ((withModal ? profile == nullptr : bank == nullptr) || renderingTake.load()) {
         showMessage("Saved " + midiFile.getFileName() + " (" + summary + ")", theme::good);
+        if (desktop != nullptr)
+            desktop->saved("Saved " + midiFile.getFileName());
         return;
     }
     showMessage("Saved " + midiFile.getFileName() + " (" + summary + "); rendering the WAV...");
@@ -1965,6 +2061,9 @@ void MainComponent::noteAudioDevice()
     // device failed, or left the list: a driver reset, a DAC asleep, a virtual cable restarted): the choice is kept,
     // tried again, and taken back as soon as it can be.
     const bool byUser = settingsShowing(SettingsPanel::Section::audio);
+#if JUCE_LINUX
+    pipewire = linuxaudio::pipewireClock(); // (its settings may have changed meanwhile)
+#endif
     if (!byUser && !opensWanted()) {
         const bool wantedListed = [&] {
             for (auto* t : deviceManager.getAvailableDeviceTypes())
@@ -2108,9 +2207,26 @@ juce::StringArray MainComponent::deviceLines() const
     const double fs = d->getCurrentSampleRate();
     const int block = d->getCurrentBufferSizeSamples();
     const juce::String engine = host.rateFactor() > 1 ? ", engine at " + juce::String(host.currentRate() / 1000.0, 1) + " kHz" : juce::String();
-    return { d->getName() + " (" + d->getTypeName() + ")",
-             juce::String(fs / 1000.0, 1) + " kHz" + engine + ", blocks of " + juce::String(block) + " (" + juce::String(1000.0 * block / fs, 1)
-                 + " ms), output latency ~" + juce::String(1000.0 * (d->getOutputLatencyInSamples() + block) / fs, 1) + " ms" };
+    juce::String type = d->getTypeName();
+#if JUCE_LINUX
+    if (!linuxaudio::jackSetup().empty() && type == "JACK")
+        type << ": " << juce::String(linuxaudio::jackSetup());
+#endif
+    juce::StringArray lines { d->getName() + " (" + type + ")",
+                              juce::String(fs / 1000.0, 1) + " kHz" + engine + ", blocks of " + juce::String(block) + " ("
+                                  + juce::String(1000.0 * block / fs, 1) + " ms), output latency ~"
+                                  + juce::String(1000.0 * (d->getOutputLatencyInSamples() + block) / fs, 1) + " ms" };
+#if JUCE_LINUX
+    // (the dashboard's card shows the first two lines; Performance, all three)
+    if (const auto pw = pipewire::status(d); pw.has_value() && pw->graphBlock > 0)
+        lines.add("PipeWire's graph at " + juce::String(pw->graphBlock) + " samples, " + juce::String(pw->graphRate / 1000.0, 1)
+                  + " kHz" + (pw->forced ? juce::String(" (asked for)") : juce::String(" (its own)"))
+                  + (pw->xruns > 0 ? ", " + juce::String((int) pw->xruns) + " xruns" : juce::String()) + "; audio thread "
+                  + juce::String(audioScheduling.realtime ? "realtime" : audioScheduling.how.c_str()));
+    else if (realtimeThread != 0)
+        lines.add("Audio thread: " + juce::String(audioScheduling.how));
+#endif
+    return lines;
 }
 
 juce::StringArray MainComponent::adviceLines() const
@@ -2130,13 +2246,115 @@ juce::StringArray MainComponent::adviceLines() const
 #if JUCE_WINDOWS
     if (d->getTypeName() != "ASIO")
         tips.add("The lowest latency on Windows comes with ASIO (Audio > Audio, MIDI and streaming > Audio device type).");
+#elif JUCE_LINUX
+    if (realtimeThread != 0 && !audioScheduling.realtime)
+        tips.add("The audio thread runs at a normal priority (" + juce::String(audioScheduling.how)
+                 + "): any program can delay a block. rtkit (the package rtkit), or a realtime limit for your user (the "
+                   "audio group), gives it a realtime one; JACK does too.");
+    const bool forcing = pipewire::forceQuantum().load();
+    const bool alsaPipeWire = d->getTypeName() == "ALSA" && d->getName().containsIgnoreCase("PipeWire");
+    if (const auto pw = pipewire::status(d); pw.has_value() && pw->graphBlock > 0 && pw->graphRate > 0.0) {
+        // PipeWire's own device: what its graph does, measured.
+        const double graphMs = 1000.0 * pw->graphBlock / pw->graphRate, askedMs = 1000.0 * block / fs;
+        if (graphMs > 1.5 * askedMs)
+            tips.add(forcing ? "PipeWire runs its graph at " + juce::String(pw->graphBlock) + " samples (" + juce::String(graphMs, 1)
+                                   + " ms), not at the block asked for: another program forces its own (a DAW, or "
+                                     "clock.force-quantum set by a tool), or PipeWire keeps a floor above it."
+                             : "PipeWire runs its graph at its own block, " + juce::String(pw->graphBlock) + " samples ("
+                                   + juce::String(graphMs, 1) + " ms, its clock.min-quantum): \"Run PipeWire's graph at "
+                                     "PianoForge's block\" (Audio > PipeWire) brings it to the one chosen here.");
+        if (std::abs(pw->graphRate - fs) > 1.0)
+            tips.add("PipeWire's graph runs at " + juce::String(pw->graphRate / 1000.0, 1) + " kHz and converts PianoForge's "
+                     + juce::String(fs / 1000.0, 1) + " kHz (a little work and latency): at "
+                     + juce::String(pw->graphRate / 1000.0, 1) + " kHz here, nothing is converted.");
+    } else if ((alsaPipeWire || (d->getTypeName() == "JACK" && linuxaudio::pipewireJack())) && !forcing) {
+        // ALSA's or JACK's PipeWire devices, the graph's block not asked for: never under its clock.min-quantum.
+        if (const int quantum = pipewire.floorQuantum(); quantum > 256) {
+            const double ms = 1000.0 * quantum / (pipewire.rate > 0 ? pipewire.rate : 48000);
+            tips.add("PipeWire runs its graph at blocks of " + juce::String(quantum) + " samples at least (" + juce::String(ms, 1)
+                     + " ms, its clock.min-quantum), whatever is chosen here"
+                     + (d->getTypeName() == "ALSA" && 4 * block < 2 * quantum
+                            ? ", and ALSA blocks under " + juce::String(quantum / 2) + " underrun under it"
+                            : juce::String())
+                     + ": \"Run PipeWire's graph at PianoForge's block\" (Audio > PipeWire) lifts that.");
+        }
+    }
+    if (const auto out = pipewire::output(d); out.bluetooth && throughPipeWire(d))
+        tips.add(juce::String::fromUTF8(out.description.c_str())
+                 + " is a Bluetooth output: it adds 100 to 250 ms between key and sound, whatever the block. A wired output "
+                   "(headphones in the computer, an audio interface) plays at once.");
+    if (alsaPipeWire && pipewireTypeAvailable)
+        tips.add("ALSA's PipeWire device keeps four blocks of its own before PipeWire: the PipeWire device type (Audio > "
+                 "Audio device type) plays straight into PipeWire, three blocks earlier.");
+    else if (d->getTypeName() == "ALSA" && !alsaPipeWire && !pipewireTypeAvailable && !linuxaudio::pipewireJack())
+        tips.add("Through a sound server, the lowest latency comes with JACK (with PipeWire: install its JACK library, "
+                 "the package pipewire-jack, then choose JACK in Audio > Audio, MIDI and streaming).");
 #endif
     const auto& s = loadTracker.snapshot();
     if (s.dropouts > 0 && s.peakMinute < theme::kBusyLoad)
-        tips.add("Dropouts with a low load come from the driver or the system, not the engine: a larger buffer, or ASIO.");
+        tips.add("Dropouts with a low load come from the driver or the system, not the engine: a larger buffer, or "
+#if JUCE_WINDOWS
+                 "ASIO.");
+#elif JUCE_LINUX
+                 "PipeWire's device type with a realtime audio thread.");
+#else
+                 "another device.");
+#endif
     else if (s.peakMinute >= theme::kOverloaded)
         tips.add("The load reaches the overloaded zone: a lower sample rate, a larger buffer, or fewer resonances (Engine settings).");
     return tips;
+}
+
+desktop::PlayerState MainComponent::playerState() const
+{
+    desktop::PlayerState s;
+    const auto sequence = host.filePlayer.sequence();
+    if (sequence == nullptr)
+        return s;
+    s.hasFile = true;
+    s.playing = host.filePlayer.isPlaying();
+    s.path = sequence->path;
+    s.title = juce::File(juce::String::fromUTF8(sequence->path.c_str())).getFileNameWithoutExtension().toStdString();
+    s.lengthUs = (std::int64_t) (sequence->length * 1.0e6);
+    s.positionUs = (std::int64_t) (host.filePlayer.position() * 1.0e6);
+    s.rate = host.filePlayer.getSpeed();
+    s.canNext = playerBar != nullptr && playerBar->hasNext();
+    s.canPrevious = playerBar != nullptr && playerBar->hasPrevious();
+    return s;
+}
+
+void MainComponent::raiseWindow()
+{
+    if (auto* top = getTopLevelComponent()) {
+        if (auto* window = dynamic_cast<juce::DocumentWindow*>(top); window != nullptr && window->isMinimised())
+            window->setMinimised(false);
+        top->setVisible(true);
+        top->toFront(true);
+    }
+}
+
+void MainComponent::handleArguments(const juce::StringArray& arguments, bool fromAnotherStart)
+{
+    // A MIDI file ("Open with PianoForge"), the menu entry's actions (--record, --gallery).
+    for (const auto& argument : arguments) {
+        if (argument == "--record") {
+            if (!host.live.recording())
+                toggleRecording();
+        } else if (argument == "--gallery") {
+            openTakes();
+        } else if (const auto file = juce::File::getCurrentWorkingDirectory().getChildFile(argument.unquoted());
+                   file.existsAsFile() && file.hasFileExtension("mid;midi;smf;kar")) {
+            openMidiFile(file);
+        }
+    }
+    if (fromAnotherStart)
+        raiseWindow();
+}
+
+void MainComponent::setInstanceAnswering(bool answering)
+{
+    if (desktop != nullptr)
+        desktop->setInstanceAnswering(answering);
 }
 
 void MainComponent::refreshFeed()
@@ -2269,9 +2487,42 @@ void MainComponent::timerCallback()
     if (audioFallback && juce::Time::getMillisecondCounterHiRes() >= nextAudioRetry
         && (audioRetries < kQuickAudioRetries || silentForRetry()))
         retryWantedAudio();
+#if JUCE_LINUX
+    // JUCE's ALSA thread runs at a normal priority: anything else on the system can delay a block. Each new audio
+    // thread (a device opened, or opened again) is made realtime once it has played.
+    // rtkit grants a user a few requests per 20 s (PipeWire's own threads take theirs when a device opens, and a
+    // device is often opened twice at start): a refusal is tried again, every 5 s for a minute.
+    if (const auto tid = host.audioThread.load(std::memory_order_relaxed); tid != 0) {
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        if (tid != realtimeThread) { // a new thread (the device opened again): the old one's scheduling no longer says
+            realtimeThread = tid;
+            audioScheduling = {};
+            realtimeTries = 0;
+            nextRealtimeTry = now;
+        }
+        if (!audioScheduling.realtime && realtimeTries < 13 && now >= nextRealtimeTry) {
+            audioScheduling = linuxaudio::makeRealtime(tid);
+            ++realtimeTries;
+            nextRealtimeTry = now + 5000.0;
+        }
+    }
+#endif
 
     if (streamLook != nullptr && ++streamLookTicks % 2 == 0) // the stream look, with OBS, ten times a second
         streamLook->poll();
+    if (desktop != nullptr && ++desktopTicks % 10 == 0) { // the desktop, twice a second
+        desktop->tick();
+#if JUCE_LINUX
+        // An output turned Bluetooth (headphones connected, the system's default changed): said once.
+        auto* device = deviceManager.getCurrentAudioDevice();
+        const auto out = throughPipeWire(device) ? pipewire::output(device) : pipewire::Output {};
+        if (out.bluetooth && !outputWasBluetooth)
+            showMessage("Audio: " + juce::String::fromUTF8(out.description.c_str())
+                            + " is Bluetooth: 100 to 250 ms between key and sound, whatever the block. A wired output plays at once.",
+                        theme::busy);
+        outputWasBluetooth = out.bluetooth;
+#endif
+    }
     drained.clear(); // take capture: move what reached the engine into the session record
     host.drainRecorded(drained);
     takes.add(drained, host.currentSegment(), host.currentRate());
@@ -2279,6 +2530,8 @@ void MainComponent::timerCallback()
         finishRecording();
     for (const auto& report : exporter.takeReports()) {
         showMessage(report.text, report.ok ? theme::good : theme::bad);
+        if (report.ok && desktop != nullptr)
+            desktop->saved(report.text);
         if (galleryPanel != nullptr)
             galleryPanel->refresh();
     }
@@ -2378,20 +2631,30 @@ void MainComponent::resized()
     bar.removeFromLeft(12);
     recordButton.setBounds(bar.removeFromLeft(130).withSizeKeepingCentre(130, 30));
     bar.removeFromLeft(16);
+    // What is left for the volume and the velocity: on a narrow window the load meter gives way first (down to 110),
+    // then their labels (their tooltips stay), never overlapping the buttons.
+    const int fixedRight = 170 + 14 + 16 + 70 + 8 + 70 + 12; // level, pedal, room and their gaps
+    const int labels = 54 + 58, sliderMin = 120;
+    const int meterWidth = juce::jlimit(110, 250, bar.getWidth() - fixedRight - labels - 10 - 2 * sliderMin);
+    const bool showLabels = bar.getWidth() - fixedRight - meterWidth - 10 - 2 * sliderMin >= labels;
     auto level = bar.removeFromRight(170);
     levelMeter.setBounds(level.withSizeKeepingCentre(170, 26));
     bar.removeFromRight(14);
-    loadMeter.setBounds(bar.removeFromRight(250));
+    loadMeter.setBounds(bar.removeFromRight(meterWidth));
     bar.removeFromRight(16);
     pedalButton.setBounds(bar.removeFromRight(70).withSizeKeepingCentre(70, 30));
     bar.removeFromRight(8);
     roomButton.setBounds(bar.removeFromRight(70).withSizeKeepingCentre(70, 30));
     bar.removeFromRight(12);
-    const int sliderWidth = juce::jmax(140, (bar.getWidth() - 120) / 2);
-    volumeLabel.setBounds(bar.removeFromLeft(54));
+    volumeLabel.setVisible(showLabels);
+    velocityLabel.setVisible(showLabels);
+    const int sliderWidth = juce::jmax(80, (bar.getWidth() - (showLabels ? labels : 0) - 10) / 2);
+    if (showLabels)
+        volumeLabel.setBounds(bar.removeFromLeft(54));
     volume.setBounds(bar.removeFromLeft(sliderWidth).withSizeKeepingCentre(sliderWidth, 28));
     bar.removeFromLeft(10);
-    velocityLabel.setBounds(bar.removeFromLeft(58));
+    if (showLabels)
+        velocityLabel.setBounds(bar.removeFromLeft(58));
     velocity.setBounds(bar.removeFromLeft(sliderWidth).withSizeKeepingCentre(sliderWidth, 28));
 
     // Status bar.

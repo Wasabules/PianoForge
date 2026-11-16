@@ -53,6 +53,10 @@ public:
     void next(bool fromEnd = false);
     void previous();
     bool autoPlays() const { return autoButton.getToggleState(); }
+    /// Whether next() and previous() lead somewhere (the desktop's media controls show it); the file loaded.
+    bool hasNext() const { return playlistIndex >= 0 && playlistIndex + 1 < (int) playlist.size(); }
+    bool hasPrevious() const { return playlistIndex >= 0; } // (the previous file, or the start of this one)
+    juce::File file() const { return currentFile(); }
 
     void togglePlay();
     void stop();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "LinuxAudio.h"
 #include "LiveRecorder.h"
 #include "MidiFilePlayer.h"
 #include "MirrorOutput.h"
@@ -32,6 +33,7 @@ struct AudioLoad {
     std::atomic<float> peak { 0.0f };           // the highest since the interface last took it (exchange)
     std::atomic<std::uint32_t> lateBlocks { 0 }; // callbacks longer than their block: the device missed audio
     std::atomic<std::uint32_t> gaps { 0 };      // callbacks arriving more than 1.5 blocks after the previous one
+                                                // (Linux: more than the device's buffer, see gapAllowance)
     std::atomic<std::uint64_t> callbacks { 0 };
     std::atomic<double> loadSum { 0.0 };        // the loads added up (the interface averages its differences)
     std::atomic<double> blockSeconds { 0.0 };   // the time one block lasts
@@ -208,6 +210,8 @@ public:
     }
     std::uint32_t recordOverflows() const noexcept { return overflows.load(); }
     AudioLoad load;
+    /// Linux: the kernel id of the thread running the callbacks (JUCE's ALSA thread, or JACK's), 0 before the first.
+    std::atomic<std::int64_t> audioThread { 0 };
     /// Message thread: the dropout counters back to zero.
     void resetDropouts() noexcept
     {
@@ -217,6 +221,13 @@ public:
 
     void audioDeviceAboutToStart(juce::AudioIODevice* d) override
     {
+#if JUCE_LINUX
+        // ALSA keeps a ring buffer (JUCE's: four blocks) that PipeWire's graph empties a quantum at a time: when the
+        // quantum is longer than the block, the callbacks come in bursts (two, then a wait of two blocks). Only a gap
+        // longer than what the device holds is a dropout.
+        gapAllowance.store((d->getOutputLatencyInSamples() + d->getCurrentBufferSizeSamples()) / std::max(1.0, d->getCurrentSampleRate()),
+                           std::memory_order_relaxed);
+#endif
         start(d->getCurrentSampleRate(), d->getCurrentBufferSizeSamples());
     }
 
@@ -230,6 +241,9 @@ public:
                                           const juce::AudioIODeviceCallbackContext&) override
     {
         const auto startTicks = juce::Time::getHighResolutionTicks(); // QueryPerformanceCounter: no system call
+#if JUCE_LINUX
+        audioThread.store(linuxaudio::threadId(), std::memory_order_relaxed); // the interface makes it realtime
+#endif
         callbackSeconds.store(juce::Time::getMillisecondCounterHiRes() * 0.001, std::memory_order_relaxed);
         callbackElapsed.store(samplesElapsed, std::memory_order_relaxed);
         const int k = factor;
@@ -440,7 +454,8 @@ private:
         if (used > load.peak.load(std::memory_order_relaxed))
             load.peak.store(used, std::memory_order_relaxed);
         // A late block delays the next callback too: that gap is the same dropout, counted once.
-        if (lastCallbackTicks != 0 && !lastWasLate && (double) (startTicks - lastCallbackTicks) * tick > 1.5 * block + 0.002)
+        const double allowed = std::max(1.5 * block, gapAllowance.load(std::memory_order_relaxed)) + 0.002;
+        if (lastCallbackTicks != 0 && !lastWasLate && (double) (startTicks - lastCallbackTicks) * tick > allowed)
             load.gaps.fetch_add(1, std::memory_order_relaxed);
         lastWasLate = used > 1.0f;
         if (lastWasLate)
@@ -523,6 +538,7 @@ private:
     std::atomic<double> callbackSeconds { 0.0 };     // the last callback's start (positionAt)
     std::atomic<std::int64_t> callbackElapsed { 0 }; // and the session position then
     std::int64_t lastCallbackTicks = 0; // audio thread
+    std::atomic<double> gapAllowance { 0.0 }; // Linux: the longest gap between callbacks the device's buffer covers, s
     bool lastWasLate = false;           // audio thread
     std::atomic<double> recordingRate { 0.0 }, device { 0.0 };
     // The engine below the device's rate (audio thread, set by start()).

@@ -42,9 +42,16 @@ public:
     /// https, a file, or http to this computer.
     static bool addressAllowed(const juce::String& address);
     /// A manifest or a GitHub release (JSON text) read from `address`, against the version `current`.
-    static Result parse(const juce::String& json, const juce::String& current, const juce::String& address);
+    /// The end of this system's package's name: Windows' installer ("-setup.exe"), a Debian package on Linux
+    /// ("_amd64.deb", "_arm64.deb"); empty where PianoForge has none.
+    static juce::String packageSuffix();
+    /// `suffix`: the package looked for (a GitHub release's asset; in PianoForge's own manifest, "url" for Windows'
+    /// installer, "deb": { "url", "sha256", "size" } for the Debian package).
+    static Result parse(const juce::String& json, const juce::String& current, const juce::String& address,
+                        const juce::String& suffix = packageSuffix());
     /// Reads `address`, then parse() (and the SHA-256 asset of a GitHub release without a digest).
-    static Result fetch(const juce::String& address, const juce::String& current, int timeoutMs = 10000);
+    static Result fetch(const juce::String& address, const juce::String& current, int timeoutMs = 10000,
+                        const juce::String& suffix = packageSuffix());
     /// Downloads the installer to `destination`, checks its size and SHA-256; `progress` (0..1) returns false to
     /// cancel. An error, or empty. Nothing is left at `destination` unless it checks out.
     static juce::String download(const Release& release, const juce::File& destination,

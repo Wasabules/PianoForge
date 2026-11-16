@@ -21,6 +21,7 @@ juce::String SettingsPanel::title(Section s)
     case Section::recording: return "Recording and naming";
     case Section::gestures: return "Piano gestures";
     case Section::streamLook: return "Stream look (OBS)";
+    case Section::desktop: return "Desktop";
     case Section::count: break;
     }
     return {};

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AudioDevices.h"
+#include "DesktopIntegration.h"
 #include "AudioExport.h"
 #include "AudioHost.h"
 #include "EngineSwitch.h"
@@ -13,6 +15,7 @@
 #include "ui/StreamLookPanel.h"
 #include "StreamLook.h"
 #include "ui/AudioPanel.h"
+#include "ui/DesktopPanel.h"
 #include "ui/EnginePanel.h"
 #include "ui/TonePanel.h"
 #include "ui/SettingsPanel.h"
@@ -64,6 +67,10 @@ public:
     /// Opens a MIDI file in the player, `list` the files previous / next go through (none: the MIDI files of its
     /// folder); with auto-play, it starts.
     void openMidiFile(const juce::File& file, std::vector<juce::File> list = {});
+    /// The command line's arguments, at start or from a later start (SingleInstance.h): MIDI files, --record, --gallery.
+    void handleArguments(const juce::StringArray& arguments, bool fromAnotherStart);
+    /// Whether this PianoForge answers later starts (shown in Settings > Desktop).
+    void setInstanceAnswering(bool answering);
     bool loadMidi(const juce::File& file); // the file into the player (the list as it is)
 
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
@@ -146,7 +153,7 @@ private:
     juce::String midiInputs() const;
 
     juce::ApplicationProperties properties;
-    juce::AudioDeviceManager deviceManager;
+    DeviceManager deviceManager; // JUCE's, with PipeWire's own type first on Linux (AudioDevices.h)
     ReferencePlayer player;
     pf::ModalEngine modal;
     EngineSwitch engines { player, modal };
@@ -184,9 +191,23 @@ private:
     std::unique_ptr<GesturesPanel> gesturesPanel;
     std::unique_ptr<StreamLook> streamLook;           // the OBS keyboard's look, shared with OBS
     std::unique_ptr<StreamLookPanel> streamLookPanel; // its window's content
-    int streamLookTicks = 0;
+    int streamLookTicks = 0, desktopTicks = 0;
+    bool outputWasBluetooth = false; // Linux: the output PipeWire plays on was Bluetooth at the last look
     std::unique_ptr<GalleryPanel> galleryPanel;
     std::unique_ptr<RecordingPanel> recordingPanel; // Settings > Recording and naming
+    /// MIDI from other programs (the virtual input "PianoForge"): as sent, no curve, no gesture.
+    struct SoftwareMidi final : public juce::MidiInputCallback {
+        explicit SoftwareMidi(juce::MidiMessageCollector& c) : collector(c) {}
+        void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& message) override
+        {
+            collector.addMessageToQueue(message);
+        }
+        juce::MidiMessageCollector& collector;
+    } softwareMidi { host.collector };
+    std::unique_ptr<DesktopIntegration> desktop;       // kept awake, media controls, notifications, virtual input
+    std::unique_ptr<DesktopPanel> desktopPanel;        // Settings > Desktop
+    desktop::PlayerState playerState() const;
+    void raiseWindow();
     void openTakes();
     void toggleHeadphones();
     // Updates (Help menu): where to look and whether to look at start are settings; without an address, nothing is
@@ -292,6 +313,14 @@ private:
     juce::String fallbackType, fallbackName, lastDeviceType;
     bool audioFallback = false;
     int audioRetries = 0;
+    // Linux: the audio thread made realtime (each new one: a device opened again starts another), and how; PipeWire's
+    // clock (read at start and when the device changes).
+    std::int64_t realtimeThread = 0;
+    int realtimeTries = 0;
+    double nextRealtimeTry = 0.0;
+    linuxaudio::Scheduling audioScheduling;
+    linuxaudio::PipeWireClock pipewire;
+    bool pipewireTypeAvailable = false; // PipeWire's own device type is offered (PipeWireAudio.h)
     static constexpr int kQuickAudioRetries = 8; // then slow ones, in silence (silentForRetry)
     bool wantedWasListed = false;                // the device asked for, in its type's list at the last change
     bool silentForRetry() const;

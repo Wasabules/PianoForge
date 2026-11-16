@@ -38,7 +38,14 @@ private:
     juce::ToggleButton limiterOn { "Safety limiter at -1 dBFS" };
     juce::Label limiterStatus;
     float limiterDeepest = 0.0f;
-    juce::Rectangle<int> deviceArea, rateArea, limiterArea, mirrorArea, feedArea;
+    // Linux: PipeWire's block asked for by the devices that play through it, and what its graph does.
+    juce::ToggleButton pipewireForce { "Run PipeWire's graph at PianoForge's block while it plays" };
+    juce::Label pipewireStatus, pipewireNote;
+    // Linux: Flathub's OBS, as the plugin needs it (ObsFlatpak.h).
+    juce::Label obsFlatpakStatus;
+    juce::TextButton obsFlatpakAllow { "Let OBS see PianoForge" };
+    void checkObsFlatpak(); // in the background; the answer shown when it comes
+    juce::Rectangle<int> deviceArea, rateArea, limiterArea, mirrorArea, feedArea, pipewireArea;
 };
 
 } // namespace pf::app

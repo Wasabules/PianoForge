@@ -1515,22 +1515,30 @@ int runSelfTest(const juce::StringArray& arguments)
                                  + "\", \"size\": " + juce::String(size) + ", \"notes\": \"Test\" }");
             return juce::URL(file).toString(false);
         };
-        const auto found = UpdateChecker::fetch(manifest(sum, setup.getSize()), PIANOFORGE_VERSION);
+        const auto found = UpdateChecker::fetch(manifest(sum, setup.getSize()), PIANOFORGE_VERSION, 10000, "-setup.exe");
         const auto saved = dir.getChildFile("download").getChildFile(found.release.fileName());
         const auto downloaded = found.ok ? UpdateChecker::download(found.release, saved) : found.error;
         const bool good = found.ok && found.newer && downloaded.isEmpty() && saved.existsAsFile() && UpdateChecker::sha256Of(saved) == sum;
         saved.deleteFile();
         auto wrongSum = sum.replaceSection(0, 1, sum[0] == 'a' ? "b" : "a");
-        const auto badSum = UpdateChecker::download(UpdateChecker::fetch(manifest(wrongSum, setup.getSize()), "0.1.0").release, saved);
+        const auto badSum = UpdateChecker::download(UpdateChecker::fetch(manifest(wrongSum, setup.getSize()), "0.1.0", 10000, "-setup.exe").release, saved);
         const bool refusedSum = badSum.contains("SHA-256") && !saved.exists() && !saved.getSiblingFile(saved.getFileName() + ".part").exists();
-        const auto badSize = UpdateChecker::download(UpdateChecker::fetch(manifest(sum, setup.getSize() - 1), "0.1.0").release, saved);
+        const auto badSize = UpdateChecker::download(UpdateChecker::fetch(manifest(sum, setup.getSize() - 1), "0.1.0", 10000, "-setup.exe").release, saved);
         const bool refusedSize = badSize.isNotEmpty() && !saved.exists();
         const auto github = UpdateChecker::parse(
             "{\"tag_name\":\"v1.2.3\",\"body\":\"Notes\",\"assets\":[{\"name\":\"PianoForge-1.2.3-setup.exe\",\"size\":42,"
             "\"browser_download_url\":\"https://github.com/o/r/releases/download/v1.2.3/PianoForge-1.2.3-setup.exe\","
-            "\"digest\":\"sha256:" + sum + "\"}]}", "1.2.2", "https://api.github.com/repos/o/r/releases/latest");
+            "\"digest\":\"sha256:" + sum + "\"}]}", "1.2.2", "https://api.github.com/repos/o/r/releases/latest", "-setup.exe");
+        // The same release with Windows' installer and the Debian package: each system finds its own.
+        const auto debian = UpdateChecker::parse(
+            "{\"tag_name\":\"v1.2.3\",\"assets\":[{\"name\":\"PianoForge-1.2.3-setup.exe\",\"browser_download_url\":"
+            "\"https://github.com/o/r/releases/download/v1.2.3/PianoForge-1.2.3-setup.exe\",\"digest\":\"sha256:" + sum + "\"},"
+            "{\"name\":\"pianoforge_1.2.3_amd64.deb\",\"size\":7,\"browser_download_url\":"
+            "\"https://github.com/o/r/releases/download/v1.2.3/pianoforge_1.2.3_amd64.deb\",\"digest\":\"sha256:" + sum + "\"}]}",
+            "1.2.2", "https://api.github.com/repos/o/r/releases/latest", "_amd64.deb");
         const bool githubOk = github.ok && github.newer && github.release.version == "1.2.3" && github.release.sha256 == sum
-                           && github.release.size == 42 && github.release.fileName() == "PianoForge-1.2.3-setup.exe";
+                           && github.release.size == 42 && github.release.fileName() == "PianoForge-1.2.3-setup.exe"
+                           && debian.ok && debian.release.size == 7 && debian.release.fileName() == "pianoforge_1.2.3_amd64.deb";
         const bool httpRefused = !UpdateChecker::addressAllowed("http://example.com/latest.json")
                               && !UpdateChecker::fetch("http://example.com/latest.json", "0.1.0").ok;
         r.check(versions && good && refusedSum && refusedSize && githubOk && httpRefused,

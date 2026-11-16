@@ -63,9 +63,22 @@ juce::String UpdateChecker::Release::fileName() const
     auto name = installer.fromLastOccurrenceOf("/", false, false).upToFirstOccurrenceOf("?", false, false);
     name = juce::URL::removeEscapeChars(name);
     name = juce::File::createLegalFileName(name);
-    if (!name.endsWithIgnoreCase(".exe"))
+    if (!name.endsWithIgnoreCase(".exe") && !name.endsWithIgnoreCase(".deb"))
         name = "PianoForge-" + juce::File::createLegalFileName(version) + "-setup.exe";
     return name;
+}
+
+juce::String UpdateChecker::packageSuffix()
+{
+#if JUCE_WINDOWS
+    return "-setup.exe";
+#elif JUCE_LINUX && (defined(__aarch64__) || defined(__arm64__))
+    return "_arm64.deb";
+#elif JUCE_LINUX
+    return "_amd64.deb";
+#else
+    return {};
+#endif
 }
 
 int UpdateChecker::compareVersions(const juce::String& a, const juce::String& b)
@@ -98,8 +111,14 @@ bool UpdateChecker::addressAllowed(const juce::String& address)
         || address.startsWithIgnoreCase("http://127.0.0.1");
 }
 
-UpdateChecker::Result UpdateChecker::parse(const juce::String& text, const juce::String& current, const juce::String& address)
+UpdateChecker::Result UpdateChecker::parse(const juce::String& text, const juce::String& current, const juce::String& address,
+                                           const juce::String& suffix)
 {
+    if (suffix.isEmpty()) {
+        Result none;
+        none.error = "PianoForge has no package for this system";
+        return none;
+    }
     Result r;
     const auto json = juce::JSON::parse(text);
     if (!json.isObject()) {
@@ -116,7 +135,7 @@ UpdateChecker::Result UpdateChecker::parse(const juce::String& text, const juce:
             juce::String installerName;
             for (const auto& asset : *assets) {
                 const auto name = asset["name"].toString();
-                if (name.endsWithIgnoreCase("-setup.exe") && release.installer.isEmpty()) {
+                if (name.endsWithIgnoreCase(suffix) && release.installer.isEmpty()) {
                     installerName = name;
                     release.installer = asset["browser_download_url"].toString();
                     release.size = asset.hasProperty("size") ? (juce::int64) asset["size"] : -1;
@@ -130,12 +149,13 @@ UpdateChecker::Result UpdateChecker::parse(const juce::String& text, const juce:
                     if (asset["name"].toString().equalsIgnoreCase(installerName + ".sha256"))
                         release.sha256Address = asset["browser_download_url"].toString();
         }
-    } else { // PianoForge's own manifest
+    } else { // PianoForge's own manifest: Windows' installer at its top, a Debian package under "deb"
         release.version = json["version"].toString().trim();
         release.notes = json["notes"].toString();
-        release.installer = resolve(json["url"].toString().trim(), address);
-        release.sha256 = json["sha256"].toString().trim().toLowerCase();
-        release.size = json.hasProperty("size") ? (juce::int64) json["size"] : -1;
+        const auto package = suffix.endsWithIgnoreCase(".deb") ? json["deb"] : json;
+        release.installer = resolve(package["url"].toString().trim(), address);
+        release.sha256 = package["sha256"].toString().trim().toLowerCase();
+        release.size = package.hasProperty("size") ? (juce::int64) package["size"] : -1;
     }
     if (release.version.isEmpty() || !release.version.containsAnyOf("0123456789")) {
         r.error = "no version in the manifest";
@@ -159,14 +179,15 @@ UpdateChecker::Result UpdateChecker::parse(const juce::String& text, const juce:
     return r;
 }
 
-UpdateChecker::Result UpdateChecker::fetch(const juce::String& address, const juce::String& current, int timeoutMs)
+UpdateChecker::Result UpdateChecker::fetch(const juce::String& address, const juce::String& current, int timeoutMs,
+                                           const juce::String& suffix)
 {
     Result r;
     int status = 0;
     auto in = open(address.trim(), timeoutMs, &status, r.error);
     if (in == nullptr)
         return r;
-    r = parse(in->readEntireStreamAsString(), current, address.trim());
+    r = parse(in->readEntireStreamAsString(), current, address.trim(), suffix);
     if (r.ok && r.release.sha256.isEmpty()) { // GitHub, the SHA-256 in an asset of its own
         juce::String error;
         if (auto sum = open(r.release.sha256Address, timeoutMs, &status, error); sum != nullptr) {

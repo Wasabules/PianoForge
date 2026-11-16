@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.pianoforge.PianoForge</id>
+  <name>PianoForge</name>
+  <summary>A concert grand piano played from a MIDI keyboard</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <developer id="org.pianoforge">
+    <name>PianoForge</name>
+  </developer>
+  <description>
+    <p>
+      PianoForge plays a concert grand piano from a MIDI keyboard: a modal engine calibrated on a sampled grand, its
+      unison strings and their beating, the soundboard, the dampers and the sympathetic resonance, in a room heard from
+      the keyboard or further away, on speakers or headphones.
+    </p>
+    <ul>
+      <li>About 5 ms from key to sound through PipeWire, its block chosen in the application</li>
+      <li>Every take kept; recordings in WAV, FLAC, MP3 and Opus, named and filed in a gallery</li>
+      <li>A MIDI file player that plays with the keyboards, and the desktop's media controls</li>
+      <li>Voicing, touch, tuning and temperaments, a technician's settings</li>
+      <li>A VST3 and LV2 instrument for hosts, and a plugin for OBS Studio</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">org.pianoforge.PianoForge.desktop</launchable>
+  <provides>
+    <binary>pianoforge</binary>
+    <mediatype>audio/midi</mediatype>
+  </provides>
+  <categories>
+    <category>Audio</category>
+    <category>Music</category>
+  </categories>
+  <keywords>
+    <keyword>piano</keyword>
+    <keyword>MIDI</keyword>
+    <keyword>instrument</keyword>
+  </keywords>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-16">
+      <description>
+        <p>The first Linux release: PipeWire's own audio device, the desktop's media controls, the OBS plugin for
+        Flathub's OBS.</p>
+      </description>
+    </release>
+  </releases>
+</component>

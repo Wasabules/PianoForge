@@ -21,6 +21,19 @@ int runListAudio(const juce::StringArray& arguments);
 int runAudioRestore(const juce::StringArray& arguments);
 /// --audio-hold <seconds>: holds the saved audio device that long (to test a busy driver at start).
 int runAudioHold(const juce::StringArray& arguments);
+/// An output opened as the application opens it, measured while it plays silence:
+///   PianoForge --audio-check [--type <PipeWire|ALSA|JACK...>] [--device <name>] [--rate <Hz>] [--block <samples>]
+///                            [--seconds <s>] [--force | --no-force] [<report file>]
+/// (without --type: the saved device). Reports the device, its rate and block, the callbacks' blocks and the longest
+/// wait between them, the latency it reports, its xruns, its thread's scheduling (made realtime as the application
+/// does), and on PipeWire its graph's block, rate and xruns. 0 if it opened and played.
+int runAudioCheck(const juce::StringArray& arguments);
+/// What the desktop offers PianoForge (Settings > Desktop), each tried:
+///   PianoForge --desktop-check [--hold <seconds>] [--notify] [<report file>]
+/// the screen kept on and the performance profile held for a few seconds (to be seen from outside), the media
+/// controls registered, a notification (--notify), a virtual MIDI input, Flathub's OBS as the plugin needs it, and the
+/// output PipeWire plays on (Bluetooth or not).
+int runDesktopCheck(const juce::StringArray& arguments);
 
 /// End-to-end check of the stream output through a virtual cable, without the main device: a quiet 1 kHz tone
 /// (-40 dBFS) produced at 44.1 kHz in 128-sample blocks goes out through the mirror to <playback device>, and is

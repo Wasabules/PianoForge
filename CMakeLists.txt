@@ -57,3 +57,8 @@ endif()
 if(WIN32)
     add_subdirectory(installer)
 endif()
+
+# Linux packages (.deb, .rpm) from the install rules: cpack -G DEB in the build folder (cmake/packaging.cmake).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    include(cmake/packaging.cmake)
+endif()

@@ -26,7 +26,7 @@ struct SoundFormatInfo {
 
 const std::vector<SoundFormatInfo>& soundFormats();
 const SoundFormatInfo& infoFor(SoundFormat format);
-/// Whether this system can write it (MP3: Windows' Media Foundation encoder).
+/// Whether this system can write it (MP3: Media Foundation on Windows, LAME elsewhere when installed).
 bool canWrite(SoundFormat format);
 
 /// Converts a WAV file into `target` in `format`. `progress` (0 to 1) and `cancel` may be null. A failure or a

@@ -61,7 +61,7 @@ juce::Result convertSound(const juce::File& source, const juce::File& target, So
         return juce::Result::fail("cannot create " + target.getParentDirectory().getFullPathName());
     target.deleteFile();
 
-    // The writer: JUCE's for WAV, FLAC and Opus; Media Foundation's for MP3.
+    // The writer: JUCE's for WAV, FLAC and Opus; Mp3Encoder's for MP3 (Media Foundation, or LAME).
     std::unique_ptr<juce::AudioFormatWriter> writer;
     Mp3Encoder mp3;
     int factor = 1;

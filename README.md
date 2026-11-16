@@ -45,6 +45,57 @@ sudo apt install ninja-build libasound2-dev libfreetype-dev libfontconfig1-dev l
   libxinerama-dev libxcursor-dev libxcomposite-dev libxext-dev libxrender-dev libgl1-mesa-dev
 ```
 
+On Linux, installed into a prefix, PianoForge gets its menu entry (which opens MIDI files too) and its icons:
+
+```
+cmake --install build/linux-gcc --component pianoforge --prefix ~/.local     # or /usr/local, as root
+```
+
+- Audio, from the lowest latency (Audio > Audio device type):
+  - **PipeWire** (Ubuntu, Fedora and most desktops today; the default where it runs): PianoForge's own PipeWire
+    device, Linux's counterpart of ASIO. The sound goes straight into PipeWire's graph, rendered in PipeWire's
+    realtime thread at the block chosen, which the graph is asked to run at while PianoForge plays
+    (`node.force-quantum`: under PipeWire's own minimum, `clock.min-quantum`, as well). Measured on a laptop's built-in
+    output: 128 samples, about 5 ms from key to sound; 64, about 3 ms; 32 underruns there. Any output: the system's
+    default (followed when it changes) or a sink by name. Nothing to install: libpipewire (0.3.64 or later) is loaded
+    at run time, its headers taken from the system (libpipewire-0.3-dev) or fetched at configure time.
+  - **JACK**: PipeWire's once its JACK library is installed (Debian and Ubuntu: `sudo apt install pipewire-jack`;
+    Fedora and Arch install it as the system's libjack), loaded by PianoForge itself (no `pw-jack`), its block chosen
+    the same way; or a JACK server's (`PIANOFORGE_JACK_LIBRARY` names its libjack). JACK's headers come from the
+    system (libjack-jackd2-dev) or are fetched; `-DPIANOFORGE_JACK=OFF` leaves JACK out.
+  - **ALSA**: its PipeWire device keeps four blocks of its own before PipeWire (about 8 ms more at 128), its block
+    asked of the graph too (`PIPEWIRE_ALSA`); its other devices are the sound cards, which PipeWire holds while it
+    runs. JUCE runs its ALSA thread at a normal priority: PianoForge makes it realtime, by the user's own limit (the
+    audio group's `rtprio`) or else through rtkit, as PipeWire does.
+
+  Audio > PipeWire turns the asking off (the graph then keeps its own block, never under its `clock.min-quantum`)
+  and shows what the graph does (its block, its rate, the latency to the device, its xruns); Audio > Performance
+  advises. Settings saved with ALSA's PipeWire device move to the PipeWire device once, the block brought to 128.
+  `PianoForge --audio-check [--type PipeWire|ALSA|JACK] [--device ...] [--rate ...] [--block ...] [report]` opens an
+  output as the application does and measures it (blocks, waits, latency, xruns, the audio thread).
+- MP3: LAME, loaded when it is installed (Debian and Ubuntu `libmp3lame0`, Fedora `lame-libs`, Arch `lame`).
+- Settings in `~/.config/PianoForge` (`$XDG_CONFIG_HOME`), recordings and takes in the XDG documents folder
+  (`~/Documents/PianoForge`), what is deleted to the desktop's trash.
+- Packages: `cpack -G DEB` (or `RPM`) in the build folder makes `pianoforge_<version>_amd64.deb` (or the .rpm): the
+  application, its menu entry (with "Start a recording" and "Recordings and takes"), icons and AppStream metadata
+  (`org.pianoforge.PianoForge`), and the VST3 and LV2 plugins in `/usr/lib/vst3` and `/usr/lib/lv2`
+  (`cmake/packaging.cmake`). A package asks for the C library it was built against: build it on the oldest
+  distribution aimed at (the CI makes the .deb on Ubuntu 24.04).
+- Settings > Desktop, each part a setting, on by default:
+  - the interface's size (automatic, or 100 to 200 %: XWayland may blur or shrink it under a 125 or 150 % desktop);
+  - while playing (a note in the last ten minutes, a MIDI file, a recording): the screen kept on and no suspend (the
+    desktop portal; a MIDI keyboard is no activity to the desktop), and the "performance" power profile
+    (power-profiles-daemon, given back after ten minutes without a note or when PianoForge closes);
+  - the MIDI player in the desktop's media controls (MPRIS: media keys, the shell's widget, a headset's buttons);
+  - a notification when a recording is saved while PianoForge is in the background;
+  - one PianoForge: a MIDI file opened from the file manager, or the menu's actions, go to the one running (a socket
+    of its own, per user and settings folder);
+  - a MIDI input named "PianoForge" for other programs (a DAW, a score editor, a sequencer): their notes as sent.
+  `PianoForge --desktop-check [--hold <s>] [--notify]` tries each of them.
+- A Bluetooth output (headphones, a speaker) adds 100 to 250 ms whatever the block: PianoForge says so (the output's
+  name in Audio and in Audio > Performance). Only one PianoForge feeds OBS at a time (a lock on the feed, let go even
+  by a crash).
+
 Engine tests (no corpus needed) and headless self-test of the application (reference player, and the modal
 engine when the corpus state has a profile):
 
@@ -58,20 +109,24 @@ PianoForge.exe --selftest corpus/reference/noire-dry/single-notes selftest.txt
 Windows is where PianoForge is used and tested every day. The code is written for Linux and macOS too, and the
 continuous integration (`.github/workflows/build.yml`: Windows, Ubuntu, macOS on Apple silicon, the forge's tests,
 the WebAssembly build) builds and tests it on all three when started by hand (Actions > build > Run workflow, or
-`gh workflow run build.yml`: the repository is private and its minutes are counted); what it has not done yet is run
-on them.
+`gh workflow run build.yml`: the repository is private and its minutes are counted). On Linux it has run too (Ubuntu
+26.04, GCC 15, PipeWire): every test, the application's self-test, the plugin in a host, and a free bank's profile
+built from scratch and played (Salamander: the download, the renders and the forge in about 35 minutes). macOS has
+not run it yet.
 
 | | Windows | Linux | macOS |
 |---|---|---|---|
 | Engine | AVX2 | AVX2 (x86-64); the generic loop elsewhere | the generic loop on Apple silicon (not measured yet) |
-| Audio | ASIO, WASAPI, DirectSound | ALSA | Core Audio |
+| Audio | ASIO, WASAPI, DirectSound | PipeWire (its own device: ~5 ms at 128, ~3 ms at 64), JACK, ALSA | Core Audio |
+| Audio thread | the driver's | PipeWire's or JACK's (realtime); ALSA's made realtime (the user's limit, or rtkit) | Core Audio's |
 | Stream output (a second device) | WASAPI | ALSA | Core Audio |
-| MP3 export | Media Foundation | none (WAV, FLAC) | none (WAV, FLAC) |
+| MP3 export | Media Foundation | LAME, when installed (libmp3lame) | LAME, when installed (Homebrew's lame) |
+| Settings | %APPDATA%\PianoForge | ~/.config/PianoForge | ~/Library/Application Support/PianoForge |
 | Updates | the installer, from the app | as it was installed | as it was installed |
-| Installer | Inno Setup | none yet | none yet (nor signing) |
+| Installer | Inno Setup | `cmake --install` (menu entry, icons); .deb and .rpm by `cpack` | none yet (nor signing) |
 | VST3 plugin | ~/AppData/Local/Programs/Common/VST3 | ~/.vst3 | ~/Library/Audio/Plug-Ins/VST3, and an Audio Unit |
-| OBS plugin | built against the installed OBS, tested in libobs | against libobs (OpenGL: its shader untried) | a .plugin bundle (untried) |
-| OBS feed, stream look channel | shared memory (Local\\) | POSIX shared memory | POSIX shared memory |
+| OBS plugin | built against the installed OBS, tested in libobs | a Flatpak OBS: built in its SDK, tested in its libobs (OpenGL); a system OBS: against libobs | a .plugin bundle (untried) |
+| OBS feed, stream look channel | shared memory (Local\\) | POSIX shared memory (a Flatpak OBS: `--device=shm`, see `obs/README.md`) | POSIX shared memory |
 
 The timing checks of the tests (the room, the upsampler) are informative where `PIANOFORGE_NO_TIMING` is set (a
 shared machine: the CI).
@@ -212,7 +267,14 @@ Offline render of a MIDI file, through the reference player or the modal engine:
 PianoForge.exe --render take.mid take.wav corpus/reference/noire-dry/single-notes [--engine modal]
 ```
 
-## VST3 plugin
+## VST3 and LV2 plugins
+
+On Linux the same plugin is an LV2 one too (Ardour, Carla, Qtractor, Zrythm): `cmake --build --preset linux-release
+--target install-lv2-plugin` copies `PianoForge.lv2` to `~/.lv2` (URI `urn:pianoforge:piano`), and `ctest -R
+plugin_host_lv2` runs the host test through JUCE's LV2 host. CLAP is not built: it would take free-audio's
+clap-juce-extensions, an outside dependency to vet first.
+
+### VST3
 
 ```
 cmake --build --preset windows-release --target install-vst3-plugin
@@ -261,14 +323,17 @@ about it the first time.
 
 ## Updates
 
-Help > Update settings: the address of an update manifest (`latest.json` as written by the installer build; its
+Help > Update settings (Windows and Linux): the address of an update manifest (`latest.json` as written by the
+installer build; on Linux its `deb` entry: `url`, `sha256`, `size`; its
 `url` may be relative to it, or set at build time with `-DPIANOFORGE_UPDATE_BASE_URL=https://...`) or of a GitHub
-release (`https://api.github.com/repos/<owner>/<repo>/releases/latest`: the asset ending in `-setup.exe`, its digest
+release (`https://api.github.com/repos/<owner>/<repo>/releases/latest`: the asset ending in `-setup.exe`, on Linux in
+`_amd64.deb`, its digest
 or a `.sha256` asset). https or a file; empty by default, and then nothing is looked for. Help > Check for updates,
 or at start once a day if ticked. A newer version is offered (install, skip this version, later); it is downloaded
 to the temporary folder, its size and SHA-256 checked, then PianoForge closes, the installer runs silently and opens
-it again. `PianoForge.exe --check-update <address> report.txt` reads an address and checks its installer without
-running it.
+it again; on Linux the package goes to the system's software installer (which asks for the right to install it), and
+PianoForge is restarted once it is in. `PianoForge.exe --check-update <address> report.txt` reads an address and
+checks its installer without running it.
 
 ## Reference bench
 

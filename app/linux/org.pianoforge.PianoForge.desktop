@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=PianoForge
+GenericName=Piano
+Comment=A concert grand piano played from a MIDI keyboard, with every take recorded
+Exec=pianoforge %f
+Icon=org.pianoforge.PianoForge
+Terminal=false
+Categories=AudioVideo;Audio;Music;Midi;
+Keywords=piano;grand;MIDI;keyboard;instrument;synthesizer;
+MimeType=audio/midi;audio/x-midi;
+StartupWMClass=PianoForge
+Actions=Record;Gallery;
+
+[Desktop Action Record]
+Name=Start a recording
+Exec=pianoforge --record
+
+[Desktop Action Gallery]
+Name=Recordings and takes
+Exec=pianoforge --gallery

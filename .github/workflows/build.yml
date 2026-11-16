@@ -42,7 +42,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev \
             libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libxext-dev libxrender-dev \
-            libgl1-mesa-dev xvfb
+            libgl1-mesa-dev xvfb desktop-file-utils appstream
 
       - name: macOS tools
         if: runner.os == 'macOS'
@@ -61,6 +61,22 @@ jobs:
       - name: Test (with a virtual display)
         if: runner.os == 'Linux'
         run: xvfb-run -a ctest --preset ${{ matrix.build }}
+
+      # The Debian package, made on the oldest Ubuntu aimed at (it asks for the C library it was built against): the
+      # application, its menu entry, icons and AppStream metadata, the VST3 and LV2 plugins.
+      - name: Debian package and its desktop metadata
+        if: runner.os == 'Linux'
+        run: |
+          desktop-file-validate app/linux/org.pianoforge.PianoForge.desktop
+          appstreamcli validate --no-net app/linux/org.pianoforge.PianoForge.metainfo.xml || echo "(no homepage yet)"
+          cd build/linux-gcc && cpack -G DEB
+
+      - name: Keep the Debian package
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pianoforge-deb-ubuntu-24.04
+          path: build/linux-gcc/*.deb
 
   forge:
     name: Forge, bench and profile builder (Python)
