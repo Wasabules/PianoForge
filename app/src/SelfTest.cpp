@@ -10,6 +10,8 @@
 #include "OfflineRender.h"
 #include "ui/EnginePanel.h"
 #include "ui/RoomPanel.h"
+#include "ui/TonePanel.h"
+#include "Presets.h"
 #include "ui/StreamLookPanel.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
@@ -1152,6 +1154,71 @@ int runSelfTest(const juce::StringArray& arguments)
                     + ", A4 " + juce::String(engine.referenceA4.load(), 1) + " Hz; room \"" + roomPanel.presetName() + "\", decay "
                     + juce::String(room.decaySeconds.load(), 1) + " s, keep loudness " + (room.keepLoudness.load() ? "on" : "off")
                     + ", " + (room.headphones.load() ? "headphones" : "speakers") + " (expected 2.50, off, 442.0; Hall, 12 m, 3.0 s, off, headphones)");
+        file.deleteFile();
+    }
+
+    // 8h2. Factory presets: each one, written into a settings file the panels read back, sets the engine, the tone
+    //      and the room as it says, the rest of the sound at its defaults, the tuning untouched; the snapshot taken
+    //      then (after the panels wrote every setting) matches, and a setting moved away from it is noticed.
+    {
+        const auto file = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("pianoforge-selftest-presets.settings");
+        file.deleteFile();
+        juce::PropertiesFile::Options options;
+        juce::PropertiesFile settings(file, options);
+        pf::ModalEngine engine;
+        ReferencePlayer reference;
+        auto hostOwner = std::make_unique<AudioHost>(engine); // on the heap: hosts are large
+        AudioHost& host = *hostOwner;
+        EnginePanel enginePanel(engine, reference, settings);
+        TonePanel tonePanel(engine, host, settings);
+        RoomPanel roomPanel(host.room, settings);
+        settings.setValue("referenceA4", 443.0); // not the preset's business
+        settings.setValue("voicingTrebleDb", 5.0); // the last preset's, gone with the next
+        juce::StringArray wrong;
+        bool movedNoticed = true, snapshotsHold = true, unknownKey = false;
+        for (const auto& preset : factoryPresets()) {
+            writeFactoryPreset(settings, preset);
+            enginePanel.reload();
+            tonePanel.reload();
+            roomPanel.reload();
+            enginePanel.saveNow();
+            tonePanel.saveNow();
+            roomPanel.saveNow();
+            auto want = [&](const char* key, double fallback) {
+                for (const auto& [k, v] : preset.values)
+                    if (juce::String(k) == key)
+                        return (double) v;
+                return fallback;
+            };
+            for (const auto& [k, v] : preset.values)
+                unknownKey = unknownKey || !soundPresetKeys().contains(k);
+            const int roomIndex = (int) want("roomPreset", kDefaultRoomPreset + 1) - 1;
+            const bool ok = std::abs(engine.voicingMiddleDb.load() - want("voicingMiddleDb", 0.0)) < 1e-4
+                         && std::abs(engine.voicingTrebleDb.load() - want("voicingTrebleDb", 0.0)) < 1e-4
+                         && std::abs(engine.dynamicRange.load() - want("dynamicRange", 1.0)) < 1e-4
+                         && std::abs(engine.sustainLength.load() - want("sustainLength", 1.0)) < 1e-4
+                         && std::abs(engine.damperRate.load() - want("damperRate", 1.0)) < 1e-4
+                         && std::abs(engine.lidOpen.load() - want("lidOpen", 1.0)) < 1e-4
+                         && std::abs(engine.attackSoftDb.load() - want("attackSoftDb", 0.0)) < 1e-4
+                         && std::abs(engine.unisonSpread.load() - want("unisonSpread", 1.0)) < 1e-4
+                         && std::abs(host.tonePresenceDb.load() - want("tonePresenceDb", 0.0)) < 1e-4
+                         && std::abs(host.room.decaySeconds.load() - kRoomPresets[(size_t) roomIndex].decay) < 1e-3
+                         && std::abs(host.room.distance.load() - want("roomDistance", 1.0)) < 1e-3
+                         && std::abs(engine.referenceA4.load() - 443.0f) < 1e-3f;
+            if (!ok)
+                wrong.add(preset.name);
+            const auto snapshot = presetSnapshot(settings, soundPresetKeys());
+            snapshotsHold = snapshotsHold && !movedFrom(settings, snapshot);
+            const auto before = settings.getValue("toneAirDb");
+            settings.setValue("toneAirDb", 3.5);
+            movedNoticed = movedNoticed && movedFrom(settings, snapshot);
+            settings.setValue("toneAirDb", before);
+        }
+        r.check(wrong.isEmpty() && snapshotsHold && movedNoticed && !unknownKey,
+                juce::String((int) factoryPresets().size()) + " factory presets: the engine, the tone and the room as each says, the tuning "
+                    "untouched" + (wrong.isEmpty() ? juce::String() : " (not so for: " + wrong.joinIntoString(", ") + ")")
+                    + (snapshotsHold ? "; the snapshot matches" : "; the snapshot does NOT match") + (movedNoticed ? ", a change is noticed" : ", a change is NOT noticed")
+                    + (unknownKey ? "; a preset names a setting it does not govern" : ""));
         file.deleteFile();
     }
 

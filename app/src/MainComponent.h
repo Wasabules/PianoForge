@@ -15,6 +15,7 @@
 #include "ui/AudioPanel.h"
 #include "ui/EnginePanel.h"
 #include "ui/TonePanel.h"
+#include "ui/SettingsPanel.h"
 #include "ui/Meters.h"
 #include "ui/PerformancePanel.h"
 #include "ui/PlayerBar.h"
@@ -101,6 +102,17 @@ private:
     void askSaveInstrument();
     void applyInstrument(int index);
     void askDeleteInstrument(int index);
+    /// The instrument as it sounds now saved under `name` (one of the user's presets; an existing one replaced).
+    void storeInstrument(const juce::String& name);
+    void applyFactory(int index);   // a factory preset (the sound only)
+    void revertPreset();            // the current preset applied again
+    /// The preset now in use: its name, its kind and the values it stands for (after every panel wrote its own),
+    /// to tell when the sound has moved away from it.
+    void markPreset(const juce::String& name, bool factory);
+    bool presetModified();
+    int userPresetIndex(const juce::String& name);
+    void showSettings(SettingsPanel::Section s);
+    bool settingsShowing(SettingsPanel::Section s) const;
     void exportSettings();
     void importSettings();
     std::unique_ptr<juce::FileChooser> settingsChooser;
@@ -161,7 +173,8 @@ private:
     std::unique_ptr<AudioPanel> audioPanel;
     PerformancePanel performancePanel;
     std::unique_ptr<RoomPanel> roomPanel;
-    std::unique_ptr<ToolWindow> engineWindow, toneWindow, audioWindow, performanceWindow, roomWindow, takesWindow, gesturesWindow, streamLookWindow;
+    std::unique_ptr<ToolWindow> performanceWindow, takesWindow, settingsWindow;
+    std::unique_ptr<SettingsPanel> settingsPanel; // every setting: the panels above as its sections
     std::unique_ptr<GesturesPanel> gesturesPanel;
     std::unique_ptr<StreamLook> streamLook;           // the OBS keyboard's look, shared with OBS
     std::unique_ptr<StreamLookPanel> streamLookPanel; // its window's content

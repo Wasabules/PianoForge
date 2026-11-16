@@ -135,11 +135,23 @@ side of it reaches both ears, the farther one later and duller (a spherical head
 shadow, equalized for a source in front so that a mono sound keeps its level), the room's reflections each from
 where they come, and the tail as coherent between the ears as a diffuse field. Room on or off.
 
+Every setting is in one window, Settings (Ctrl+,), its sections on the left: Engine (Ctrl+E), Tone and dynamics
+(Ctrl+D), Room (Ctrl+M), Audio, MIDI and streaming, Piano gestures, Stream look. The preset bar on top holds two
+kinds of preset, also listed in the Presets menu:
+
+- Factory presets. They set the sound only (what the engine models, the voicing, the touch, the tone, the room and
+  the listening position), and leave the tuning, the volume and the curves alone. There are ten: As measured,
+  Concert hall front row, Soft and round, Softened (bright banks), Bright and present, Jazz club, Night practice,
+  Stream, Cathedral, Old upright.
+- Your presets. Each holds the whole instrument, and can be saved, replaced or deleted.
+
+The bar marks a preset as modified once the sound moves away from it, and Revert applies it again.
+
 Shaping the instrument and the output, at 0 or 100 % the sound as measured, bit for bit:
 
-- Voicing (Engine settings, Ctrl+E): the hammers needled or hardened per register (bass, middle, treble), a shelf
-  on each voice's whole sound from a chosen partial up, following the velocity by a share.
-- Tone and dynamics (Engine > Tone and dynamics, Ctrl+D):
+- Voicing (Engine section): the hammers needled or hardened per register (bass, middle, treble), a shelf on each
+  voice's whole sound from a chosen partial up, following the velocity by a share.
+- Tone and dynamics (its section):
   - Touch and resonance (the modal engine): the dynamic range, the sustain length, the damper speed, the attack's
     softness and length, and the lid (open, half stick, closed).
   - The output tone: bass, presence and air.

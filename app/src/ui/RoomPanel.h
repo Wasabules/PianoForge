@@ -35,6 +35,8 @@ public:
     void setHeadphones(bool headphones);
     /// Reads every setting back from the settings file and applies it (an instrument preset, an import).
     void reload();
+    /// Writes every setting of the panel to the settings file now (a preset's snapshot).
+    void saveNow() { save(); }
     std::function<void()> onChange; // the room switched on or off, another preset or position (the toolbar follows)
 
     void paint(juce::Graphics&) override;

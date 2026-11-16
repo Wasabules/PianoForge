@@ -56,6 +56,7 @@ TonePanel::TonePanel(pf::ModalEngine& m, AudioHost& h, juce::PropertiesFile& s) 
             return 0.0;
         return t.getDoubleValue();
     };
+    lid.slider.updateText();
     for (auto* r : { &dynamicRange, &sustain, &dampers, &attackSoft, &attackLength, &lid })
         r->slider.onValueChange = [this] { applyEngine(); };
     resetEngine.setTooltip("Every setting of this card back to the sound as measured");
@@ -98,9 +99,10 @@ TonePanel::TonePanel(pf::ModalEngine& m, AudioHost& h, juce::PropertiesFile& s) 
     };
     fileLabel.setColour(juce::Label::textColourId, theme::dim);
     setup(wet, "Reverb level", -40.0, 6.0, 0.5, " dB", -12.0, "The reverb's level (the impulse response normalised)");
-    setup(dry, "Room level", -40.0, 0.0, 0.5, " dB", 0.0,
+    setup(dry, "Room level", -40.0, 0.0, 0.5, {}, 0.0,
           "The room's output (the piano and the room) beside the reverb; at -40 dB, none: the reverb alone");
     dry.slider.textFromValueFunction = [](double v) { return v <= kDryOffDb ? juce::String("None") : juce::String(v, 1) + " dB"; };
+    dry.slider.updateText();
     for (auto* r : { &wet, &dry })
         r->slider.onValueChange = [this] { applyTone(); };
 

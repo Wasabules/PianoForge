@@ -9,6 +9,9 @@
 #include "ui/PerformancePanel.h"
 #include "ui/PlayerBar.h"
 #include "ui/RoomPanel.h"
+#include "ui/TonePanel.h"
+#include "ui/SettingsPanel.h"
+#include "Presets.h"
 #include "ui/Theme.h"
 #include "KeyboardInput.h"
 #include "VelocityCurveEditor.h"
@@ -349,6 +352,28 @@ int runUiSnapshots(const juce::StringArray& arguments)
         AudioHost host(modal);
         AudioPanel audio(devices, host, settings);
         save(audio, "audio-settings");
+        TonePanel tone(modal, host, settings);
+        save(tone, "tone-and-dynamics");
+        {
+            SettingsPanel::Presets hooks;
+            hooks.factoryNames = [] {
+                juce::StringArray names;
+                for (const auto& p : factoryPresets())
+                    names.add(p.name);
+                return names;
+            };
+            hooks.userNames = [] { return juce::StringArray { "Evening at home", "Stream Sunday" }; };
+            hooks.factoryDescription = [](int i) { return juce::String(factoryPresets()[(size_t) i].description); };
+            hooks.current = [] { return juce::String("Soft and round"); };
+            hooks.currentIsFactory = [] { return true; };
+            hooks.modified = [] { return true; };
+            hooks.applyFactory = hooks.applyUser = [](int) {};
+            hooks.save = hooks.saveAs = hooks.revert = hooks.remove = [] {};
+            SettingsPanel all({ &engine, &tone, nullptr, &audio, nullptr, nullptr }, { false, false, false, false, false, true }, std::move(hooks));
+            all.setSize(1000, 860);
+            all.show(SettingsPanel::Section::tone);
+            save(all, "settings");
+        }
         PerformancePanel performance;
         LoadTracker::Snapshot snap;
         snap.now = 0.18f;

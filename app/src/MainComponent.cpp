@@ -4,6 +4,7 @@
 
 #include "CurveText.h"
 #include "OfflineRender.h"
+#include "Presets.h"
 
 namespace pf::app {
 
@@ -29,7 +30,8 @@ enum MenuId {
     // Engine > Room presets (one per preset, built-in then the user's)
     kRoomPresetBase = 300,
     // Presets: the instrument presets (apply, then delete), save, export, import
-    kInstrumentBase = 400, kInstrumentDeleteBase = 500, kInstrumentSave = 390, kExportSettings, kImportSettings,
+    kInstrumentBase = 400, kInstrumentDeleteBase = 500, kInstrumentSave = 390, kExportSettings, kImportSettings, kSettings,
+    kFactoryBase = 600,
     // File > Record formats (one per sound format)
     kRecordFormat = 200,
 };
@@ -152,6 +154,43 @@ MainComponent::MainComponent()
             safe->runGesture(action, start);
     };
     roomPanel->onChange = [this] { refreshRoomButton(); };
+    {
+        SettingsPanel::Presets hooks;
+        hooks.factoryNames = [] {
+            juce::StringArray names;
+            for (const auto& p : factoryPresets())
+                names.add(p.name);
+            return names;
+        };
+        hooks.userNames = [this] {
+            juce::StringArray names;
+            for (const auto& p : instrumentPresets())
+                names.add(p.getProperty("name", juce::String()).toString());
+            return names;
+        };
+        hooks.factoryDescription = [](int i) {
+            return i >= 0 && i < (int) factoryPresets().size() ? juce::String(factoryPresets()[(size_t) i].description) : juce::String();
+        };
+        hooks.current = [this] { return properties.getUserSettings()->getValue("instrumentPreset"); };
+        hooks.currentIsFactory = [this] { return properties.getUserSettings()->getBoolValue("instrumentPresetFactory", false); };
+        hooks.modified = [this] { return presetModified(); };
+        hooks.applyFactory = [this](int i) { applyFactory(i); };
+        hooks.applyUser = [this](int i) { applyInstrument(i); };
+        hooks.save = [this] {
+            if (const auto name = properties.getUserSettings()->getValue("instrumentPreset"); userPresetIndex(name) >= 0)
+                storeInstrument(name);
+        };
+        hooks.saveAs = [this] { askSaveInstrument(); };
+        hooks.revert = [this] { revertPreset(); };
+        hooks.remove = [this] {
+            if (const int i = userPresetIndex(properties.getUserSettings()->getValue("instrumentPreset")); i >= 0)
+                askDeleteInstrument(i);
+        };
+        settingsPanel = std::make_unique<SettingsPanel>(
+            std::array<juce::Component*, (size_t) SettingsPanel::Section::count> { enginePanel.get(), tonePanel.get(), roomPanel.get(),
+                                                                                  audioPanel.get(), gesturesPanel.get(), streamLookPanel.get() },
+            std::array<bool, (size_t) SettingsPanel::Section::count> { false, false, false, false, false, true }, std::move(hooks));
+    }
     playerBar = std::make_unique<PlayerBar>(host.filePlayer, *settings);
     playerBar->onOpen = [this] { chooseMidiFile(); };
     playerBar->onClicked = [this] { keyboard.grabKeyboardFocus(); };
@@ -277,12 +316,10 @@ MainComponent::~MainComponent()
     takesWindow.reset();
     takesPanel.reset();
     host.playback.release();
-    streamLookWindow.reset();
+    settingsWindow.reset(); // its content shows the panels: gone before them
+    settingsPanel.reset();
     streamLookPanel.reset();
-    engineWindow.reset();
-    audioWindow.reset();
     performanceWindow.reset();
-    roomWindow.reset();
     curveWindow.reset(); // it refers to curveSettings and keyboardInput
     pedalWindow.reset();
     keyboard.removeKeyListener(this);
@@ -371,7 +408,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             menu.addItem(item(kEngineOption + o, EnginePanel::name((EnginePanel::Option) o), {}, enginePanel->isOn((EnginePanel::Option) o)));
         }
         menu.addSeparator();
-        menu.addItem(item(kEngineSettings, "Engine settings (tuning, re-strike, levels)...", "Ctrl+E"));
+        menu.addItem(item(kEngineSettings, "Engine settings (models, voicing, tuning)...", "Ctrl+E"));
         menu.addItem(item(kToneSettings, "Tone and dynamics (touch, lid, EQ, reverb, stream)...", "Ctrl+D"));
         menu.addSeparator();
         menu.addItem(item(kRoomToggle, "Room: " + roomPanel->presetName(), {}, roomPanel->isOn()));
@@ -390,11 +427,18 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
     case 3: {
         const auto list = instrumentPresets();
         const auto current = properties.getUserSettings()->getValue("instrumentPreset");
+        const bool factory = properties.getUserSettings()->getBoolValue("instrumentPresetFactory", false);
+        menu.addItem(item(kSettings, "Settings and presets...", "Ctrl+,"));
+        menu.addSeparator();
+        menu.addSectionHeader("Factory presets (the sound)");
+        for (int k = 0; k < (int) factoryPresets().size(); ++k)
+            menu.addItem(item(kFactoryBase + k, factoryPresets()[(size_t) k].name, {}, factory && current == factoryPresets()[(size_t) k].name));
+        menu.addSectionHeader("My presets (the whole instrument)");
         if (list.isEmpty())
             menu.addItem(item(-1, "No preset of your own yet", {}, false, false));
         for (int k = 0; k < list.size(); ++k) {
             const auto name = list[k].getProperty("name", juce::String()).toString();
-            menu.addItem(item(kInstrumentBase + k, name, {}, name == current));
+            menu.addItem(item(kInstrumentBase + k, name, {}, !factory && name == current));
         }
         menu.addSeparator();
         menu.addItem(item(kInstrumentSave, "Save the instrument as..."));
@@ -410,7 +454,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         break;
     }
     case 4:
-        menu.addItem(item(kAudioSettings, "Audio, MIDI and streaming...", "Ctrl+,"));
+        menu.addItem(item(kAudioSettings, "Audio, MIDI and streaming..."));
         menu.addItem(item(kPerformance, "Performance...", "Ctrl+P"));
         menu.addItem(item(kStreamLook, "Stream look (OBS keyboard)..."));
         menu.addSeparator();
@@ -453,6 +497,14 @@ void MainComponent::menuItemSelected(int id, int)
     }
     if (id >= kInstrumentBase && id < kInstrumentBase + 100) {
         applyInstrument(id - kInstrumentBase);
+        return;
+    }
+    if (id >= kFactoryBase && id < kFactoryBase + 100) {
+        applyFactory(id - kFactoryBase);
+        return;
+    }
+    if (id == kSettings) {
+        showSettings(settingsPanel->section());
         return;
     }
     if (id >= kInstrumentDeleteBase && id < kInstrumentDeleteBase + 100) {
@@ -504,18 +556,18 @@ void MainComponent::menuItemSelected(int id, int)
     case kEngineModal: selectModalProfile(false); break;
     case kEngineModalB: selectModalProfile(true); break;
     case kChooseProfileB: chooseProfileB(); break;
-    case kEngineSettings: showWindow(engineWindow, "Engine settings", *enginePanel); break;
-    case kToneSettings: showWindow(toneWindow, "Tone and dynamics", *tonePanel); break;
+    case kEngineSettings: showSettings(SettingsPanel::Section::engine); break;
+    case kToneSettings: showSettings(SettingsPanel::Section::tone); break;
     case kRoomToggle: roomPanel->setOn(!roomPanel->isOn()); break;
-    case kRoomSettings: showWindow(roomWindow, "Room", *roomPanel); break;
+    case kRoomSettings: showSettings(SettingsPanel::Section::room); break;
     case kHeadphones: toggleHeadphones(); break;
-    case kAudioSettings: showWindow(audioWindow, "Audio, MIDI and streaming", *audioPanel); break;
+    case kAudioSettings: showSettings(SettingsPanel::Section::audio); break;
     case kPerformance: showWindow(performanceWindow, "Performance", performancePanel); break;
     case kResetDropouts: performancePanel.onReset(); break;
     case kVelocityCurve: openVelocityCurve(); break;
     case kPedalCurve: openPedalCurve(); break;
-    case kGestures: showWindow(gesturesWindow, "Piano gestures", *gesturesPanel); break;
-    case kStreamLook: showWindow(streamLookWindow, "Stream look", *streamLookPanel); break;
+    case kGestures: showSettings(SettingsPanel::Section::gestures); break;
+    case kStreamLook: showSettings(SettingsPanel::Section::streamLook); break;
     case kAzerty: setKeyLayout(kLayoutAzerty); break;
     case kQwerty: setKeyLayout(kLayoutQwerty); break;
     case kOctaveDown: shiftOctave(-1); break;
@@ -549,7 +601,7 @@ void MainComponent::showShortcuts()
               "MIDI file player\n  Ctrl+O: open a MIDI file (or drop it on the window)\n  Ctrl+Space: play / pause\n"
               "  Ctrl+Home: stop, back to the start\n  Ctrl+Left / Ctrl+Right: 5 s back / forward\n  Ctrl+L: loop\n\n"
               "Application\n  Ctrl+R: record / stop\n  Ctrl+S: save the last take\n  Ctrl+1 / Ctrl+2: reference / modal engine\n"
-              "  Ctrl+T: takes and recordings\n  Ctrl+E: engine settings\n  Ctrl+D: tone and dynamics\n  Ctrl+M: room settings\n  Ctrl+H: heard on headphones / speakers\n  Ctrl+,: audio, MIDI and streaming\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
+              "  Ctrl+T: takes and recordings\n  Ctrl+E: engine settings\n  Ctrl+D: tone and dynamics\n  Ctrl+M: room settings\n  Ctrl+H: heard on headphones / speakers\n  Ctrl+,: settings and presets (the last section shown)\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
               "Piano gestures, on the MIDI keyboard (Keyboard > Piano gestures)\n" + gesturesHelp()
             + "\nThe mouse plays too: lower on a key is louder.");
 }
@@ -822,13 +874,13 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
         case 'L': playerBar->setLoop(!host.filePlayer.isLooping()); return true;
         case 'R': toggleRecording(); return true;
         case 'S': saveLastTake(); return true;
-        case 'E': showWindow(engineWindow, "Engine settings", *enginePanel); return true;
-        case 'D': showWindow(toneWindow, "Tone and dynamics", *tonePanel); return true;
-        case 'M': showWindow(roomWindow, "Room", *roomPanel); return true;
+        case 'E': showSettings(SettingsPanel::Section::engine); return true;
+        case 'D': showSettings(SettingsPanel::Section::tone); return true;
+        case 'M': showSettings(SettingsPanel::Section::room); return true;
         case 'T': openTakes(); return true;
         case 'H': toggleHeadphones(); return true;
         case 'P': showWindow(performanceWindow, "Performance", performancePanel); return true;
-        case ',': showWindow(audioWindow, "Audio, MIDI and streaming", *audioPanel); return true;
+        case ',': showSettings(settingsPanel->section()); return true;
         case '1': selectEngine(false); return true;
         case '2': selectModalProfile(false); return true;
         case '3': selectModalProfile(true); return true;
@@ -975,29 +1027,102 @@ void MainComponent::askSaveInstrument()
         const auto name = window->getTextEditorContents("name").trim();
         if (result != 1 || name.isEmpty())
             return;
-        saveSettings(); // the panels save as they change; the main settings, now
-        auto* s = properties.getUserSettings();
-        auto* values = new juce::DynamicObject();
-        for (const auto& key : instrumentKeys())
-            if (s->containsKey(key))
-                values->setProperty(key, s->getValue(key));
-        auto* preset = new juce::DynamicObject();
-        preset->setProperty("name", name);
-        preset->setProperty("values", juce::var(values));
-        auto list = instrumentPresets();
-        int index = -1;
-        for (int k = 0; k < list.size(); ++k)
-            if (list[k].getProperty("name", juce::String()).toString() == name)
-                index = k;
-        if (index >= 0)
-            list.set(index, juce::var(preset));
-        else
-            list.add(juce::var(preset));
-        s->setValue("instrumentPresets", juce::JSON::toString(juce::var(list), true));
-        s->setValue("instrumentPreset", name);
-        s->saveIfNeeded();
-        showMessage("Instrument saved as \"" + name + "\" (Presets menu)", theme::good);
+        storeInstrument(name);
     }), true);
+}
+
+void MainComponent::storeInstrument(const juce::String& name)
+{
+    saveSettings(); // the panels save as they change; the main settings, now
+    enginePanel->saveNow();
+    tonePanel->saveNow();
+    roomPanel->saveNow();
+    auto* s = properties.getUserSettings();
+    auto* values = new juce::DynamicObject();
+    for (const auto& key : instrumentKeys())
+        if (s->containsKey(key))
+            values->setProperty(key, s->getValue(key));
+    auto* preset = new juce::DynamicObject();
+    preset->setProperty("name", name);
+    preset->setProperty("values", juce::var(values));
+    auto list = instrumentPresets();
+    const int index = userPresetIndex(name);
+    if (index >= 0)
+        list.set(index, juce::var(preset));
+    else
+        list.add(juce::var(preset));
+    s->setValue("instrumentPresets", juce::JSON::toString(juce::var(list), true));
+    markPreset(name, false);
+    showMessage("Instrument saved as \"" + name + "\" (Presets menu, Settings)", theme::good);
+}
+
+int MainComponent::userPresetIndex(const juce::String& name)
+{
+    const auto list = instrumentPresets();
+    for (int k = 0; k < list.size(); ++k)
+        if (list[k].getProperty("name", juce::String()).toString() == name)
+            return k;
+    return -1;
+}
+
+void MainComponent::applyFactory(int index)
+{
+    const auto& list = factoryPresets();
+    if (index < 0 || index >= (int) list.size())
+        return;
+    const auto& preset = list[(size_t) index];
+    auto* s = properties.getUserSettings();
+    writeFactoryPreset(*s, preset); // what it does not name: back to the default
+    s->saveIfNeeded();
+    reloadSettings();
+    markPreset(preset.name, true);
+    showMessage("Preset: " + juce::String(preset.name), theme::good);
+}
+
+void MainComponent::revertPreset()
+{
+    auto* s = properties.getUserSettings();
+    const auto name = s->getValue("instrumentPreset");
+    if (s->getBoolValue("instrumentPresetFactory", false)) {
+        for (int k = 0; k < (int) factoryPresets().size(); ++k)
+            if (name == factoryPresets()[(size_t) k].name)
+                applyFactory(k);
+    } else if (const int k = userPresetIndex(name); k >= 0) {
+        applyInstrument(k);
+    }
+}
+
+void MainComponent::markPreset(const juce::String& name, bool factory)
+{
+    saveSettings();
+    enginePanel->saveNow(); // every setting written as the panels hold it: what the snapshot compares with
+    tonePanel->saveNow();
+    roomPanel->saveNow();
+    auto* s = properties.getUserSettings();
+    s->setValue("instrumentPreset", name);
+    s->setValue("instrumentPresetFactory", factory);
+    s->setValue("instrumentPresetSnapshot", presetSnapshot(*s, factory ? soundPresetKeys() : instrumentKeys()));
+    s->saveIfNeeded();
+    if (settingsPanel != nullptr)
+        settingsPanel->refreshPresets();
+}
+
+bool MainComponent::presetModified()
+{
+    auto* s = properties.getUserSettings();
+    return movedFrom(*s, s->getValue("instrumentPresetSnapshot"));
+}
+
+void MainComponent::showSettings(SettingsPanel::Section s)
+{
+    settingsPanel->show(s);
+    settingsPanel->refreshPresets();
+    showWindow(settingsWindow, "Settings", *settingsPanel);
+}
+
+bool MainComponent::settingsShowing(SettingsPanel::Section s) const
+{
+    return settingsWindow != nullptr && settingsWindow->isVisible() && settingsPanel != nullptr && settingsPanel->section() == s;
 }
 
 void MainComponent::applyInstrument(int index)
@@ -1012,9 +1137,9 @@ void MainComponent::applyInstrument(int index)
             if (instrumentKeys().contains(property.name.toString()))
                 s->setValue(property.name.toString(), property.value.toString());
     const auto name = list[index].getProperty("name", juce::String()).toString();
-    s->setValue("instrumentPreset", name);
     s->saveIfNeeded();
     reloadSettings();
+    markPreset(name, false);
     showMessage("Instrument: " + name, theme::good);
 }
 
@@ -1042,9 +1167,13 @@ void MainComponent::askDeleteInstrument(int index)
                                          }
                                      auto* s = safe->properties.getUserSettings();
                                      s->setValue("instrumentPresets", juce::JSON::toString(juce::var(list), true));
-                                     if (s->getValue("instrumentPreset") == name)
+                                     if (s->getValue("instrumentPreset") == name && !s->getBoolValue("instrumentPresetFactory", false)) {
                                          s->setValue("instrumentPreset", juce::String());
+                                         s->removeValue("instrumentPresetSnapshot");
+                                     }
                                      s->saveIfNeeded();
+                                     if (safe->settingsPanel != nullptr)
+                                         safe->settingsPanel->refreshPresets();
                                  });
 }
 
@@ -1680,7 +1809,7 @@ void MainComponent::noteAudioDevice()
     // Only the Audio window chooses a device. Anything else that changes it is JUCE falling back on its own (the
     // device failed, or left the list: a driver reset, a DAC asleep, a virtual cable restarted): the choice is kept,
     // tried again, and taken back as soon as it can be.
-    const bool byUser = audioWindow != nullptr && audioWindow->isVisible();
+    const bool byUser = settingsShowing(SettingsPanel::Section::audio);
     if (!byUser && !opensWanted()) {
         const bool wantedListed = [&] {
             for (auto* t : deviceManager.getAvailableDeviceTypes())
@@ -1741,7 +1870,7 @@ void MainComponent::retryWantedAudio()
 {
     // The device asked for, again; if it still cannot be opened, back to the stand-in (as it is running now, not
     // as JUCE last saved a choice). Not while the Audio window is open: the user is choosing.
-    if (audioWindow != nullptr && audioWindow->isVisible())
+    if (settingsShowing(SettingsPanel::Section::audio))
         return;
     ++audioRetries;
     // Eight tries two seconds apart; then one every half a minute, and only in silence (each try stops the stand-in

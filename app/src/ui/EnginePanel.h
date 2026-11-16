@@ -28,6 +28,8 @@ public:
     float restrikeSeconds() const { return (float) restrike.getValue(); }
     /// Reads every setting back from the settings file and applies it (a preset, an import).
     void reload();
+    /// Writes every setting of the panel to the settings file now (a preset's snapshot).
+    void saveNow() { save(); }
 
     void paint(juce::Graphics&) override;
     void resized() override;

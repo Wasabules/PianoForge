@@ -19,6 +19,7 @@ target_sources(PianoForgeApp PRIVATE
     src/ui/Meters.cpp
     src/ui/EnginePanel.cpp
     src/ui/TonePanel.cpp
+    src/ui/SettingsPanel.cpp
     src/ui/AudioPanel.cpp
     src/ui/PerformancePanel.cpp
     src/ui/PlayerBar.cpp
