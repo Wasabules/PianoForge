@@ -10,6 +10,7 @@ corpus/<session>/<state>/
 from __future__ import annotations
 
 import csv
+import io
 import json
 import os
 from pathlib import Path
@@ -77,10 +78,17 @@ class Corpus:
         (self.root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
 
     def rebuild_index(self) -> int:
+        """index.csv from the takes' metadata, written only when it changes: the forge takes an index newer than its
+        measures for new renders (forge pipeline --resume measures again what is older than it)."""
         rows = self.metas()
-        with open(self.root / "index.csv", "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=INDEX_FIELDS, extrasaction="ignore")
-            w.writeheader()
-            for m in rows:
-                w.writerow({**m, "defects": "|".join(m.get("defects", []))})
+        out = io.StringIO(newline="")
+        w = csv.DictWriter(out, fieldnames=INDEX_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        for m in rows:
+            w.writerow({**m, "defects": "|".join(m.get("defects", []))})
+        index = self.root / "index.csv"
+        text = out.getvalue()
+        if not index.exists() or index.read_bytes() != text.encode("utf-8"):  # (bytes: the csv lines end in \r\n)
+            with open(index, "w", newline="", encoding="utf-8") as f:
+                f.write(text)
         return len(rows)

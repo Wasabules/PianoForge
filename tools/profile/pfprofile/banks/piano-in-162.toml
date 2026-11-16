@@ -1,0 +1,35 @@
+# Piano in 162: a Steinway B recorded by Ivy Audio, 44.1 kHz, 24-bit, every key, 5 dynamics, 2 round robins, pedal up
+# and down, close and ambient microphones; the SFZ by Marcelo Colina. Free for personal and commercial use; no licence
+# text comes with it: ask Ivy Audio (contact@ivyaudio.com) before publishing what derives from it.
+
+[bank]
+id = "piano-in-162"
+name = "Piano in 162"
+piano = "Steinway B"
+author = "Ivy Audio (Steinway B; SFZ by Marcelo Colina)"
+license = "free for personal and commercial use (Ivy Audio; no licence text shipped)"
+source = "https://www.ivyaudio.com/Piano-in-162"
+credit = "Piano in 162 by Ivy Audio"
+size = "about 4.9 GB (the zip), as much again extracted"
+
+[fetch]
+# Ivy Audio hands it out by a torrent (magnet link) only: downloaded by hand, then checked here.
+kind = "manual"
+url = "https://www.ivyaudio.com/Piano-in-162"
+folder = "sources/piano-in-162"
+instructions = """Download the SFZ version from Ivy Audio's page (the torrent or magnet link "Piano in 162 SFZ"), and
+extract it into <corpus>/sources/piano-in-162/, so that this file exists:
+  <corpus>/sources/piano-in-162/Ivy Audio - Piano in 162 sfz/IvyAudio-PianoIn162-Close.sfz
+Then run the same command again."""
+
+[state]
+name = "in162-close"
+sfz = "sources/piano-in-162/Ivy Audio - Piano in 162 sfz/IvyAudio-PianoIn162-Close.sfz"
+align_onsets_ms = 3.0
+note = "close microphones, as the SFZ plays them (pedal up: the PedalOff samples); attacks aligned 3 ms"
+
+[forge]
+# Its 5 dynamics, found in the bank: 32, 64, 80, 96, 127 on the rendered grid.
+layers = "auto"
+# Pedal-down samples of its own (PedalOn): its own calibration.
+sympathetic_from = "auto"

@@ -1,0 +1,34 @@
+# Salamander Grand Piano V3: a Yamaha C5 recorded by Alexander Holm, 48 kHz, 24-bit, 16 velocity layers every minor
+# third, an AB pair of AKG C414; the SFZ by SFZ Instruments. CC-BY 3.0: credit it wherever what derives from it goes.
+
+[bank]
+id = "salamander"
+name = "Salamander Grand Piano V3"
+piano = "Yamaha C5"
+author = "Alexander Holm (Yamaha C5; SFZ remapped by kinwie, SFZ Instruments)"
+license = "CC-BY 3.0"
+source = "https://github.com/sfzinstruments/SalamanderGrandPiano (from https://archive.org/details/SalamanderGrandPianoV3)"
+credit = "Salamander Grand Piano V3 by Alexander Holm (CC-BY 3.0), SFZ by SFZ Instruments"
+size = "about 750 MB"
+
+[fetch]
+# The SFZ Instruments repository, at the commit the reference profile was built from, file by file (each one checked
+# against its git blob hash; an interrupted file resumed).
+kind = "github"
+repository = "sfzinstruments/SalamanderGrandPiano"
+commit = "3382bf9496bba2486f5ab0de55a264d1dfc38404"
+folder = "sources/salamander/SalamanderGrandPiano"
+
+[state]
+name = "salamander-dry"
+sfz = "sources/salamander/SalamanderGrandPiano/Salamander Grand Piano V3.sfz"
+# cc21 (key-release noise) and cc22 (pedal noise) at 0: the dry instrument (the engine adds its own noises).
+hdcc = { 21 = 0.0, 22 = 0.0 }
+align_onsets_ms = 3.0
+note = "dry: key-release (cc21) and pedal (cc22) noises off; string resonance, release, veltrack 73 % and natural tuning as the bank sets them; attacks aligned 3 ms"
+
+[forge]
+# Its 16 layers are finer than the rendered grid in places: every rendered velocity is measured.
+layers = "all"
+# No pedal-down sample: the sympathetic resonance's calibration is borrowed from a bank that has them, once built.
+sympathetic_from = "piano-in-162"

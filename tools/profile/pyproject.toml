@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pianoforge-profile"
+version = "0.1.0"
+description = "PianoForge profile builder: a sample bank (SFZ) to a modal profile for the engine, through the bench and the forge, in one command."
+requires-python = ">=3.11"
+# The bench (pianoforge-bench) and the forge (pianoforge-forge) are installed from this repository beside it
+# (pip install -e tools/bench -e tools/forge -e tools/profile); `pianoforge-profile doctor` checks they are there.
+dependencies = []
+
+[project.scripts]
+pianoforge-profile = "pfprofile.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pfprofile*"]
+
+[tool.setuptools.package-data]
+pfprofile = ["banks/*.toml"]

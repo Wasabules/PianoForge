@@ -63,7 +63,7 @@ jobs:
         run: xvfb-run -a ctest --preset ${{ matrix.build }}
 
   forge:
-    name: Forge and bench (Python)
+    name: Forge, bench and profile builder (Python)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -71,7 +71,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: pip install -e tools/forge -e tools/bench pytest
+        run: pip install -e tools/forge -e tools/bench -e tools/profile pytest
       - name: The forge's native kernels (C++; the tests check them against the Python reference)
         run: |
           cmake -S tools/forge/native -B build/forge-native -DCMAKE_BUILD_TYPE=Release
@@ -80,6 +80,10 @@ jobs:
         run: pytest -q tools/forge/tests
       - name: Test the bench (no Kontakt needed: its protocol, checks, storage and SFZ player)
         run: python -m unittest discover -s tools/bench/tests
+      - name: Test the profile builder (its recipes, what it reads in a bank, its download checks)
+        run: |
+          python -m unittest discover -s tools/profile/tests
+          pianoforge-profile doctor || true
 
   web:
     name: Web (WebAssembly)
