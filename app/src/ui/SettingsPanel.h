@@ -12,7 +12,7 @@ namespace pf::app {
 /// right (scrolled when taller than the window). The sections are the application's panels, owned elsewhere.
 class SettingsPanel final : public juce::Component, private juce::Timer {
 public:
-    enum class Section { engine, tone, room, audio, gestures, streamLook, count };
+    enum class Section { engine, tone, room, audio, recording, gestures, streamLook, count };
     static juce::String title(Section s);
 
     /// What the preset bar asks of the application.

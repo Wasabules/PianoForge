@@ -4,7 +4,9 @@
 #include "AudioHost.h"
 #include "MirrorOutput.h"
 #include "ui/AudioPanel.h"
-#include "ui/TakesPanel.h"
+#include "ui/GalleryPanel.h"
+#include "ui/NamingDialog.h"
+#include "ui/RecordingPanel.h"
 #include "ui/EnginePanel.h"
 #include "ui/PerformancePanel.h"
 #include "ui/PlayerBar.h"
@@ -369,7 +371,8 @@ int runUiSnapshots(const juce::StringArray& arguments)
             hooks.modified = [] { return true; };
             hooks.applyFactory = hooks.applyUser = [](int) {};
             hooks.save = hooks.saveAs = hooks.revert = hooks.remove = [] {};
-            SettingsPanel all({ &engine, &tone, nullptr, &audio, nullptr, nullptr }, { false, false, false, false, false, true }, std::move(hooks));
+            SettingsPanel all({ &engine, &tone, nullptr, &audio, nullptr, nullptr, nullptr }, { false, false, false, false, false, false, true },
+                              std::move(hooks));
             all.setSize(1000, 860);
             all.show(SettingsPanel::Section::tone);
             save(all, "settings");
@@ -452,11 +455,22 @@ int runUiSnapshots(const juce::StringArray& arguments)
             lift[(std::size_t) v] = juce::jlimit(0.0f, 1.0f, (float) (v - 12) / 8.0f);
         pedalPanel.setDamperLift(lift);
         save(pedalPanel, "pedal-curve");
-        {   // The takes and recordings of this computer.
+        {   // The gallery of this computer's takes and recordings, the naming question, the recording settings.
             TakePlayback playback;
             const auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("PianoForge");
-            TakesPanel takes(playback, { docs.getChildFile("Takes"), docs.getChildFile("Recordings") }, {});
-            save(takes, "takes");
+            const std::vector<std::pair<juce::File, bool>> roots { { docs.getChildFile("Recordings"), true }, { docs.getChildFile("Takes"), false } };
+            GalleryPanel gallery(playback, roots, {});
+            save(gallery, "gallery");
+            NamingDialog::Info info;
+            info.time = juce::Time::getCurrentTime();
+            info.seconds = 192.0;
+            info.notes = 1024;
+            info.formats = "wav mp3 mid";
+            info.root = docs.getChildFile("Recordings");
+            NamingDialog naming(info, {}, scanGallery(roots), {});
+            save(naming, "naming");
+            RecordingPanel recording(settings);
+            save(recording, "recording-settings");
         }
         settings.getFile().deleteFile();
     }

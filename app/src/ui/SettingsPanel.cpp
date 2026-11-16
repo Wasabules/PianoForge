@@ -18,6 +18,7 @@ juce::String SettingsPanel::title(Section s)
     case Section::tone: return "Tone and dynamics";
     case Section::room: return "Room";
     case Section::audio: return "Audio, MIDI and streaming";
+    case Section::recording: return "Recording and naming";
     case Section::gestures: return "Piano gestures";
     case Section::streamLook: return "Stream look (OBS)";
     case Section::count: break;

@@ -20,7 +20,9 @@
 #include "ui/PerformancePanel.h"
 #include "ui/PlayerBar.h"
 #include "ui/RoomPanel.h"
-#include "ui/TakesPanel.h"
+#include "ui/GalleryPanel.h"
+#include "ui/NamingDialog.h"
+#include "ui/RecordingPanel.h"
 #include "UpdateChecker.h"
 #include "ui/ToolWindow.h"
 
@@ -31,6 +33,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include <atomic>
+#include <deque>
 #include <thread>
 
 namespace pf::app {
@@ -179,7 +182,8 @@ private:
     std::unique_ptr<StreamLook> streamLook;           // the OBS keyboard's look, shared with OBS
     std::unique_ptr<StreamLookPanel> streamLookPanel; // its window's content
     int streamLookTicks = 0;
-    std::unique_ptr<TakesPanel> takesPanel;
+    std::unique_ptr<GalleryPanel> galleryPanel;
+    std::unique_ptr<RecordingPanel> recordingPanel; // Settings > Recording and naming
     void openTakes();
     void toggleHeadphones();
     // Updates (Help menu): where to look and whether to look at start are settings; without an address, nothing is
@@ -249,6 +253,26 @@ private:
     juce::String recordingExtensions() const;
     RecordingExporter exporter; // the formats made from the live recording once it stops
     juce::String recordingStem, lastSaved;
+    juce::Time recordingTime; // when the recording was started
+    /// A recording stopped, its name asked for: its files written under the automatic name, its conversions (MP3 and
+    /// the others) held until the name is given, so that they are made under it.
+    struct PendingRecording {
+        juce::String stem;
+        juce::File folder;
+        juce::Time time;
+        double seconds = 0.0;
+        int notes = 0;
+        juce::File midi;            // written, or none
+        RecordingExporter::Job job; // its master and its targets, under the automatic name
+        juce::String formats;       // "wav mp3 mid"
+    };
+    std::deque<PendingRecording> pendingNames;
+    bool namingOpen = false;
+    bool closing = false; // the application quits: nothing asked any more
+    void askNextName();
+    void nameRecording(PendingRecording recording, NamingDialog::Action action, const GalleryMeta& meta);
+    void submitRecording(PendingRecording& recording);
+    std::vector<std::pair<juce::File, bool>> galleryRoots();
     // The OBS plugin's feed: the state for overlays last published, a MIDI file playing at the last look.
     pf::FeedInfo feedInfo {};
     bool filePlayingBefore = false;

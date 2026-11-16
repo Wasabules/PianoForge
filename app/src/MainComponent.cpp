@@ -137,6 +137,7 @@ MainComponent::MainComponent()
     // Panels: their settings apply now, whether their windows open or not.
     enginePanel = std::make_unique<EnginePanel>(modal, player, *settings);
     tonePanel = std::make_unique<TonePanel>(modal, host, *settings);
+    recordingPanel = std::make_unique<RecordingPanel>(*settings);
     audioPanel = std::make_unique<AudioPanel>(deviceManager, host, *settings);
     performancePanel.onReset = [this] {
         auto* d = deviceManager.getCurrentAudioDevice();
@@ -188,8 +189,9 @@ MainComponent::MainComponent()
         };
         settingsPanel = std::make_unique<SettingsPanel>(
             std::array<juce::Component*, (size_t) SettingsPanel::Section::count> { enginePanel.get(), tonePanel.get(), roomPanel.get(),
-                                                                                  audioPanel.get(), gesturesPanel.get(), streamLookPanel.get() },
-            std::array<bool, (size_t) SettingsPanel::Section::count> { false, false, false, false, false, true }, std::move(hooks));
+                                                                                  audioPanel.get(), recordingPanel.get(), gesturesPanel.get(),
+                                                                                  streamLookPanel.get() },
+            std::array<bool, (size_t) SettingsPanel::Section::count> { false, false, false, false, false, false, true }, std::move(hooks));
     }
     playerBar = std::make_unique<PlayerBar>(host.filePlayer, *settings);
     playerBar->onOpen = [this] { chooseMidiFile(); };
@@ -304,8 +306,13 @@ MainComponent::~MainComponent()
     if (updateThread.joinable())
         updateThread.join();
     host.mirror.close();
+    closing = true;
     if (host.live.recording())
         finishRecording();
+    while (!pendingNames.empty()) { // waiting for a name: the automatic one (the conversions as the exporter leaves them)
+        submitRecording(pendingNames.front());
+        pendingNames.pop_front();
+    }
     saveSettings();
     if (takeRender.joinable())
         takeRender.join();
@@ -314,7 +321,7 @@ MainComponent::~MainComponent()
     if (profileBLoader.joinable())
         profileBLoader.join();
     takesWindow.reset();
-    takesPanel.reset();
+    galleryPanel.reset();
     host.playback.release();
     settingsWindow.reset(); // its content shows the panels: gone before them
     settingsPanel.reset();
@@ -369,7 +376,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         menu.addItem(item(kSaveTake, "Save last take (MIDI and WAV render)", "Ctrl+S"));
         menu.addSeparator();
         menu.addItem(item(kOpenRecordings, "Open the recordings folder"));
-        menu.addItem(item(kTakes, "Takes and recordings...", "Ctrl+T"));
+        menu.addItem(item(kTakes, "Gallery (recordings and takes)...", "Ctrl+T"));
         menu.addItem(item(kOpenTakes, "Open the takes folder"));
         menu.addSeparator();
         menu.addItem(item(kChangeCorpus, "Change corpus..."));
@@ -601,7 +608,7 @@ void MainComponent::showShortcuts()
               "MIDI file player\n  Ctrl+O: open a MIDI file (or drop it on the window)\n  Ctrl+Space: play / pause\n"
               "  Ctrl+Home: stop, back to the start\n  Ctrl+Left / Ctrl+Right: 5 s back / forward\n  Ctrl+L: loop\n\n"
               "Application\n  Ctrl+R: record / stop\n  Ctrl+S: save the last take\n  Ctrl+1 / Ctrl+2: reference / modal engine\n"
-              "  Ctrl+T: takes and recordings\n  Ctrl+E: engine settings\n  Ctrl+D: tone and dynamics\n  Ctrl+M: room settings\n  Ctrl+H: heard on headphones / speakers\n  Ctrl+,: settings and presets (the last section shown)\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
+              "  Ctrl+T: the gallery (recordings and takes)\n  Ctrl+E: engine settings\n  Ctrl+D: tone and dynamics\n  Ctrl+M: room settings\n  Ctrl+H: heard on headphones / speakers\n  Ctrl+,: settings and presets (the last section shown)\n  Ctrl+P: performance\n  F1: this list\n  Ctrl+Q: quit\n\n"
               "Piano gestures, on the MIDI keyboard (Keyboard > Piano gestures)\n" + gesturesHelp()
             + "\nThe mouse plays too: lower on a key is louder.");
 }
@@ -1004,6 +1011,7 @@ void MainComponent::reloadSettings()
     volume.setValue(s->getDoubleValue("volume", volume.getValue()), juce::sendNotificationSync);
     enginePanel->reload();
     tonePanel->reload();
+    recordingPanel->reload();
     roomPanel->reload();
     gesturesPanel->reload();
     if (s->getIntValue("engine", 2) == 2 ? !modalSelected() : modalSelected())
@@ -1309,7 +1317,8 @@ void MainComponent::toggleRecording(std::int64_t notesFrom)
         showMessage("No audio device is running: Audio > Audio, MIDI and streaming.", theme::bad);
         return;
     }
-    recordingStem = "PianoForge " + juce::Time::getCurrentTime().formatted("%Y-%m-%d %H-%M-%S");
+    recordingTime = juce::Time::getCurrentTime();
+    recordingStem = GalleryNaming::automaticStem(recordingTime);
     // The live recording: the 32-bit float WAV, kept under the recording's name when it is one of the formats,
     // else a master the conversions start from and then remove.
     const auto wavFile = recordFormats.empty() ? juce::File()
@@ -1345,11 +1354,22 @@ void MainComponent::finishRecording(std::int64_t at)
         showMessage("Recording failed: " + (span.error.isNotEmpty() ? span.error : juce::String("nothing recorded")), theme::bad);
         return;
     }
+    // Shorter than the shortest kept (Settings > Recording and naming): a draft, not kept.
+    const double seconds = (double) (span.end - span.start) / span.sampleRate;
+    if (const double minimum = recordingPanel->minimumSeconds(); minimum >= 0.5 && seconds < minimum) {
+        const bool sound = span.wav.existsAsFile() && span.wav.moveToTrash();
+        showMessage("Draft of " + galleryClock(seconds) + " not kept: shorter than " + galleryClock(minimum) + " (Settings > Recording and naming)"
+                        + (sound ? juce::String("; its sound is in the recycle bin") : juce::String()),
+                    theme::busy);
+        return;
+    }
     juce::StringArray saved;
     int notes = 0;
+    juce::File midiWritten;
     if (recordMidi) {
         if (auto take = takes.span(span.segment, span.start, span.end)) {
-            take->text = "PianoForge live recording " + recordingStem + ", " + juce::String(juce::roundToInt(span.sampleRate))
+            take->text = "PianoForge live recording, " + recordingTime.formatted("%Y-%m-%d %H:%M:%S") + ", "
+                       + juce::String(juce::roundToInt(span.sampleRate))
                        + " Hz: one tick per sample, tick 0 is the first sample of the sound files of the same name";
             const auto midiFile = recordingsFolder().getChildFile(recordingStem + ".mid");
             recordingsFolder().createDirectory();
@@ -1358,6 +1378,7 @@ void MainComponent::finishRecording(std::int64_t at)
             if (out.openedOk() && TakeRecorder::toMidiFile(*take).writeTo(out)) {
                 saved.add(".mid");
                 notes = take->notes;
+                midiWritten = midiFile;
             }
         }
     }
@@ -1373,20 +1394,134 @@ void MainComponent::finishRecording(std::int64_t at)
             if (f != SoundFormat::wavFloat)
                 job.targets.emplace_back(f, recordingsFolder().getChildFile(recordingStem + infoFor(f).extension));
     }
-    juce::StringArray pending;
+    PendingRecording recording;
+    recording.stem = recordingStem;
+    recording.folder = recordingsFolder();
+    recording.time = recordingTime;
+    recording.seconds = seconds;
+    recording.notes = notes;
+    recording.midi = midiWritten;
+    juce::StringArray formats;
+    for (const auto& s : saved)
+        formats.add(s.substring(1));
     for (const auto& [f, file] : job.targets)
+        formats.add(juce::String(infoFor(f).extension).substring(1));
+    recording.formats = formats.joinIntoString(" ");
+    recording.job = std::move(job);
+    if (span.dropped > 0 || span.error.isNotEmpty()) // said now: the name may take a while
+        showMessage((span.dropped > 0 ? "WARNING: " + juce::String(span.dropped) + " samples lost (the disk did not keep up)  " : juce::String())
+                        + span.error,
+                    theme::busy);
+    if (recordingPanel->askName() && !closing) {
+        if (span.dropped == 0 && span.error.isEmpty())
+            showMessage("Recorded " + galleryClock(seconds) + " (" + juce::String(notes) + " notes): what was it?");
+        pendingNames.push_back(std::move(recording));
+        askNextName();
+    } else {
+        submitRecording(recording);
+    }
+}
+
+std::vector<std::pair<juce::File, bool>> MainComponent::galleryRoots()
+{
+    return { { recordingsFolder(), true }, { takesFolder(), false } };
+}
+
+void MainComponent::askNextName()
+{
+    if (namingOpen || pendingNames.empty())
+        return;
+    namingOpen = true;
+    const auto& r = pendingNames.front();
+    NamingDialog::Info info;
+    info.time = r.time;
+    info.seconds = r.seconds;
+    info.notes = r.notes;
+    info.formats = r.formats;
+    info.root = recordingsFolder();
+    NamingDialog::launch(this, info, recordingPanel->naming(), scanGallery(galleryRoots()),
+                         [safe = juce::Component::SafePointer<MainComponent>(this)](NamingDialog::Action action, const GalleryMeta& meta) {
+                             auto* self = safe.getComponent();
+                             if (self == nullptr || self->pendingNames.empty())
+                                 return;
+                             auto recording = std::move(self->pendingNames.front());
+                             self->pendingNames.pop_front();
+                             self->namingOpen = false;
+                             self->nameRecording(std::move(recording), action, meta);
+                             // Once this window is gone: the keyboard back to the main window, the next one asked.
+                             juce::MessageManager::callAsync([safe] {
+                                 if (auto* s = safe.getComponent()) {
+                                     s->keyboard.grabKeyboardFocus();
+                                     s->askNextName();
+                                 }
+                             });
+                         });
+}
+
+void MainComponent::nameRecording(PendingRecording r, NamingDialog::Action action, const GalleryMeta& meta)
+{
+    if (action == NamingDialog::Action::discard) {
+        int moved = 0;
+        for (const auto& f : { r.job.master, r.midi })
+            moved += f.existsAsFile() && f.moveToTrash() ? 1 : 0;
+        showMessage("Discarded " + r.stem + (moved > 0 ? juce::String(": its files are in the recycle bin") : juce::String()), theme::busy);
+        if (galleryPanel != nullptr)
+            galleryPanel->refresh();
+        return;
+    }
+    if (action == NamingDialog::Action::save && meta.piece.isNotEmpty()) {
+        // Its name from the pattern, in its piece's folder; the files written so far renamed, the conversions to come
+        // made under that name.
+        const auto naming = recordingPanel->naming();
+        const auto folder = galleryFolder(naming, meta, recordingsFolder());
+        const auto masterSuffix = r.job.master.existsAsFile() ? r.job.master.getFileName().substring(r.stem.length()) : juce::String();
+        juce::StringArray suffixes { ".json" };
+        if (masterSuffix.isNotEmpty())
+            suffixes.add(masterSuffix);
+        if (r.midi.existsAsFile())
+            suffixes.add(".mid");
+        for (const auto& [f, file] : r.job.targets)
+            suffixes.add(infoFor(f).extension);
+        const auto items = scanGallery(galleryRoots());
+        const auto stem = uniqueGalleryStem(folder, galleryStem(naming, meta, r.time, galleryCount(items, meta.piece) + 1), suffixes);
+        bool ok = folder.isDirectory() || folder.createDirectory();
+        const auto master = masterSuffix.isNotEmpty() ? folder.getChildFile(stem + masterSuffix) : juce::File();
+        const auto midi = r.midi.existsAsFile() ? folder.getChildFile(stem + ".mid") : juce::File();
+        ok = ok && (masterSuffix.isEmpty() || r.job.master.moveFileTo(master));
+        if (ok && r.midi.existsAsFile() && !r.midi.moveFileTo(midi)) {
+            master.moveFileTo(r.job.master); // back under the automatic name
+            ok = false;
+        }
+        if (ok) {
+            if (masterSuffix.isNotEmpty())
+                r.job.master = master;
+            r.midi = midi;
+            for (auto& [f, file] : r.job.targets)
+                file = folder.getChildFile(stem + infoFor(f).extension);
+            r.job.label = stem;
+            r.stem = stem;
+            r.folder = folder;
+            writeGalleryMeta(folder.getChildFile(stem + ".json"), meta);
+        } else {
+            showMessage("Could not name it \"" + meta.piece + "\" (a file in use?): kept as " + r.stem, theme::bad);
+        }
+    }
+    submitRecording(r);
+}
+
+void MainComponent::submitRecording(PendingRecording& r)
+{
+    juce::StringArray pending;
+    for (const auto& [f, file] : r.job.targets)
         pending.add(infoFor(f).shortName);
-    lastSaved = recordingStem + " " + saved.joinIntoString(" + ") + (pending.isEmpty() ? "" : (saved.isEmpty() ? "" : " + ") + pending.joinIntoString(" + "))
-              + " (" + juce::String((double) (span.end - span.start) / span.sampleRate, 1) + " s, " + juce::String(notes) + " notes)";
-    auto text = "Recorded " + lastSaved + " in " + recordingsFolder().getFullPathName()
-              + (pending.isEmpty() ? juce::String() : ", converting to " + pending.joinIntoString(", ") + "...");
-    if (!job.targets.empty())
-        exporter.submit(std::move(job));
-    if (span.dropped > 0)
-        text << "  WARNING: " << juce::String(span.dropped) << " samples lost (the disk did not keep up)";
-    if (span.error.isNotEmpty())
-        text << "  " << span.error;
-    showMessage(text, span.dropped > 0 || span.error.isNotEmpty() ? theme::busy : theme::good);
+    lastSaved = r.stem + " (" + galleryClock(r.seconds) + ", " + juce::String(r.notes) + " notes)";
+    auto text = "Recorded " + r.stem + " " + r.formats + " (" + galleryClock(r.seconds) + ", " + juce::String(r.notes) + " notes) in "
+              + r.folder.getFullPathName() + (pending.isEmpty() ? juce::String() : ", converting to " + pending.joinIntoString(", ") + "...");
+    if (!r.job.targets.empty())
+        exporter.submit(std::move(r.job));
+    showMessage(text, theme::good);
+    if (galleryPanel != nullptr)
+        galleryPanel->refresh();
 }
 
 void MainComponent::toggleRecordFormat(SoundFormat f)
@@ -1536,8 +1671,8 @@ void MainComponent::renderInBackground(juce::MidiMessageSequence sequence, doubl
                                       theme::good);
                 else
                     self->showMessage("WAV render failed: " + written.getErrorMessage(), theme::bad);
-                if (self->takesPanel != nullptr)
-                    self->takesPanel->refresh();
+                if (self->galleryPanel != nullptr)
+                    self->galleryPanel->refresh();
                 if (done)
                     done(written.wasOk());
             }
@@ -1547,8 +1682,10 @@ void MainComponent::renderInBackground(juce::MidiMessageSequence sequence, doubl
 
 void MainComponent::openTakes()
 {
-    if (takesPanel == nullptr) {
-        TakesPanel::Hooks hooks;
+    if (galleryPanel == nullptr) {
+        GalleryPanel::Hooks hooks;
+        hooks.naming = [this] { return recordingPanel->naming(); };
+        hooks.openNamingSettings = [this] { showSettings(SettingsPanel::Section::recording); };
         hooks.playMidi = [this](const juce::File& midi) {
             openMidiFile(midi);
             if (!host.filePlayer.isPlaying())
@@ -1574,11 +1711,11 @@ void MainComponent::openTakes()
             showMessage("Rendering " + stem + " again with the settings heard now...");
             renderInBackground(sequence, rate, wav, juce::String(notes) + " notes");
         };
-        takesPanel = std::make_unique<TakesPanel>(host.playback, std::vector<juce::File> { takesFolder(), recordingsFolder() }, hooks);
+        galleryPanel = std::make_unique<GalleryPanel>(host.playback, galleryRoots(), hooks);
     } else {
-        takesPanel->refresh();
+        galleryPanel->refresh();
     }
-    showWindow(takesWindow, "Takes and recordings", *takesPanel);
+    showWindow(takesWindow, "Gallery", *galleryPanel);
 }
 
 void MainComponent::chooseCorpus()
@@ -2122,8 +2259,11 @@ void MainComponent::timerCallback()
     takes.add(drained, host.currentSegment(), host.currentRate());
     if (host.live.endedByDevice()) // the device stopped or changed: the recording ends there
         finishRecording();
-    for (const auto& report : exporter.takeReports())
-        showMessage(report.text + (report.ok ? " in " + recordingsFolder().getFullPathName() : juce::String()), report.ok ? theme::good : theme::bad);
+    for (const auto& report : exporter.takeReports()) {
+        showMessage(report.text, report.ok ? theme::good : theme::bad);
+        if (galleryPanel != nullptr)
+            galleryPanel->refresh();
+    }
     if (host.live.recording() && host.live.waiting()) {
         recordButton.setButtonText("Armed: play");
     } else if (host.live.recording()) {

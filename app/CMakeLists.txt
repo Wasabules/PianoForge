@@ -27,7 +27,10 @@ target_sources(PianoForgeApp PRIVATE
     src/ui/GesturesPanel.cpp
     src/ui/StreamLookPanel.cpp
     src/StreamLook.cpp
-    src/ui/TakesPanel.cpp
+    src/ui/GalleryPanel.cpp
+    src/ui/NamingDialog.cpp
+    src/ui/RecordingPanel.cpp
+    src/Gallery.cpp
     src/UpdateChecker.cpp
     src/MainComponent.cpp
     src/VelocityCurveEditor.cpp

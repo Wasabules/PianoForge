@@ -116,11 +116,35 @@ and its preview as OBS renders it (while OBS runs with the plugin). Each side fo
 every keyboard synchronised in OBS, one there comes here, the newest wins; a look set while OBS is closed reaches it
 when it starts.
 
-File > Takes and recordings (Ctrl+T) lists the takes (Ctrl+S) and the recordings together, with their date, length,
-notes and files. Listen to one (Space), or to two in A/B from the same instant (A and B switch between them with a
-10 ms crossfade); play one again through the engine from its MIDI, or render it again with the settings heard now (a
-new WAV next to it); rename it (all its files), show it in its folder, or delete it (to the recycle bin). What is
-listened to there is heard only: neither recorded again nor streamed.
+File > Gallery (Ctrl+T) holds the recordings (Ctrl+R) and the takes (Ctrl+S). Each is one item, whatever its
+formats (WAV, FLAC, MP3, Opus, MIDI). The window has:
+
+- on the left, the collections: everything, recordings, takes, not named yet, then one per piece;
+- on top, the search (piece, composer, tags, notes, name) and the filters: formats, date, rating, length, size;
+- in the middle, the list, sorted by any column (more columns from the header's menu);
+- on the right, what is known of the selection: piece, composer, tags, a rating of 0 to 5 stars, notes. Apply sets
+  them on every item selected; a field left as it was keeps each one's own. With a piece, Apply also renames the
+  files from the name pattern and moves them to the piece's folder;
+- below, listening and the actions. Listen to one (Space), or to two in A/B from the same instant (A and B switch
+  between them with a 10 ms crossfade). Play one through the engine from its MIDI, render it again with the settings
+  heard now, rename it, show it in its folder, or delete it (to the recycle bin).
+
+What is listened to there is heard only: neither recorded again nor streamed. What is known of an item is kept next
+to its files, in `<name>.json`, and follows them.
+
+When a recording stops, a window asks what was played: the piece (those played before are suggested), its composer
+(filled in from an earlier recording), tags and a rating. Save names the files; Escape keeps the automatic name (the
+date and time); Discard sends the files to the recycle bin. The conversions to MP3 and the other formats wait for
+the name, so they are made under it.
+
+Settings > Recording and naming holds:
+
+- the shortest recording kept, 30 s by default. A recording stopped before it is a draft: not kept, its sound sent
+  to the recycle bin. Takes saved with Ctrl+S are always kept;
+- whether to ask for a name when a recording stops;
+- the name pattern. Its tokens are {piece}, {composer}, {date}, {time}, {n} (the recording's number among the
+  piece's) and {tags}. An empty token takes the separator before it away;
+- a folder per piece.
 
 When the device runs faster than 50 kHz (the Windows mixer can impose 192 kHz), the engine runs at the device's
 rate divided by 2, 4 or 8 (44.1 or 48 kHz) and its sound is brought up to the device's: Audio > Engine rate.

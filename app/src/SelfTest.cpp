@@ -12,6 +12,7 @@
 #include "ui/RoomPanel.h"
 #include "ui/TonePanel.h"
 #include "Presets.h"
+#include "Gallery.h"
 #include "ui/StreamLookPanel.h"
 #include "ReferencePlayer.h"
 #include "SampleBank.h"
@@ -1220,6 +1221,103 @@ int runSelfTest(const juce::StringArray& arguments)
                     + (snapshotsHold ? "; the snapshot matches" : "; the snapshot does NOT match") + (movedNoticed ? ", a change is noticed" : ", a change is NOT noticed")
                     + (unknownKey ? "; a preset names a setting it does not govern" : ""));
         file.deleteFile();
+    }
+
+    // 8h3. The gallery, in a folder of its own: a recording (a 2 s WAV and its MIDI of 3 notes) and a take found,
+    //      measured and grouped; the name pattern (a sharp and a comma kept, an empty token's separator gone, the
+    //      automatic name without a piece); a recording named and filed in its piece's folder, its metadata with it;
+    //      a second one to the same name gets " (2)"; the filters (length, search, kind, format, not named yet).
+    {
+        const auto base = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("pianoforge-selftest-gallery");
+        base.deleteRecursively();
+        const auto recs = base.getChildFile("Recordings"), takesDir = base.getChildFile("Takes");
+        recs.createDirectory();
+        takesDir.createDirectory();
+        const auto when = juce::Time(2026, 0, 2, 10, 0); // 2 January 2026, 10:00
+        const auto stem = GalleryNaming::automaticStem(when);
+        auto tone = [](double seconds) {
+            juce::AudioBuffer<float> b(2, (int) (seconds * 48000.0));
+            for (int k = 0; k < b.getNumSamples(); ++k)
+                b.setSample(0, k, 0.1f * (float) std::sin(0.0576 * k));
+            return b;
+        };
+        writeWav(tone(2.0), 48000.0, recs.getChildFile(stem + ".wav"));
+        {
+            juce::MidiMessageSequence seq;
+            for (int g = 0; g < 3; ++g) {
+                seq.addEvent(juce::MidiMessage::noteOn(1, 60 + g, (juce::uint8) 80), g * 960.0);
+                seq.addEvent(juce::MidiMessage::noteOff(1, 60 + g), g * 960.0 + 480.0);
+            }
+            juce::MidiFile mf;
+            mf.setTicksPerQuarterNote(960);
+            mf.addTrack(seq);
+            juce::FileOutputStream out(recs.getChildFile(stem + ".mid"));
+            mf.writeTo(out);
+        }
+        writeWav(tone(0.5), 48000.0, takesDir.getChildFile("take-20260103-090000.wav"));
+        const std::vector<std::pair<juce::File, bool>> roots { { recs, true }, { takesDir, false } };
+        auto items = scanGallery(roots);
+        GalleryItem* rec = nullptr;
+        for (auto& g : items)
+            if (g.recording)
+                rec = &g;
+        const bool scanned = items.size() == 2 && rec != nullptr && std::abs(rec->seconds - 2.0) < 0.01 && rec->notes == 3 && rec->bytes > 0
+                          && rec->has(".wav") && rec->has(".mid");
+
+        GalleryNaming naming, withComposer;
+        withComposer.pattern = "{composer} - {piece} ({n})";
+        GalleryMeta meta;
+        meta.piece = "Nocturne in C# minor, Op. posth.";
+        meta.composer = "Chopin";
+        auto anonymous = meta;
+        anonymous.composer.clear();
+        const auto s1 = galleryStem(naming, meta, when, 1), s2 = galleryStem(withComposer, anonymous, when, 3),
+                   s3 = galleryStem(withComposer, meta, when, 0), s4 = galleryStem(naming, GalleryMeta {}, when, 1);
+        const bool named = s1 == "Nocturne in C# minor, Op. posth. - 2026-01-02 10-00" && s2 == "Nocturne in C# minor, Op. posth. (3)"
+                        && s3 == "Chopin - Nocturne in C# minor, Op. posth" && s4 == stem;
+
+        bool filed = false, second = false;
+        if (rec != nullptr) {
+            rec->meta = meta;
+            writeGalleryMeta(rec->metaFile(), meta);
+            rec->files.push_back(rec->metaFile());
+            const auto pieceFolder = galleryFolder(naming, meta, recs);
+            filed = moveGalleryItem(*rec, pieceFolder, s1).wasOk();
+            writeWav(tone(1.0), 48000.0, recs.getChildFile("PianoForge 2026-01-02 10-00-30.wav"));
+            for (auto& g : scanGallery(roots))
+                if (g.recording && g.meta.piece.isEmpty()) {
+                    g.meta = meta;
+                    writeGalleryMeta(g.metaFile(), meta);
+                    g.files.push_back(g.metaFile());
+                    second = moveGalleryItem(g, pieceFolder, s1).wasOk() && g.stem == s1 + " (2)";
+                }
+        }
+        items = scanGallery(roots);
+        int inFolder = 0;
+        for (const auto& g : items)
+            inFolder += g.folder.getFileName() == "Nocturne in C# minor, Op. posth" && g.meta.piece == meta.piece && g.has(".json") ? 1 : 0;
+        filed = filed && inFolder == 2 && recs.findChildFiles(juce::File::findFiles, false).isEmpty();
+
+        auto count = [&](auto setup) {
+            GalleryFilter f;
+            setup(f);
+            int n = 0;
+            for (const auto& g : items)
+                n += f.matches(g) ? 1 : 0;
+            return n;
+        };
+        const bool filtered = count([](GalleryFilter& f) { f.minSeconds = 30.0; }) == 0
+                           && count([](GalleryFilter& f) { f.search = "noct CHOPIN"; }) == 2
+                           && count([](GalleryFilter& f) { f.kind = GalleryFilter::takes; }) == 1
+                           && count([](GalleryFilter& f) { f.types = GalleryFilter::mp3; }) == 0
+                           && count([](GalleryFilter& f) { f.unnamedOnly = true; }) == 1
+                           && count([](GalleryFilter& f) { f.minSeconds = 0.8; f.maxSeconds = 1.5; }) == 1;
+        r.check(scanned && named && filed && second && filtered,
+                "gallery: a recording (2 s, 3 notes, wav mid) and a take found" + juce::String(scanned ? "" : " (NOT so)") + "; named \"" + s1 + "\", \""
+                    + s2 + "\", \"" + s3 + "\"" + (named ? "" : " (NOT as expected)") + "; filed in its piece's folder with its metadata"
+                    + (filed ? "" : " (NOT so)") + ", a second one \" (2)\"" + (second ? "" : " (NOT so)") + "; filters by length, search, kind, "
+                    + "format and naming" + (filtered ? "" : " (NOT as expected)"));
+        base.deleteRecursively();
     }
 
     // 8i. Takes listened to: a WAV (440 Hz on the left, 660 Hz on the right) played through the audio host, heard as
