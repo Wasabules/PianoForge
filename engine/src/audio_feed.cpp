@@ -204,9 +204,18 @@ bool AudioFeedWriter::create()
     }
     ownerLock = lock;
 #else
-    // Likewise: a lock on the feed's own memory object (flock: let go when the process ends, a crash included, while
-    // the object itself stays for the readers).
+    // Likewise: a flock, let go when the process ends, a crash included. Linux: on the feed's own memory object, which
+    // stays for the readers. macOS refuses flock on a shared memory object (and O_CLOEXEC in shm_open): a lock file of
+    // the user's own, in their temporary folder ($TMPDIR, under /var/folders), takes its place.
+#if defined(__APPLE__)
+    const char* tmp = std::getenv("TMPDIR");
+    std::string folder = tmp != nullptr && *tmp != '\0' ? tmp : "/tmp";
+    if (folder.back() != '/')
+        folder += '/';
+    const int lock = ::open((folder + feedName() + ".lock").c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+#else
     const int lock = shm_open(("/" + feedName()).c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+#endif
     if (lock < 0)
         return false;
     if (flock(lock, LOCK_EX | LOCK_NB) != 0) {
