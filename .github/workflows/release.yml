@@ -1,0 +1,228 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# A release, from a version tag: builds and tests PianoForge on Windows, Ubuntu and macOS, makes its packages and
+# opens a draft GitHub release with them, to be read and published by hand (Releases > the draft > Publish).
+#
+#   1. Set the version in CMakeLists.txt (project(PianoForge VERSION x.y.z)) and commit.
+#   2. git tag vx.y.z && git push origin vx.y.z      (or Actions > release > Run workflow, with the tag)
+#
+# The tag must be the project's version: the application compares its own (PIANOFORGE_VERSION) with the latest
+# release's to offer updates. Its assets are named as Help > Check for updates looks for them, on the release that
+# https://api.github.com/repos/<owner>/<repo>/releases/latest gives (a draft is not one, until it is published):
+#   PianoForge-x.y.z-setup.exe           Windows: the application, the VST3 plugin, the OBS plugin
+#   pianoforge_x.y.z_amd64.deb           Ubuntu 24.04 and later, Debian 13: the application, the VST3 and LV2 plugins
+#   pianoforge-x.y.z-1.x86_64.rpm        Fedora 40 and later: the same
+#   PianoForge-x.y.z-macOS-arm64.zip     macOS 11 and later, Apple silicon: the application, VST3 and AU (not signed)
+#   SHA256SUMS                           every asset's SHA-256 (GitHub also gives each asset's digest)
+#
+# No profile and no corpus in any of them (NOTICE.md: a profile follows its bank's licence; the packages' own checks
+# refuse them). Nothing is signed: Windows' SmartScreen and macOS's Gatekeeper ask the user to confirm the first run.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The version tag to release (vX.Y.Z), already pushed"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  PIANOFORGE_NO_TIMING: "1"
+
+jobs:
+  version:
+    name: The tag is the project's version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - id: check
+        run: |
+          version=$(sed -nE 's/^project\(PianoForge VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::The tag $TAG is not the project's version ($version, CMakeLists.txt)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Windows installer
+    needs: version
+    runs-on: windows-2022
+    env:
+      OBS_VERSION: "33.0.1" # the OBS Studio the plugin is built against (obs/CMakeLists.txt: PIANOFORGE_OBS_VERSION)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Inno Setup 6
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+      # The OBS plugin links to OBS's own DLLs (import libraries made from them): the portable build of the release
+      # its headers come from, unpacked here, not installed.
+      - name: OBS Studio (its DLLs, for the plugin)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download $env:OBS_VERSION -R obsproject/obs-studio -p "OBS-Studio-$env:OBS_VERSION-Windows-x64.zip" -D obs-download
+          Expand-Archive "obs-download/OBS-Studio-$env:OBS_VERSION-Windows-x64.zip" -DestinationPath obs-portable
+          $dll = Get-ChildItem obs-portable -Recurse -Filter obs.dll | Where-Object { $_.FullName -match '64bit' } | Select-Object -First 1
+          if (-not $dll) { throw "obs.dll not found in OBS $env:OBS_VERSION's portable build" }
+          $dir = $dll.Directory.Parent.Parent.FullName -replace '\\', '/'
+          "OBS_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Configure
+        run: cmake --preset windows-msvc -DPIANOFORGE_OBS_PLUGIN=ON "-DPIANOFORGE_OBS_DIR=${{ env.OBS_DIR }}" -DPIANOFORGE_OBS_VERSION=${{ env.OBS_VERSION }}
+
+      - name: Build
+        run: cmake --build --preset windows-release --parallel 4
+
+      # obs_plugin starts OBS's renderer, which a runner has no session for; obs_overlay checks the plugin's drawing.
+      - name: Test
+        run: ctest --preset windows-release -E obs_plugin
+
+      - name: Installer
+        run: cmake --build --preset windows-release --target installer
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: build/windows-msvc/installer/output/PianoForge-${{ needs.version.outputs.version }}-setup.exe
+          if-no-files-found: error
+
+  linux:
+    name: Linux packages (.deb, .rpm)
+    needs: version
+    runs-on: ubuntu-24.04 # the oldest Ubuntu aimed at: a package asks for the C library it was built against
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev \
+            libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libxext-dev libxrender-dev \
+            libgl1-mesa-dev xvfb desktop-file-utils appstream rpm
+
+      - name: Configure
+        run: cmake --preset linux-gcc
+
+      - name: Build
+        run: cmake --build --preset linux-release --parallel 4
+
+      - name: Test (with a virtual display)
+        run: xvfb-run -a ctest --preset linux-release
+
+      - name: Packages
+        run: |
+          desktop-file-validate app/linux/org.pianoforge.PianoForge.desktop
+          cd build/linux-gcc
+          cpack -G "DEB;RPM"
+          ls -l *.deb *.rpm
+          dpkg-deb -c pianoforge_*_amd64.deb | grep -E "usr/bin/pianoforge|doc/pianoforge/copyright"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            build/linux-gcc/pianoforge_${{ needs.version.outputs.version }}_amd64.deb
+            build/linux-gcc/pianoforge-${{ needs.version.outputs.version }}-*.rpm
+          if-no-files-found: error
+
+  macos:
+    name: macOS archive
+    needs: version
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - run: brew install ninja
+
+      - name: Configure
+        run: cmake --preset macos-clang
+
+      - name: Build
+        run: cmake --build --preset macos-release --parallel 4
+
+      - name: Test
+        run: ctest --preset macos-release
+
+      # The application and the plugins in one folder, with where each goes; the linker's ad hoc signature only.
+      - name: Archive
+        run: |
+          name="PianoForge-${{ needs.version.outputs.version }}-macOS-arm64"
+          mkdir "$name"
+          cp -R build/macos-clang/app/PianoForgeApp_artefacts/Release/PianoForge.app "$name/"
+          cp -R build/macos-clang/plugin/PianoForgePlugin_artefacts/Release/VST3/PianoForge.vst3 "$name/"
+          cp -R build/macos-clang/plugin/PianoForgePlugin_artefacts/Release/AU/PianoForge.component "$name/"
+          cp LICENSE NOTICE.md "$name/"
+          cat > "$name/INSTALL.txt" <<'EOF'
+          PianoForge.app        to /Applications
+          PianoForge.vst3       to ~/Library/Audio/Plug-Ins/VST3
+          PianoForge.component  to ~/Library/Audio/Plug-Ins/Components
+
+          Not signed by an Apple developer: at the first start, macOS refuses it. Then open System Settings >
+          Privacy & Security and choose "Open Anyway" for PianoForge (or, in a terminal:
+          xattr -dr com.apple.quarantine /Applications/PianoForge.app).
+          EOF
+          ditto -c -k --keepParent "$name" "$name.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: PianoForge-${{ needs.version.outputs.version }}-macOS-arm64.zip
+          if-no-files-found: error
+
+  publish:
+    name: Draft release
+    needs: [version, windows, linux, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: assets
+        run: |
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      # A draft: the notes (GitHub's, from the commits since the last release) are read and completed by hand before
+      # publishing; only then does the application's update check see it. Run again, it replaces the assets.
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" assets/* --clobber
+          else
+            gh release create "$TAG" assets/* --draft --verify-tag --generate-notes \
+              --title "PianoForge ${{ needs.version.outputs.version }}"
+          fi

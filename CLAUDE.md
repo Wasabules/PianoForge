@@ -66,8 +66,10 @@ The forge's native kernels must be built for the native-vs-Python tests to run (
 WebAssembly (see `web/README.md`): `emcmake cmake -S . -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release`, build,
 `ctest --test-dir build/wasm` (engine tests under Node), `node web/check.mjs` (wasm vs native, needs a profile).
 
-CI (`.github/workflows/build.yml`) is `workflow_dispatch` only: the repo is private and Actions minutes are counted.
-Do not trigger it (`gh workflow run build.yml`) unless asked.
+CI (`.github/workflows/build.yml`) runs on push to main and on pull requests only once the repo is public (its jobs
+skip while it is private: Actions minutes are counted), and by hand. `release.yml` turns a `vX.Y.Z` tag (equal to
+`project(... VERSION)`) into a draft GitHub release with the Windows installer, .deb, .rpm and macOS zip. Do not
+trigger either (`gh workflow run`, pushing a tag) unless asked.
 
 ## Architecture
 

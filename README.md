@@ -108,8 +108,9 @@ PianoForge.exe --selftest corpus/reference/noire-dry/single-notes selftest.txt
 
 Windows is where PianoForge is used and tested every day. The code is written for Linux and macOS too, and the
 continuous integration (`.github/workflows/build.yml`: Windows, Ubuntu, macOS on Apple silicon, the forge's tests,
-the WebAssembly build) builds and tests it on all three when started by hand (Actions > build > Run workflow, or
-`gh workflow run build.yml`: the repository is private and its minutes are counted). On Linux it has run too (Ubuntu
+the WebAssembly build) builds and tests it on all three at every push to main and every pull request once the
+repository is public, and by hand at any time (Actions > build > Run workflow, or `gh workflow run build.yml`); while
+the repository is private, its jobs skip (minutes counted). On Linux it has run too (Ubuntu
 26.04, GCC 15, PipeWire): every test, the application's self-test, the plugin in a host, and a free bank's profile
 built from scratch and played (Salamander: the download, the renders and the forge in about 35 minutes). macOS has
 not run it yet.
@@ -320,6 +321,25 @@ or for every user if chosen. Settings, takes and recordings are never touched, b
 It never holds the corpus nor a profile calibrated on it (the build refuses anything but its ten files): the
 installed application asks for its corpus (File > Change corpus). Not code-signed: Windows SmartScreen warns
 about it the first time.
+
+## Releases
+
+A version tag makes a release (`.github/workflows/release.yml`): set the version in `CMakeLists.txt`
+(`project(PianoForge VERSION x.y.z)`), commit, then `git tag vx.y.z && git push origin vx.y.z`. The workflow checks
+that the tag is that version, builds and tests on Windows, Ubuntu 24.04 and macOS, and opens a **draft** release with:
+
+| Asset | For |
+|---|---|
+| `PianoForge-x.y.z-setup.exe` | Windows 10 and 11: the application, the VST3 plugin, the OBS plugin (built against OBS 33.0.1) |
+| `pianoforge_x.y.z_amd64.deb` | Ubuntu 24.04 and later, Debian 13: the application, the VST3 and LV2 plugins |
+| `pianoforge-x.y.z-1.x86_64.rpm` | Fedora 40 and later: the same |
+| `PianoForge-x.y.z-macOS-arm64.zip` | macOS 11 and later on Apple silicon: the application, VST3 and AU, not signed (`INSTALL.txt` inside) |
+| `SHA256SUMS` | every asset's SHA-256 |
+
+Read and complete the notes GitHub wrote (the commits since the last release), then publish the draft: only then does
+Help > Check for updates see it (with `https://api.github.com/repos/<owner>/<repo>/releases/latest` as its address).
+Nothing is signed, so Windows' SmartScreen and macOS's Gatekeeper ask for a confirmation at the first start. No
+release holds a corpus or a profile.
 
 ## Updates
 

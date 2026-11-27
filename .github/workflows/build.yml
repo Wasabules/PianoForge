@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Builds PianoForge and runs its tests on Windows, Ubuntu and macOS (and the forge's tests, and the WebAssembly
-# build), when started by hand (Actions > build > Run workflow, or `gh workflow run build.yml`): the repository is
-# private, and its Actions minutes are counted (Windows twice, macOS ten times), so not at every push.
+# build): at every push to main and every pull request once the repository is public (its Actions minutes are then
+# free), and by hand at any time (Actions > build > Run workflow, or `gh workflow run build.yml`). While it is private
+# (minutes counted: Windows twice, macOS ten times), a push or a pull request skips every job, so costs nothing.
+# Releases: release.yml.
 #
 # The reference corpus and the profiles calibrated on it are never in the repository (rendered from a commercial
 # library, their licence forbids passing them on): the tests that need them skip (the plugin's sound tests, the web
@@ -11,11 +13,19 @@
 name: build
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
+
+concurrency: # a newer push replaces the run still going for the same branch or pull request
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   native:
     name: ${{ matrix.name }}
+    if: github.event_name == 'workflow_dispatch' || !github.event.repository.private
     strategy:
       fail-fast: false
       matrix:
@@ -82,6 +92,7 @@ jobs:
 
   forge:
     name: Forge, bench and profile builder (Python)
+    if: github.event_name == 'workflow_dispatch' || !github.event.repository.private
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +116,7 @@ jobs:
 
   web:
     name: Web (WebAssembly)
+    if: github.event_name == 'workflow_dispatch' || !github.event.repository.private
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
