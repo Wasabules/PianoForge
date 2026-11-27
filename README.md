@@ -457,3 +457,7 @@ option; the VST3, AU, LV2 and ASIO SDKs; PipeWire's and JACK's headers) and the 
 The engine still takes no GPL or AGPL code from others and no `juce::`: its own licence is a choice, not a
 consequence. The bench uses pedalboard (GPL-3.0) as a development tool only; it is never linked into the engine.
 A modal profile follows the licence of the bank it was measured from, not this one (see the banks above).
+
+Noire (Native Instruments) served during development only as a local measurement and listening reference: none of
+its audio, nor any profile or data set made from it, is in this repository or in the releases (NOTICE.md). Product
+and maker names are trademarks of their owners; PianoForge is not affiliated with them.

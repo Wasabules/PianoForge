@@ -50,4 +50,14 @@ adaptation of that bank and follows the bank's licence, not this one. The reposi
   and the mention that it is a set of measures derived from the bank by PianoForge's forge.
 - **Piano in 162** by Ivy Audio: no licence text comes with it; a profile made from it stays local unless Ivy Audio
   agrees otherwise.
-- **Noire** (Native Instruments): commercial; its renders and any profile made from them stay local, never published.
+- **Noire** (Native Instruments, commercial): during development, renders of a licensed copy were used locally as a
+  measurement and listening reference, as a study compares its model with a known instrument. None of its audio, nor
+  any profile or data set made from it, is in this repository or in PianoForge's releases: the figures quoted in the
+  code and the documents describe what was measured on it, they are not material from it. Any profile PianoForge
+  publishes is measured from a free bank (the Salamander Grand Piano).
+
+## Trademarks
+
+Noire, Kontakt and Native Instruments are trademarks of Native Instruments GmbH; Steinway, Yamaha, Kawai and the other
+makers and instruments named are trademarks of their owners. PianoForge is not affiliated with or endorsed by any of
+them: they are named only to say what was measured or compared.
