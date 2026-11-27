@@ -68,8 +68,9 @@ WebAssembly (see `web/README.md`): `emcmake cmake -S . -B build/wasm -G Ninja -D
 
 CI (`.github/workflows/build.yml`) runs on push to main and on pull requests only once the repo is public (its jobs
 skip while it is private: Actions minutes are counted), and by hand. `release.yml` turns a `vX.Y.Z` tag (equal to
-`project(... VERSION)`) into a draft GitHub release with the Windows installer, .deb, .rpm and macOS zip. Do not
-trigger either (`gh workflow run`, pushing a tag) unless asked.
+`project(... VERSION)`) into a draft GitHub release with the Windows installer, .deb, .rpm and macOS zip; `pages.yml`
+publishes the WebAssembly page (web/site + the module) to GitHub Pages at pushes touching `web/` or `engine/`. Do not
+trigger them by hand (`gh workflow run`, pushing a tag) unless asked.
 
 ## Architecture
 

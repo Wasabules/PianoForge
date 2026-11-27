@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# The browser version on GitHub Pages (https://<owner>.github.io/<repo>/): the WebAssembly module built from the
+# engine, its tests run under Node, then web/site/ with the module published as it is. At every push to main that
+# changes the web page or the engine, and by hand (Actions > pages > Run workflow).
+#
+# A standalone module with no threads: the page needs no cross-origin isolation headers, which Pages cannot send.
+# No profile is published with it: each visitor gives the page a modal-profile.bin, kept in their browser
+# (IndexedDB), never uploaded.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "engine/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency: # one deployment at a time; a newer one waits rather than cutting the running one short
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the page
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: emcmake cmake -S . -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build (the module, copied into web/site/)
+        run: cmake --build build/wasm
+      - name: Test (the engine's tests, under Node)
+        env:
+          PIANOFORGE_NO_TIMING: "1"
+        run: ctest --test-dir build/wasm --output-on-failure
+      - name: The site
+        run: |
+          test -s web/site/pianoforge.wasm
+          ls -l web/site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/site
+
+  deploy:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

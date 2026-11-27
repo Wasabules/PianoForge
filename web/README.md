@@ -10,9 +10,12 @@ lab's own sequence player, to the sample in the audio worklet; open or drop a .m
 - `check.mjs`: runs the module under Node as the worklet does: imports, the real profile, the same sound as the
   native engine (level per window), the cost (dry, with the room, on headphones).
 
+Online: <https://wasabules.github.io/PianoForge/>, published by `.github/workflows/pages.yml` (the module built and
+its tests run, then `site/` as it is) at every push to main that changes `web/` or the engine, or by hand.
+
 The profile is never uploaded: the page asks for `modal-profile.bin` (written by `forge export`), keeps it in the
-browser (IndexedDB) and hands it to the worklet. Calibrated on a commercial library, it must not be published: the
-page can be put online only with a profile made from free material.
+browser (IndexedDB) and hands it to the worklet. None is published with the page: one calibrated on a commercial
+library never may be, one made from a free bank (Salamander, CC-BY 3.0) may, with its credit.
 
 ## Build
 

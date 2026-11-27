@@ -23,7 +23,7 @@ switches between that reference and the modal engine while playing.
 | `studies/` | Standalone computations and spikes behind design decisions (resonator precision, CPU budget, resynthesis). |
 | `plugin/` | The VST3 instrument (JUCE): the same engine, room, headphones, output tone and limiter in a host. |
 | `obs/` | OBS Studio plugin: the PianoForge sound (on speakers, as heard or dry, its own level), keyboard (lit keys and pedals, rounded notes, lights and sparkles, with the sound) and text sources, and chapter markers in OBS's recordings; fed by the application through shared memory. |
-| `web/` | The modal engine and the room in WebAssembly, played from a browser page. |
+| `web/` | The modal engine and the room in WebAssembly, played from a browser page: <https://wasabules.github.io/PianoForge/> (it asks for a modal profile, kept in the browser). |
 | `installer/` | The Windows installer (Inno Setup 6) and the update manifest it comes with. |
 | `corpus/` | Rendered takes and plugin states. Local only, never committed (commercial sample library licences). |
 
