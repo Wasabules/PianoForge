@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The keyboard sources' look, shared with PianoForge's "Stream look" window through the look channel
 // (pianoforge/look_channel.hpp; the settings: pianoforge/stream_look.hpp). An edit in OBS reaches PianoForge; one in
 // PianoForge reaches every keyboard source synchronised with it ("sync_app", on by default): they all share one look.

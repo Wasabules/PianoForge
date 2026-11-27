@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """`forge export`: the modal profile played by the C++ engine, from the measurements of every velocity layer.
 
 Inputs, in the corpus state folder: modes-vNNN.json (`forge modes`) and soundboard-vNNN.json (`forge soundboard`)

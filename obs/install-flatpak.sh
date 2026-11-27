@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # The PianoForge plugin for Flathub's OBS Studio (com.obsproject.Studio), in one command:
 #   obs/install-flatpak.sh
 # builds it inside that OBS's own SDK (against its libobs), installs it where that OBS looks

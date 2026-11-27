@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """How long should the previous voice of a re-struck note keep sounding? Fit against the reference library.
 
 For each take of the 'repetitions' pass (C2, C4, C6 struck 4 times at 50 to 500 ms, velocities 48 and 96),

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Tests of the soundboard amplitude fit: shared poles, bins under the partials left out."""
 
 import unittest

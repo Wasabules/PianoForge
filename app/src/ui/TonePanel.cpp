@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 #include "TonePanel.h"
 
 #include "Theme.h"

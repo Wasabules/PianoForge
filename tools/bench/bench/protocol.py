@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Measurement sessions: a TOML description becomes a list of takes, timed to the sample.
 
 A take is a list of MIDI events (time in samples, bytes) plus a duration. It does not depend on any

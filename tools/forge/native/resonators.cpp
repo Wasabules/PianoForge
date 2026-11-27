@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // A bank of one-pole complex resonators driven by one signal, summed in stereo (forge/sympathetic.py, response): the
 // free strings answering a played note. In Python each resonator was an lfilter call and a sum, thousands of times
 // per take; here the resonators run their recurrences eight at a time (independent lanes the compiler vectorises),

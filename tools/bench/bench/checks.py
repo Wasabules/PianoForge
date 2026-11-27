@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Automatic checks of a rendered take. Independent of the instrument: NumPy only."""
 
 from __future__ import annotations

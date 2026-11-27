@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The fast scoring of the drive shapes' combinations (sympathetic._Tables) against assess() itself, on measures
 made here."""
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """How much does a second strike disturb the power estimate of the sympathetic resonance (Piano in 162)?
 
 studies/sympathetic_power_check.py shows that P(down) - g P(up) finds the resonance when both takes hold the same

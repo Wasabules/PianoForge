@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Sums of damped sinusoids (forge/modes.py synthesize, forge/soundboard.py synthesize_body): the modes of a note, or
 // the body's resonances, as the forge subtracts them from a recording. In Python each mode cost a complex
 // exponential per sample; here phasors turn by recurrence, eight modes at a time, anchored on the exact exponential

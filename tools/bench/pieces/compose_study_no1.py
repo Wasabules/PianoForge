@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Composes "Study No. 1 in A minor", an original test piece, and writes it as a standard MIDI file.
 
 The piece is written to exercise what tells a piano from a sampler, in about a minute:

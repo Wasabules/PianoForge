@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The forge's variable projection, native (forge/modes.py, _refine): the poles of k damped exponentials shared by
 // several channels, optimised by Levenberg-Marquardt, the complex amplitudes solved exactly at each step. The same
 // problem as the Python version, with two differences that make it 10 to 50 times faster: the Jacobian is Kaufman's

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Output limiter tests: transparent under the ceiling, nothing over it, back to unity after a burst, the same gain
 // on both channels, block-size independent. Exits non-zero on a failure.
 #include <pianoforge/limiter.hpp>

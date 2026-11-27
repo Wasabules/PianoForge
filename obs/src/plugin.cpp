@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The PianoForge plugin for OBS Studio: the application's sound (audio source), its keyboard as played (video
 // source), its state as text (text source), and chapter markers in OBS's recordings at PianoForge's marks. All of it
 // read from the application's feed (shared memory, pianoforge/audio_feed.hpp): no virtual cable, no system mixer. The

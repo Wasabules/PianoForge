@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The three-string unison's fit (forge/unison.py, fit_partial): the bridge admittance Y for which three strings
 // with their own poles s_i give the measured poles, with one damping common to the strings. In Python each try was
 // scipy's least squares over numpy polynomials and their roots, thousands of small calls per layer; here the same

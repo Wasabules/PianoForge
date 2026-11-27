@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Building a profile from a bank, stage by stage, each one resumable (run the same command again after a stop):
 
   check                the bank's files (fetched when the tool knows where from), its keys, its samples, the tools

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """`forge half-pedal`: how far the sustain pedal lifts the dampers, per CC64 value, measured on the reference.
 
 The engine's damper model is the measured release curve (forge release-curves), run at a speed set by the pedal:

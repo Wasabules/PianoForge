@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The forge's progress, for the forge monitor (tools/forge/monitor): progress.json in the corpus state folder.
 
 `forge pipeline` writes its plan there (every step, its status and how long it took) and the step under way

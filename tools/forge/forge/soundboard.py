@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """`forge soundboard`: the soundboard body, as resonances shared by every note.
 
 What the strings leave over (recording minus the measured modes, `forge modes`) holds, under the fundamental, a

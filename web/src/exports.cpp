@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The engine's C interface for WebAssembly: one modal engine and its room, driven from the AudioWorklet
 // (web/site/worklet.js), on the browser's audio thread. Everything here runs on that thread: no lock, no wait.
 //

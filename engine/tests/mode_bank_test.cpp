@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Mode bank tests (no framework): exits with a non-zero code on the first failure.
 #include <pianoforge/mode_bank.hpp>
 

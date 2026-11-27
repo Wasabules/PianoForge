@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 #pragma once
 
 // What the plugin's sources share: a sleeper on a high-resolution timer, the audio source's timeline (which frame of

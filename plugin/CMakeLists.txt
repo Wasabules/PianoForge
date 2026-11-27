@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # The VST3 instrument (JUCE; an Audio Unit too on macOS): the application's modal engine, room, headphones and
 # limiter in a host.
 #   cmake --build --preset windows-release --target install-vst3-plugin

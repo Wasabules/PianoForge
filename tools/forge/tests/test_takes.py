@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """What a take holds: where its note held ends (python -m unittest discover -s tools/forge/tests)."""
 
 import unittest

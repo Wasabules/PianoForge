@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Fetching a bank: a GitHub repository at a pinned commit, file by file, each one checked against its git blob
 hash (an interrupted file resumed where it stopped: some networks cut long transfers after a few tens of MB), or a
 bank downloaded by hand, then checked."""

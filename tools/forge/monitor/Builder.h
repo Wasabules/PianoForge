@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The forge monitor's profile builder: a sample bank to a modal profile, by the project's tool (pianoforge-profile,
 // tools/profile), started here in the background, detached (closing the monitor leaves it running; its stages in
 // build.json and its log in build-log.txt, beside the profile, are what the monitor shows).

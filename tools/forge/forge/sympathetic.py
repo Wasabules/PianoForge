@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """`forge sympathetic`: the free strings (sustain pedal down, keys held) set ringing by the notes played.
 
 With its damper up, a string is driven through the bridge by everything else that sounds. The strings whose

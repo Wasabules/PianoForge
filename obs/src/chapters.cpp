@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // What PianoForge asks of OBS's frontend, read from the feed:
 // - chapter markers in OBS's recordings at PianoForge's marks (a take saved, a recording started or stopped, a MIDI
 //   file played), while a PianoForge audio source has them on and OBS records. OBS 30.2 and later; only recordings

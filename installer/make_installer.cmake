@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Stages what the installer holds, checks it, compiles the installer (Inno Setup) and writes the update manifest next
 # to it (cmake -P, with the variables installer/CMakeLists.txt gives).
 cmake_minimum_required(VERSION 3.25)
@@ -17,6 +19,10 @@ foreach(dll IN LISTS runtime)
     string(TOLOWER "${name}" name)
     file(COPY_FILE "${dll}" "${STAGE}/${name}")
 endforeach()
+
+# The licence (AGPL-3.0-or-later) and the third-party notices, beside the application.
+file(COPY_FILE "${SOURCE}/LICENSE" "${STAGE}/LICENSE.txt")
+file(COPY_FILE "${SOURCE}/NOTICE.md" "${STAGE}/NOTICE.md")
 
 # The OBS plugin, when it is built.
 set(with_obs 0)
@@ -48,7 +54,7 @@ endif()
 
 # Never the corpus nor a profile calibrated on it (rendered from a commercial library: its licence forbids passing
 # them on). Only the files above, by name; and the executable carries no data of that size (a profile is tens of MB).
-set(allowed PianoForge.exe msvcp140.dll vcruntime140.dll vcruntime140_1.dll obs/pianoforge-obs.dll obs/en-US.ini obs/fr-FR.ini
+set(allowed PianoForge.exe LICENSE.txt NOTICE.md msvcp140.dll vcruntime140.dll vcruntime140_1.dll obs/pianoforge-obs.dll obs/en-US.ini obs/fr-FR.ini
     obs/pianoforge-keyboard.effect
     vst3/PianoForge.vst3/Contents/x86_64-win/PianoForge.vst3 vst3/PianoForge.vst3/Contents/Resources/moduleinfo.json
     vst3/PianoForge.vst3/desktop.ini vst3/PianoForge.vst3/Plugin.ico)

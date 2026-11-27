@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The forge monitor: follows the forge pipelines (forge pipeline, tools/forge/forge/pipeline.py) of every corpus state
 // from their progress.json, once a second: each pipeline's steps, the one under way and how far it is, how long it
 // should still take, and the end of its log. And the profile builds (pianoforge-profile build, tools/profile) from

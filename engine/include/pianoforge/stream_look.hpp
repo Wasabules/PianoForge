@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 #pragma once
 
 // The look of the "PianoForge keyboard" OBS source (obs/src/keyboard_source.cpp), shared by the plugin and

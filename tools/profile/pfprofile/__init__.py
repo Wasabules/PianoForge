@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """PianoForge profile builder: a sample bank (SFZ) to the modal profile the engine plays.
 
 The chain, each step resumable: the bank fetched (or checked), described as a bench state (bench prepare-sfz), the

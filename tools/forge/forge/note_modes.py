@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """`forge modes`: the modes of every partial of every note of a corpus state, at one velocity.
 
 For each single-notes take, the partials are found (stiff-string law, partials.py) and each one is resolved into

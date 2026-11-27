@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Audio feed tests (shared memory, as between PianoForge and the OBS plugin, here within one process).
 #include <pianoforge/audio_feed.hpp>
 #include <pianoforge/drift_resampler.hpp>

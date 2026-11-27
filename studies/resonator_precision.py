@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Precision of a damped resonator in float32: direct form vs complex form.
 
 Direct form:  y[n] = a1*y[n-1] - a2*y[n-2] + x[n],  a1 = 2r*cos(theta), a2 = r^2

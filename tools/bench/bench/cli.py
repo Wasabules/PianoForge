@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Bench command line: list | prepare | prepare-sfz | render | check | reanalyze | summary | keyboard."""
 
 from __future__ import annotations

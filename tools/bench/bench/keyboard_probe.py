@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """MIDI keyboard probe: listens to what the piano actually sends and infers its capabilities.
 
 Answers: is the sustain pedal a switch or continuous (half pedal)? Which velocity range does the keyboard

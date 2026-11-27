@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # The forge monitor (JUCE): a small window that follows the forge pipelines of a corpus (their progress.json, written
 # by forge pipeline) and its profile builds (build.json, pianoforge-profile build): each one's steps, the one under
 # way and its progress, the time left, the end of its log; New profile... starts a build, Stop ends one.

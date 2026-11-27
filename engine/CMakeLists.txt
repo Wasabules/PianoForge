@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # PianoForge core: pure C++20, no framework.
 add_library(pianoforge_engine STATIC
     src/modal_profile.cpp

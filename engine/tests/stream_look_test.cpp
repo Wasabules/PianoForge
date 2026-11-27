@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The stream look (stream_look.hpp: the settings, their text, the styles) and its channel between PianoForge and the
 // OBS plugin (look_channel.hpp: both looks, the preview's request and frames), the two sides here in one process.
 #include <pianoforge/audio_feed.hpp>

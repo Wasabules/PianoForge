@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The "PianoForge" audio source: the application's sound, read from its feed and handed to OBS on OBS's own clock.
 //
 // The feed runs on the audio device's clock (the DAC behind ASIO), OBS on the system's: the two drift apart by tens

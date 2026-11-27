@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The engine runs here, on the browser's audio thread, away from the page: the interface cannot make it stutter.
 // The module (pianoforge.wasm, built from web/src/exports.cpp) comes in the processor's options; the profile
 // arrives later as bytes, from the page (which keeps it in the browser: it is never uploaded); so does a MIDI file,

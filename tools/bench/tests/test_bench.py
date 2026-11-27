@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Bench tests that do not need Kontakt: python -m unittest discover -s tools/bench/tests"""
 
 import math

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Damper curves measured on the reference corpus.
 
 For every take of the 'releases' pass (one note in four, three velocities, holds of 0.1, 0.5 and 2 s), the

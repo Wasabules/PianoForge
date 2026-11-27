@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Checks the browser module under Node, as the AudioWorklet will use it: no imports, the real profile, the same
 // sound as the native engine, and its cost.
 //   node web/check.mjs [modal-profile.bin] [native modal_render executable]

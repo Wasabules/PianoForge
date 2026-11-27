@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The profile builder's own logic: its recipes, what it reads in a bank (layers, pedal-down samples, keys), the
 check of a downloaded file, where the sympathetic resonance's calibration comes from. (The whole chain, a bank to a
 profile, is the bench's and the forge's, tested there, and run end to end by hand: docs/building-a-profile.md.)"""

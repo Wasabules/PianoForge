@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Copies the PianoForge.vst3 bundle into a VST3 folder, the host running or not (cmake -P, with BINARY, the plugin's
 # binary inside the bundle, and DEST defined). Windows keeps a loaded DLL from being overwritten, not from being
 # renamed: the one a host uses moves aside (.old, removed by a later install once the host has let go of it) and

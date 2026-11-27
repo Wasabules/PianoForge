@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Copies the forge's native library next to the forge package (cmake -P, with LIB and DEST defined). A forge running
 # meanwhile has the library loaded, and Windows refuses to overwrite a loaded file but lets it be renamed: the one in
 # place moves aside (pianoforge_forge_native.<n>.old), the running processes keep it, the next ones load the new one.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """A short musical phrase played by both engines of the application, for listening and for checks.
 
 The phrase is written as a standard MIDI file, rendered offline by the application (`--render`, the same code as

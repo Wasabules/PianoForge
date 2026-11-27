@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Tests of the high-resolution mode analysis on synthetic partials with known modes."""
 
 import unittest

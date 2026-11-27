@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Unit tests of the forge parts for the pedal, the dampers and the sympathetic resonance (no corpus needed)."""
 
 import unittest

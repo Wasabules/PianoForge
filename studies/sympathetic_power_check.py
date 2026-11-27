@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Can the sympathetic resonance be measured without subtracting the two takes of a pair?
 
 forge sympathetic measures the library's resonance as the pedal-down take minus the pedal-up take: exact when both

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # OBS plugin: the PianoForge sources (audio, keyboard, text) and chapter markers, fed by the application through
 # shared memory (engine/include/pianoforge/audio_feed.hpp). No virtual cable, no system mixer in between.
 #

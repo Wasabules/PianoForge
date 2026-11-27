@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 #include <pianoforge/midi_sequence.hpp>
 
 #include <algorithm>

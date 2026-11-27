@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Piano gestures (pianoforge/piano_gestures.hpp): chords of keys no piece asks for, double taps, music that must
 // not trigger them, learning.
 #include <pianoforge/piano_gestures.hpp>

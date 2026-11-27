@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 #include "UpdateChecker.h"
 
 #include <juce_cryptography/juce_cryptography.h>

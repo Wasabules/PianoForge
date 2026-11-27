@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Copies the plugin into OBS's plugin folder (Windows, Linux), OBS running or not (cmake -P, with DLL, LOCALES and
 # DEST defined): the
 # DLL, the locales, and the shaders beside the locales' folder.

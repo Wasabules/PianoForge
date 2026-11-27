@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Compares the reference banks, measure for measure: the forge's analyses of each corpus state side by side.
 
 PianoForge was studied on one commercial library (Noire, rendered through Kontakt); free banks (the Salamander Grand

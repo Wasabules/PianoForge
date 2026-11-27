@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Velocity curve tests (no framework): exits with a non-zero code on the first failure.
 #include <pianoforge/velocity_curve.hpp>
 

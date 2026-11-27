@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The banks the tool knows (pfprofile/banks/*.toml): where each comes from, how it is set up as a bench state, how
 the forge measures it. Any other SFZ bank is built from the command line (build --sfz ... --state ...)."""
 

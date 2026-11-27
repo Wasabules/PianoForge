@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The SFZ player, on a small bank made here (sines of known pitch and level): python -m unittest discover -s tools/bench/tests"""
 
 import math

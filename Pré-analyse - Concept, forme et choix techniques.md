@@ -1217,6 +1217,11 @@ Le menu Player reprend ces commandes et ajoute des vitesses toutes faites.
   - *Un constat.* Les gains de couplage de Piano in 162 sont 10 à 21 dB au-dessus de ceux de Noire. Sur le Steinway B enregistré pédale enfoncée, l'effet de la pédale est bien plus fort que la couche de résonance simulée de Noire : la note jouée elle-même s'y épanouit aussi. Le modèle suit chacune (la moitié à 2,3 dB). Le choix de la résonance à garder fera partie de la décision de fin de projet.
   - *Une leçon d'outillage.* Un pipeline dure une heure. L'export, modifié pendant ce temps, a rencontré l'ancien `forge.takes` encore chargé et a échoué. Le pipeline charge désormais tous ses modules au départ.
 
+**Licence : l'AGPL-3.0-or-later pour tout le dépôt (27 novembre 2026).** Avant une publication, le dépôt prend une licence : l'AGPL, version 3 ou ultérieure, pour l'ensemble, moteur compris, et pour tout son historique (`LICENSE`, ajouté à chacun des commits depuis le premier sans rien y changer d'autre ; `NOTICE.md` ; une ligne SPDX en tête de chaque fichier source).
+  - *Pourquoi l'AGPL.* L'application et les plugins utilisent JUCE sous son option AGPLv3 : ils ne peuvent être diffusés que sous cette licence. Une seule licence pour tout le dépôt évite d'en gérer deux. L'AGPL oblige aussi celui qui propose une version modifiée en ligne (la version web) à en publier le code.
+  - *Ce que cela change à la décision du 4 novembre.* Le cœur devait garder une licence permissive ; il passe lui aussi sous AGPL, par choix. Le principe 7 tient toujours : aucun code GPL ou AGPL d'autrui n'entre dans le moteur, et aucun `juce::`. Le détenteur des droits peut donc encore diffuser le moteur sous une autre licence plus tard, tant qu'il en reste le seul auteur (un accord de cession serait à demander à des contributeurs extérieurs).
+  - *Les profils.* Un profil suit la licence de la banque dont il est mesuré, parce qu'il en garde de courts extraits (bruits d'attaque et de relâchement). Celui de Salamander peut être publié avec le crédit CC-BY. Celui de Piano in 162 attend l'accord d'Ivy Audio : aucun texte de licence, ni dans la banque ni sur son site. Celui de Noire reste local.
+
 **Ensuite, les phases.** Elles reprennent celles de [R] et y intègrent l'application.
 
 | Phase | Contenu | Critère de sortie |

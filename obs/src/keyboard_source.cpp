@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The "PianoForge keyboard" video source: the 88 keys as played in PianoForge, the pedals, and the notes rising from
 // the keys as they sound. The events come from the feed with their frames; the source shows the frame the PianoForge
 // audio source stamps at that instant (the image meets the sound), or, without one, the application's newest frame

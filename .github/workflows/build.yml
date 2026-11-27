@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Builds PianoForge and runs its tests on Windows, Ubuntu and macOS (and the forge's tests, and the WebAssembly
 # build), when started by hand (Actions > build > Run workflow, or `gh workflow run build.yml`): the repository is
 # private, and its Actions minutes are counted (Windows twice, macOS ten times), so not at every push.

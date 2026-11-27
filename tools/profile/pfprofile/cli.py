@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """pianoforge-profile: a sample bank to a modal profile, in one command.
 
   pianoforge-profile doctor                    what is installed, built, and what is missing

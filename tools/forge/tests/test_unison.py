@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The coupled-unison fit recovers a known system: its poles, from the strings' detunings and the bridge."""
 import unittest
 

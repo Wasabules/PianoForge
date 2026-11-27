@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The tone controls' building blocks: the shelves and bells (pianoforge/biquad.hpp) and the stream's compressor.
 #include <pianoforge/biquad.hpp>
 #include <pianoforge/compressor.hpp>

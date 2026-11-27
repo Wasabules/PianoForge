@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Room tests: measured acoustics of the reverberation (decay time, density, colour, width, modulation), its
 // behaviour (bypass, block size, setting changes, extreme settings) and its cost. Exits non-zero on a failure.
 #include <pianoforge/room.hpp>

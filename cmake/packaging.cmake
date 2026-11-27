@@ -1,11 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Linux packages of the application and its VST3 plugin, .deb and .rpm, made from the install rules (the components
 # pianoforge and vst3; what JUCE installs for developers is left out):
 #   cmake --build --preset linux-release
 #   cd build/linux-gcc && cpack -G DEB        # or RPM
 # A package runs where the C library is at least the build machine's (the application asks for the glibc it was built
 # against): build it on the oldest distribution aimed at (Ubuntu 24.04: the CI's ubuntu-24.04 runner; Fedora: its own
-# oldest release). Not yet for distribution: the licence (JUCE's AGPLv3, or a JUCE licence) is to be settled first,
-# and the application plays nothing until a corpus or a profile is chosen.
+# oldest release). Under the AGPL-3.0-or-later (LICENSE, NOTICE.md, installed in share/doc/pianoforge); the
+# application plays nothing until a corpus or a profile is chosen.
 
 set(PIANOFORGE_PACKAGE_CONTACT "PianoForge <pianoforge@localhost>" CACHE STRING "The packages' maintainer (Name <address>)")
 
@@ -13,6 +15,7 @@ set(CPACK_PACKAGE_NAME "pianoforge")
 set(CPACK_PACKAGE_VENDOR "PianoForge")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_CONTACT "${PIANOFORGE_PACKAGE_CONTACT}")
+set(CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Concert grand piano simulator played from a MIDI keyboard")
 set(CPACK_PACKAGE_DESCRIPTION "A calibrated hybrid modal engine played from a MIDI keyboard, with recording of every take, \
 technician-level settings, a VST3 instrument, and a feed for OBS Studio. It plays a modal profile built from a sample \
@@ -35,6 +38,7 @@ set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "libmp3lame0, rtkit")
 set(CPACK_DEBIAN_PACKAGE_SUGGESTS "pipewire-jack")
 
 set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
+set(CPACK_RPM_PACKAGE_LICENSE "AGPL-3.0-or-later")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Multimedia")
 set(CPACK_RPM_PACKAGE_AUTOREQ ON)
 set(CPACK_RPM_PACKAGE_REQUIRES "libX11, libXext, libXcursor, libXinerama, libXi, libXrandr, libXScrnSaver")
@@ -43,6 +47,7 @@ set(CPACK_RPM_PACKAGE_SUGGESTS "lame-libs, rtkit, pipewire-jack-audio-connection
 set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
     /usr/share/applications /usr/share/icons /usr/share/icons/hicolor /usr/share/icons/hicolor/32x32
     /usr/share/icons/hicolor/32x32/apps /usr/share/icons/hicolor/512x512 /usr/share/icons/hicolor/512x512/apps
-    /usr/share/icons/hicolor/scalable /usr/share/icons/hicolor/scalable/apps /usr/lib/vst3 /usr/lib/lv2 /usr/share/metainfo)
+    /usr/share/icons/hicolor/scalable /usr/share/icons/hicolor/scalable/apps /usr/lib/vst3 /usr/lib/lv2 /usr/share/metainfo
+    /usr/share/doc)
 
 include(CPack)

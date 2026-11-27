@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Corpus on disk: one audio file and one JSON file per take, a manifest and a CSV index.
 
 corpus/<session>/<state>/

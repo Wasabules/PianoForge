@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Offline renders and CPU measurements of the modal engine, without the application.
 //
 //   modal_render <profile> render <out.wav> <note> <velocity> <hold s> [tail s] [rate]

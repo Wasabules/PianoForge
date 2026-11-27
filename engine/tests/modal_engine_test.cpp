@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Modal engine tests on a synthetic profile (no corpus needed): exits with a non-zero code on the first failure.
 #include <pianoforge/modal_engine.hpp>
 

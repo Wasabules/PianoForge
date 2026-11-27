@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The overlays' logic without OBS (obs/src/overlay.hpp): the keyboard's geometry, the keys and pedals at a frame,
 // the notes kept for the trails, the text template.
 #include "../src/overlay.hpp"

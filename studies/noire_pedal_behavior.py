@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """What does the reference library do with the sustain pedal? Analysis of the 'interactions' session.
 
 1. Pedal down vs pedal up, key held in both: spectral balance per band and correlation over time.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // MIDI file reader and sequence player tests (shared by the lab and the browser module). Exits non-zero on a failure.
 #include <pianoforge/midi_sequence.hpp>
 

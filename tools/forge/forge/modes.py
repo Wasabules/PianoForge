@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """High-resolution analysis of the modes inside one partial.
 
 A piano partial is not one damped sinusoid. The 1 to 3 strings of a unison, each with two polarisations, are

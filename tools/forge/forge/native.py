@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The forge's native kernels (tools/forge/native, C++), used when built; the Python code otherwise.
 
 The library is looked for in forge/_native/ (where the build copies it) or at PIANOFORGE_FORGE_NATIVE_LIB.

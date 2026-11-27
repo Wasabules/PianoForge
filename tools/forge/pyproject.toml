@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"] # (77: the licence as an SPDX expression)
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,7 @@ name = "pianoforge-forge"
 version = "0.1.0"
 description = "PianoForge forge: analysis and calibration tools that turn the reference corpus into engine data."
 requires-python = ">=3.11"
+license = "AGPL-3.0-or-later"
 dependencies = [
     "numpy>=2.0",
     "soundfile>=0.12",

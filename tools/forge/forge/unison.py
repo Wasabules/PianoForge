@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The coupled strings of a unison (Weinreich, 1977), fitted to the measured modes of each partial.
 
 The 2 or 3 strings of a note are tuned almost alike and all pull on the bridge, which moves and so couples them.

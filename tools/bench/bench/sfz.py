@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Offline SFZ player: renders the bench's takes from an SFZ sample bank, as an SFZ sampler (sfizz) plays it.
 
 Free sample banks (the Salamander Grand Piano, the Piano in 162...) are references as the Kontakt library is: the

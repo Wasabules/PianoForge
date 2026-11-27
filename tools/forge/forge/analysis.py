@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Analysis of the whole keyboard: one note analysis per key, a smoothed inharmonicity model, and the profile.
 
 Outputs, next to the corpus state:

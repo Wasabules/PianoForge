@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """`forge release-noise`: the knock of the key release, as an excitation of the soundboard resonances.
 
 When the damper lands, the reference adds a low thump (centroid near 100 Hz, measured on 2026-11-06: 25 to 40 dB

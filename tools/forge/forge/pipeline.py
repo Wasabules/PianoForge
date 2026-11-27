@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """`forge pipeline`: every step of a corpus state's profile, in order, with its progress (progress.json, the forge
 monitor) and its log (forge-log.txt, appended).
 

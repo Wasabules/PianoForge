@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Order of magnitude of the number of resonators of a full piano (worst case: sustain pedal down).
 
 Rough assumptions, to be replaced by a calibrated profile:

@@ -1,3 +1,5 @@
+; SPDX-License-Identifier: AGPL-3.0-or-later
+
 ; PianoForge's installer (Inno Setup 6), compiled by the `installer` build target (make_installer.cmake), which
 ; defines AppVersion, StageDir, OutputDir, IconFile and WithObs.
 ;
@@ -66,6 +68,8 @@ Name: "obsplugin"; Description: "The OBS Studio plugin (the PianoForge sound, ke
 
 [Files]
 Source: "{#StageDir}\PianoForge.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\msvcp140.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\vcruntime140_1.dll"; DestDir: "{app}"; Flags: ignoreversion

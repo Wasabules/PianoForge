@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # The Windows installer (Inno Setup 6):
 #   cmake --build --preset windows-release --target installer
 # makes build/windows-msvc/installer/output/PianoForge-<version>-setup.exe, the update manifest latest.json and
@@ -45,6 +47,7 @@ add_custom_target(installer
     COMMAND ${CMAKE_COMMAND}
             -DVERSION=${PROJECT_VERSION}
             -DEXE=$<TARGET_FILE:PianoForgeApp>
+            -DSOURCE=${PROJECT_SOURCE_DIR}
             -DRUNTIME=${runtime_argument}
             -DOBS_DLL=${obs_dll}
             -DOBS_LOCALES=${PROJECT_SOURCE_DIR}/obs/data/locale

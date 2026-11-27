@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Partial analysis of a single piano note: fundamental, inharmonicity, partial amplitudes and decay rates.
 
 Stiff-string model: f_n = n f0 sqrt(1 + B n^2), hence (f_n / n)^2 = f0^2 + f0^2 B n^2, a straight line in n^2

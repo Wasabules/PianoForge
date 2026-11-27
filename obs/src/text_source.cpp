@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The "PianoForge text" source: a template whose fields ({file}, {state}, {preset}, {room}, {engine}, {recording})
 // take PianoForge's state, drawn by OBS's own text source (GDI+ on Windows, FreeType elsewhere), whose font, colors,
 // outline and background stay its own (its properties, but its text, are this source's).

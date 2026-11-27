@@ -148,3 +148,6 @@ techniques.md` is the "analysis document" that code comments refer to.
   Web, OBS keyboard, OBS plugin, Profile builder, CI, docs), followed by a prose body explaining why and how it was
   checked.
 - LF line endings everywhere (`.gitattributes`); MSVC builds use `/utf-8`.
+- The repository is AGPL-3.0-or-later (`LICENSE`; `NOTICE.md` lists the third-party components and the banks'
+  licences). Every source file starts with `SPDX-License-Identifier: AGPL-3.0-or-later` in its comment syntax (after a
+  shebang or a doctype); a new file gets it too. Commits carry no Claude/AI attribution trailer.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // PianoForge in a browser: the page (keyboard, MIDI, settings, the profile kept in this browser) and the audio
 // worklet that runs the engine (worklet.js, pianoforge.wasm).
 const $ = (id) => document.getElementById(id);

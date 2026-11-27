@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The VST3 plugin as a host loads it (juce::VST3PluginFormat): what it declares, the same sound as the engine,
 // any block size, automation, headphones, the state of a project, a host at 192 kHz, a second instance, the cost.
 // The sound tests need a modal profile (the application's corpus); without one they are skipped. Exits non-zero

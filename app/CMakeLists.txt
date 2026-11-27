@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Shell: standalone application (JUCE). Starts as a listening lab for the reference corpus.
 juce_add_gui_app(PianoForgeApp
     PRODUCT_NAME "PianoForge"
@@ -168,6 +170,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             RENAME org.pianoforge.PianoForge.png COMPONENT pianoforge)
     install(FILES resources/icon-32.png DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/32x32/apps"
             RENAME org.pianoforge.PianoForge.png COMPONENT pianoforge)
+    # The licence and the third-party notices where a distribution keeps them (Debian: the copyright file).
+    install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/pianoforge" RENAME copyright COMPONENT pianoforge)
+    install(FILES "${PROJECT_SOURCE_DIR}/NOTICE.md" DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/pianoforge" COMPONENT pianoforge)
     # The menus' MIME cache ("Open with PianoForge" on MIDI files), where the tool is; a desktop also notices later.
     # Not into a staging folder (DESTDIR: a package being made), whose system's own triggers make the cache.
     install(CODE "

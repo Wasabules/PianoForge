@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The plugin inside the installed libobs, without the OBS application: libobs started for audio (48 kHz) and video
 // (OBS's Direct3D 11 module on Windows, its OpenGL one on Linux, offscreen), the plugin loaded as OBS loads it (its
 // locale too), OBS's text source beside it, and the feed written as the application writes it: three mixes of a 1 kHz sine at 44.1 kHz in blocks of 128, on

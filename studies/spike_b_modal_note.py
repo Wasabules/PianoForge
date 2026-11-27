@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Spike B: can a modal model rebuild a recorded piano note? First PianoForge synthesis.
 
 For a single-note take of the reference corpus, every partial found by the forge (stiff-string law) becomes a

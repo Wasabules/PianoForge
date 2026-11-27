@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # The browser module: the engine and its room as a standalone WebAssembly module (no imports, no Emscripten
 # JavaScript), instantiated by the AudioWorklet (site/worklet.js). Built by emcmake (see web/README.md).
 add_executable(pianoforge_web src/exports.cpp)

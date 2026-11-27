@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Is a sympathetic calibration stable? The same fit on two halves of the pairs (even and odd notes), compared.
 
 forge sympathetic fits, per third-octave band, an extra decay (a grid) and a coupling gain (the median over takes and

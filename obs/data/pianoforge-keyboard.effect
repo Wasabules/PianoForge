@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The PianoForge keyboard's drawing (obs/src/keyboard_source.cpp): rounded boxes with a gradient, a rim and a light
 // from within (keys, notes, pedals, shadows), lights added over them (halos, beams, ripples, sparkles, the melody's
 // line, the ambiance), and the bloom over the whole.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Are the modes of a note the same at every velocity? The answer fixes the engine's data format.
 
 Physically, the poles of a partial (frequency and decay of each mode) belong to the coupled strings and the bridge,

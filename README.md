@@ -426,7 +426,14 @@ change with a multithreaded BLAS, never between the native and the Python code u
 Every forge command takes `--corpus corpus/reference/<state>` (default: `noire-dry`). A profile calibrated on Noire
 stays local, like its corpus, and is never published; one built from a free bank may be, with the bank's credit.
 
-## Licences
+## Licence
 
-The engine is meant to stay under a permissive licence. The application uses JUCE (AGPLv3 or JUCE licence).
-The bench uses pedalboard (GPL-3.0) as a development tool only; it is never linked into the engine.
+PianoForge is free software under the [GNU Affero General Public License](LICENSE), version 3 or (at your option)
+any later version (`AGPL-3.0-or-later`): the whole repository and its whole history. You may use, study, change and
+pass it on; whoever passes on a changed version, or offers one to others over a network (the web build), gives its
+source under the same licence. [NOTICE.md](NOTICE.md) lists the third-party components (JUCE, used under its AGPLv3
+option; the VST3, AU, LV2 and ASIO SDKs; PipeWire's and JACK's headers) and the licences of the sample banks.
+
+The engine still takes no GPL or AGPL code from others and no `juce::`: its own licence is a choice, not a
+consequence. The bench uses pedalboard (GPL-3.0) as a development tool only; it is never linked into the engine.
+A modal profile follows the licence of the bank it was measured from, not this one (see the banks above).

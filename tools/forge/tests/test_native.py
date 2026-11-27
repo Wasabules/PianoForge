@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The native variable projection (tools/forge/native) against the Python reference (modes._refine_python), on
 partials made here: known modes, beating, two channels, noise. Skipped when the library is not built."""
 

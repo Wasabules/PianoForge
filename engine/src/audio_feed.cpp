@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 #include <pianoforge/audio_feed.hpp>
 
 #include <algorithm>

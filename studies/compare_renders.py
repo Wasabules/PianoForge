@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Compares two renders of the same MIDI piece (e.g. the reference library in Kontakt vs PianoForge's player).
 
 Outputs:

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """What the bank's SFZ says that the measurement needs: its keys, its velocity layers (which rendered velocities to
 measure: one per layer of samples), and whether it has pedal-down samples (the sympathetic resonance calibrated on its
 own, or borrowed)."""

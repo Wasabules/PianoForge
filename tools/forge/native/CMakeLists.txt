@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # The forge's native kernels (C++, no dependency), loaded by tools/forge/forge/native.py when built: each build copies
 # the library next to the forge package (tools/forge/forge/_native/, not committed). Part of the project's build, or
 # on its own (the CI's forge job):

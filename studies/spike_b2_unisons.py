@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Spike B v2: the unison modes and the soundboard body. Do they bring back the beating, the double decay and the
 warmth under the note that made spike B sound "digital"?
 

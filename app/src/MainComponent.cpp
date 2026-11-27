@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 #include "MainComponent.h"
 
 #include <cstring>
@@ -718,7 +720,9 @@ void MainComponent::showAbout()
         juce::MessageBoxIconType::NoIcon, "About PianoForge",
         "PianoForge " + juce::String(PIANOFORGE_VERSION) + "\n\nA concert grand played from a MIDI keyboard: a modal engine "
         "calibrated on a reference library, with the reference itself for A/B listening.\n\nAudio thread: lock-free, "
-        "no allocation. Recording, the mirror output and the OBS plugin's feed only copy each block.\n\nUpdates: "
+        "no allocation. Recording, the mirror output and the OBS plugin's feed only copy each block.\n\nFree software "
+        "under the GNU Affero General Public License, version 3 or later, with no warranty (LICENSE and NOTICE.md come "
+        "with it). Source code: https://github.com/Wasabules/PianoForge\n\nUpdates: "
             + (properties.getUserSettings()->getValue("updateAddress").trim().isEmpty()
                    ? juce::String("none looked for (Help > Update settings).")
                    : properties.getUserSettings()->getValue("updateAddress").trim()

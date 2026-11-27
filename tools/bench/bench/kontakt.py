@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Offline hosting of Kontakt 8 (VST3) through pedalboard.
 
 Measured on the development machine (Kontakt 8.14.1, pedalboard 0.9.26):

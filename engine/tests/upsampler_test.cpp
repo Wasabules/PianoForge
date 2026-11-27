@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Integer-factor resampler tests: gain, flatness, image rejection, latency, cost. Exits non-zero on a failure.
 #include <pianoforge/upsampler.hpp>
 

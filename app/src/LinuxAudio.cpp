@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 #include "LinuxAudio.h"
 
 #if defined(__linux__)
