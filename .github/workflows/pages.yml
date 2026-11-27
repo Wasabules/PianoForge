@@ -5,8 +5,11 @@
 # changes the web page or the engine, and by hand (Actions > pages > Run workflow).
 #
 # A standalone module with no threads: the page needs no cross-origin isolation headers, which Pages cannot send.
-# No profile is published with it: each visitor gives the page a modal-profile.bin, kept in their browser
-# (IndexedDB), never uploaded.
+#
+# The pianos: each published release's <name>.modal-profile.bin, with its <name>.modal-profile.json (name, piano,
+# credit, licence, source), is copied next to the page and listed in profiles.json with its size and SHA-256: a page
+# cannot download a release asset itself (GitHub sends no CORS header on it). Published again whenever a release is.
+# A visitor may also give the page their own modal-profile.bin, kept in their browser, never uploaded.
 name: pages
 
 on:
@@ -17,6 +20,8 @@ on:
       - "engine/**"
       - "CMakeLists.txt"
       - ".github/workflows/pages.yml"
+  release:
+    types: [published, edited, deleted]
   workflow_dispatch:
 
 permissions:
@@ -45,10 +50,32 @@ jobs:
         env:
           PIANOFORGE_NO_TIMING: "1"
         run: ctest --test-dir build/wasm --output-on-failure
+      - name: The pianos of the published releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          site=web/site
+          echo '[]' > "$site/profiles.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | select(.draft | not) | .tag_name' |
+          while read -r tag; do
+            dir="$site/profiles/$tag"
+            gh release download "$tag" -R "$GITHUB_REPOSITORY" -p '*.modal-profile.bin' -p '*.modal-profile.json' -D "$dir" 2> /dev/null < /dev/null || continue
+            for meta in "$dir"/*.modal-profile.json; do
+              bin="${meta%.json}.bin"
+              [ -f "$meta" ] && [ -f "$bin" ] || continue
+              jq --arg file "${bin#"$site"/}" --arg release "$tag" --argjson size "$(stat -c %s "$bin")" \
+                 --arg sha256 "$(sha256sum "$bin" | cut -d' ' -f1)" \
+                 '. + {file: $file, release: $release, size: $size, sha256: $sha256}' "$meta" > entry.json
+              jq --slurpfile entry entry.json '. + $entry' "$site/profiles.json" > list.json && mv list.json "$site/profiles.json"
+              rm -f "$meta"
+            done
+          done
+          jq -r '.[] | "\(.name): \(.file), \(.size) bytes"' "$site/profiles.json"
+
       - name: The site
         run: |
           test -s web/site/pianoforge.wasm
-          ls -l web/site
+          ls -lR web/site
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web/site

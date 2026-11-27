@@ -47,9 +47,11 @@ adaptation of that bank and follows the bank's licence, not this one. The reposi
 
 - **Salamander Grand Piano V3** by Alexander Holm (SFZ by SFZ Instruments), licensed under
   [CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/). A profile made from it may be published with this credit
-  and the mention that it is a set of measures derived from the bank by PianoForge's forge.
+  and the mention that it is a set of measures derived from the bank by PianoForge's forge. PianoForge's releases
+  carry one (`salamander-grand-v3.modal-profile.bin`, with its credit in the `.json` beside it), under CC-BY 3.0.
 - **Piano in 162** by Ivy Audio: no licence text comes with it; a profile made from it stays local unless Ivy Audio
-  agrees otherwise.
+  agrees otherwise. The published Salamander profile's sympathetic resonance takes coupling gains measured on it
+  (a few figures per frequency band, no audio): credited with that profile.
 - **Noire** (Native Instruments, commercial): during development, renders of a licensed copy were used locally as a
   measurement and listening reference, as a study compares its model with a known instrument. None of its audio, nor
   any profile or data set made from it, is in this repository or in PianoForge's releases: the figures quoted in the

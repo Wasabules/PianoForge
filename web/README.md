@@ -13,9 +13,12 @@ lab's own sequence player, to the sample in the audio worklet; open or drop a .m
 Online: <https://wasabules.github.io/PianoForge/>, published by `.github/workflows/pages.yml` (the module built and
 its tests run, then `site/` as it is) at every push to main that changes `web/` or the engine, or by hand.
 
-The profile is never uploaded: the page asks for `modal-profile.bin` (written by `forge export`), keeps it in the
-browser (IndexedDB) and hands it to the worklet. None is published with the page: one calibrated on a commercial
-library never may be, one made from a free bank (Salamander, CC-BY 3.0) may, with its credit.
+The page offers the pianos published with the releases (a `<name>.modal-profile.bin` asset with its
+`<name>.modal-profile.json`: name, piano, credit, licence, source). A page cannot download a release asset from GitHub
+(no CORS header), so the deployment copies them next to it and lists them in `profiles.json` with their size and
+SHA-256; the page checks the SHA-256, keeps the profile in the browser (IndexedDB) and shows its credit. A visitor may
+also choose their own `modal-profile.bin` (written by `forge export`), kept the same way, never uploaded. Only a
+profile from a free bank is ever published (never one calibrated on a commercial library).
 
 ## Build
 

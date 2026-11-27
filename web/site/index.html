@@ -34,7 +34,13 @@
       <div class="card">
         <h2>Profile</h2>
         <p id="profileLine" class="big">No profile</p>
-        <p class="dim">The profile (modal-profile.bin, written by <code>forge export</code>) stays in this browser: it is never uploaded.</p>
+        <p id="profileCredit" class="dim"></p>
+        <div id="published" hidden>
+          <p class="dim">A piano published with PianoForge's releases:</p>
+          <p><select id="publishedList" aria-label="Published pianos"></select> <button id="loadPublished" class="primary">Load</button></p>
+          <p id="publishedCredit" class="dim"></p>
+        </div>
+        <p class="dim">Or your own (modal-profile.bin, written by <code>forge export</code>): it stays in this browser, it is never uploaded.</p>
         <p>
           <label class="button">Choose a file... <input id="profileFile" type="file" accept=".bin" hidden></label>
           <button id="forget" disabled>Forget it</button>

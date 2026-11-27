@@ -335,6 +335,7 @@ that the tag is that version, builds and tests on Windows, Ubuntu 24.04 and macO
 | `pianoforge-x.y.z-1.x86_64.rpm` | Fedora 40 and later: the same |
 | `PianoForge-x.y.z-macOS-arm64.zip` | macOS 11 and later on Apple silicon: the application, VST3 and AU, not signed (`INSTALL.txt` inside) |
 | `SHA256SUMS` | every asset's SHA-256 |
+| `<bank>.modal-profile.bin` and `.json` | a modal profile from a free bank and its credit (v0.1.0: the Salamander Grand Piano V3, CC-BY 3.0), uploaded by hand to the release; the web page offers it |
 
 Read and complete the notes GitHub wrote (the commits since the last release), then publish the draft: only then does
 Help > Check for updates see it (with `https://api.github.com/repos/<owner>/<repo>/releases/latest` as its address).

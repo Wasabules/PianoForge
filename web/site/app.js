@@ -615,8 +615,17 @@ function buildSettings() {
 function describeProfile() {
   $('profileLine').textContent = profile
     ? `${profile.name}, ${(profile.size / 1e6).toFixed(1)} MB` + (profile.notes ? ` (${profile.notes} notes x ${profile.layers} layers)` : '')
-    : 'No profile: choose modal-profile.bin';
+    : 'No profile: load a published piano or choose modal-profile.bin';
+  $('profileCredit').textContent = profile?.credit || ''; // a published profile's credit (CC-BY: shown where it plays)
   $('forget').disabled = !profile;
+}
+
+/// A profile to play from now on: kept in this browser (IndexedDB) with its name and credit, sent to the engine.
+async function useProfile(name, bytes, credit = '') {
+  profile = { name, size: bytes.byteLength, bytes, credit };
+  describeProfile();
+  try { await profileDb.put({ name, bytes, credit }); } catch { message('Kept for this session only (the browser refused to store it).'); }
+  sendProfile();
 }
 
 function sendProfile() {
@@ -629,11 +638,56 @@ function sendProfile() {
 $('profileFile').addEventListener('change', async (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
-  const bytes = await file.arrayBuffer();
-  profile = { name: file.name, size: bytes.byteLength, bytes };
-  describeProfile();
-  try { await profileDb.put({ name: file.name, bytes }); } catch { message('Kept for this session only (the browser refused to store it).'); }
-  sendProfile();
+  await useProfile(file.name, await file.arrayBuffer());
+});
+
+// ---- Published pianos: the profiles attached to PianoForge's releases ----
+// A page cannot download a release asset from GitHub (no CORS header on it): the deployment
+// (.github/workflows/pages.yml) copies each release's *.modal-profile.bin next to the page and lists them in
+// profiles.json, each with its credit, size and SHA-256, checked here before the engine gets it.
+let published = [];
+
+function showPublishedCredit() {
+  const entry = published[Number($('publishedList').value)];
+  $('publishedCredit').textContent = entry ? entry.credit : '';
+}
+
+async function listPublished() {
+  try {
+    const response = await fetch('profiles.json', { cache: 'no-cache' });
+    if (!response.ok) return;
+    published = await response.json();
+  } catch { return; } // a local server without it: only one's own file
+  if (!Array.isArray(published) || !published.length) return;
+  $('publishedList').replaceChildren(...published.map((entry, i) =>
+    new Option(`${entry.name} (${entry.piano}), ${(entry.size / 1e6).toFixed(0)} MB, ${entry.release}`, String(i))));
+  $('published').hidden = false;
+  showPublishedCredit();
+}
+
+async function sha256(bytes) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+$('publishedList').addEventListener('change', showPublishedCredit);
+$('loadPublished').addEventListener('click', async () => {
+  const entry = published[Number($('publishedList').value)];
+  if (!entry) return;
+  $('loadPublished').disabled = true;
+  try {
+    message(`Downloading ${entry.name} (${(entry.size / 1e6).toFixed(0)} MB)...`);
+    const response = await fetch(entry.file);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const bytes = await response.arrayBuffer();
+    if (entry.sha256 && (await sha256(bytes)) !== entry.sha256) throw new Error('its SHA-256 is not the one published');
+    await useProfile(entry.name, bytes, entry.credit);
+    message(`${entry.name}: kept in this browser` + (node ? '.' : ', played once the engine is started (Start).'), 'good');
+  } catch (error) {
+    message(`Cannot load ${entry.name}: ${error.message}`, 'bad');
+  } finally {
+    $('loadPublished').disabled = false;
+  }
 });
 
 $('forget').addEventListener('click', async () => {
@@ -749,8 +803,9 @@ function received(data) {
 buildKeyboard();
 buildSettings();
 buildPlayer();
+listPublished();
 profileDb.get().then((entry) => {
-  if (entry) profile = { name: entry.name, size: entry.bytes.byteLength, bytes: entry.bytes };
+  if (entry) profile = { name: entry.name, size: entry.bytes.byteLength, bytes: entry.bytes, credit: entry.credit || '' };
   describeProfile();
   $('start').disabled = false;
 });
