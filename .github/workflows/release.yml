@@ -121,7 +121,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev \
             libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libxext-dev libxrender-dev \
-            libgl1-mesa-dev xvfb desktop-file-utils appstream rpm
+            libgl1-mesa-dev libxi-dev xvfb desktop-file-utils appstream rpm
 
       - name: Configure
         run: cmake --preset linux-gcc
@@ -151,7 +151,7 @@ jobs:
   macos:
     name: macOS archive
     needs: version
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
