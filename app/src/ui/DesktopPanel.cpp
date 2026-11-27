@@ -87,8 +87,10 @@ DesktopPanel::DesktopPanel(juce::PropertiesFile& s, DesktopIntegration& i) : set
         auto& row = rows[k];
         const auto& text = kRows[k];
         row.key = text.key;
-#if !JUCE_LINUX
-        row.shown = !text.linuxOnly || (JUCE_MAC && juce::String(text.key) == "virtualMidiInput");
+#if JUCE_MAC // (JUCE defines JUCE_MAC only on macOS: a preprocessor test, not a value)
+        row.shown = !text.linuxOnly || juce::String(text.key) == "virtualMidiInput"; // CoreMIDI makes virtual inputs too
+#elif !JUCE_LINUX
+        row.shown = !text.linuxOnly;
 #endif
         row.toggle.setButtonText(text.label);
         row.toggle.setTooltip(text.tooltip);
