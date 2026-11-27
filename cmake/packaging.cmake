@@ -9,7 +9,10 @@
 # oldest release). Under the AGPL-3.0-or-later (LICENSE, NOTICE.md, installed in share/doc/pianoforge); the
 # application plays nothing until a corpus or a profile is chosen.
 
-set(PIANOFORGE_PACKAGE_CONTACT "PianoForge <pianoforge@localhost>" CACHE STRING "The packages' maintainer (Name <address>)")
+# The maintainer the packages name: the repository owner's public GitHub address (the one on its commits).
+set(PIANOFORGE_PACKAGE_CONTACT "Wasabules <39313803+Wasabules@users.noreply.github.com>" CACHE STRING
+    "The packages' maintainer (Name <address>)")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/Wasabules/PianoForge")
 
 set(CPACK_PACKAGE_NAME "pianoforge")
 set(CPACK_PACKAGE_VENDOR "PianoForge")
