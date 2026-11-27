@@ -4,7 +4,8 @@
 // any block size, automation, headphones, the state of a project, a host at 192 kHz, a second instance, the cost.
 // The sound tests need a modal profile (the application's corpus); without one they are skipped. Exits non-zero
 // on a failure.
-//   PianoForgePluginTest <PianoForge.vst3> [<modal-profile.bin>]
+//   PianoForgePluginTest <PianoForge.vst3> [<modal-profile.bin>]   (compared against when the application's corpus
+//                                                                    has no profile; else the corpus's is)
 //   PianoForgePluginTest <PianoForge.vst3> --show-editor <seconds>   (the editor in a window, for a screenshot)
 #include <pianoforge/limiter.hpp>
 #include <pianoforge/modal_engine.hpp>
@@ -13,6 +14,8 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+
+#include "../../app/src/SettingsLocation.h"
 
 #include <chrono>
 #include <cmath>
@@ -129,6 +132,22 @@ void settle(juce::AudioPluginInstance& p)
 {
     render(p, 512, {}, { 512 });
     juce::MessageManager::getInstance()->runDispatchLoopUntil(50);
+}
+
+/// The profile the plugin plays: the one beside the application's corpus, as the plugin finds it
+/// (Processor::applicationProfile); else the one given. (ctest gives Noire's, the Windows machine's corpus: another
+/// machine's corpus may be another bank.)
+juce::File playedProfile(const juce::String& given)
+{
+    const auto options = pf::app::settingsOptions();
+    if (const auto file = options.getDefaultFile(); file.existsAsFile()) {
+        const juce::PropertiesFile settings(file, options); // read only
+        const auto corpus = settings.getValue("corpus");
+        if (juce::File::isAbsolutePath(corpus))
+            if (const auto profile = juce::File(corpus).getParentDirectory().getChildFile("modal-profile.bin"); profile.existsAsFile())
+                return profile;
+    }
+    return juce::File(given);
 }
 
 /// Back to silence, as a host does between two takes: reset() (VST3 maps it to the plugin's own); LV2 has none, its
@@ -274,7 +293,8 @@ int main(int argc, char* argv[])
     // 3. The same sound as the engine itself (room and limiter off; the rest as the application's defaults).
     if (argc >= 3) {
         std::string error;
-        const auto profile = pf::loadModalProfile(std::filesystem::path(juce::String::fromUTF8(argv[2]).toWideCharPointer()), error);
+        const auto reference = playedProfile(juce::String::fromUTF8(argv[2]));
+        const auto profile = pf::loadModalProfile(std::filesystem::path(reference.getFullPathName().toWideCharPointer()), error);
         if (profile != nullptr) {
             set(*p, "Room", 0.0f);
             set(*p, "Output limiter", 0.0f);
@@ -300,7 +320,8 @@ int main(int argc, char* argv[])
                 direct.r.insert(direct.r.end(), r.begin(), r.end());
             }
             const float diff = largestDifference(plugin, direct), peak = peakOf(direct);
-            check(peak > 1e-3f && diff <= 1e-5f * peak, "the plugin plays the engine's sound: largest difference "
+            check(peak > 1e-3f && diff <= 1e-5f * peak, "the plugin plays the engine's sound (" + reference.getParentDirectory().getFileName()
+                                                            + "'s profile): largest difference "
                                                             + juce::String(juce::roundToInt(20.0 * std::log10(diff / peak + 1e-12))) + " dB under the peak");
             set(*p, "Room", 1.0f);
             set(*p, "Output limiter", 1.0f);

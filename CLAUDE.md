@@ -41,7 +41,8 @@ when it is absent. Set `PIANOFORGE_NO_TIMING=1` on a loaded/shared machine so ti
 inform. On Linux and macOS the OBS feed and stream-look channels are POSIX shared memory, which outlives its
 processes (`/dev/shm/PianoForgeFeed*`, by design: readers keep it across application restarts); tests that use it
 `shm_unlink` their own names first. The plugin's sound tests find their profile through the application's settings
-(its `corpus`), not through the profile path given to `PianoForgePluginTest`, which is only compared against.
+(its `corpus`), and compare the plugin with that profile; the path given to `PianoForgePluginTest` (ctest: Noire's)
+is used only when the corpus has none.
 
 App headless modes (see `app/src/Main.cpp`): `--selftest <corpus pass folder> <report>`,
 `--render in.mid out.wav <corpus pass folder> [--engine modal]`, `--check-update <address> <report>`, `--list-audio`,
