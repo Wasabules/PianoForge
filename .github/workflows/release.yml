@@ -89,7 +89,8 @@ jobs:
           "OBS_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Configure
-        run: cmake --preset windows-msvc -DPIANOFORGE_OBS_PLUGIN=ON "-DPIANOFORGE_OBS_DIR=${{ env.OBS_DIR }}" -DPIANOFORGE_OBS_VERSION=${{ env.OBS_VERSION }}
+        # (each -D quoted: PowerShell splits an unquoted -DPIANOFORGE_OBS_VERSION=33.0.1 at its dots)
+        run: cmake --preset windows-msvc -DPIANOFORGE_OBS_PLUGIN=ON "-DPIANOFORGE_OBS_DIR=${{ env.OBS_DIR }}" "-DPIANOFORGE_OBS_VERSION=${{ env.OBS_VERSION }}"
 
       - name: Build
         run: cmake --build --preset windows-release --parallel 4
