@@ -845,7 +845,7 @@ int main()
             };
             const double speakers = cost(false), headphones = cost(true);
             std::printf("      on headphones: %.2f %% of real time, %.2f times the cost on speakers\n", 100 * headphones / 4.0, headphones / speakers);
-            check(headphones < 1.4 * speakers, "on headphones, the room costs at most 1.4 times as much");
+            timed(headphones < 1.4 * speakers, "on headphones, the room costs at most 1.4 times as much");
         }
     }
 
