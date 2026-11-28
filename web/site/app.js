@@ -860,14 +860,29 @@ $('start').addEventListener('click', async () => {
   }
 });
 
+// The output latency, read once the sound runs, outside the engine's messages. Firefox's outputLatency waits on its
+// audio thread: read as the engine says "ready" (the thread still starting it), it froze the page for good (Firefox
+// 161, reproduced). Firefox's is therefore not read; its base latency only.
+function showLatency() {
+  const firefox = /firefox/i.test(navigator.userAgent);
+  const say = () => {
+    if (!context || context.state !== 'running') return;
+    const latency = (context.baseLatency || 0) + (firefox ? 0 : context.outputLatency || 0);
+    $('latencyLine').textContent = firefox
+      ? 'Output latency: Firefox does not report it safely (its own, plus the system\'s)'
+      : latency > 0 ? `Output latency about ${(latency * 1000).toFixed(0)} ms (browser and system)` : 'Output latency: not reported by this browser';
+  };
+  $('latencyLine').textContent = 'Output latency: measured once the sound runs';
+  setTimeout(say, 1500);
+}
+
 function received(data) {
   switch (data.type) {
     case 'ready': {
       taskDone('start');
       $('engineLine').textContent = 'Modal engine running';
-      const latency = (context.baseLatency || 0) + (context.outputLatency || 0);
       $('audioLine').textContent = `${(data.sampleRate / 1000).toFixed(1)} kHz, blocks of 128 (the browser converts to the device's rate)`;
-      $('latencyLine').textContent = latency > 0 ? `Output latency about ${(latency * 1000).toFixed(0)} ms (browser and system)` : 'Output latency: not reported by this browser';
+      showLatency();
       apply();
       send({ type: 'midiSpeed', factor: speedFactor() });
       send({ type: 'midiLoop', on: $('midiLoop').checked });
