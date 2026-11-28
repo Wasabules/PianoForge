@@ -46,7 +46,9 @@ is used only when the corpus has none.
 
 App headless modes (see `app/src/Main.cpp`): `--selftest <corpus pass folder> <report>`,
 `--render in.mid out.wav <corpus pass folder> [--engine modal]`, `--check-update <address> <report>`, `--list-audio`,
-`--midi-monitor`, `--ui-snapshots`, `--mirror-check`.
+`--midi-monitor`, `--ui-snapshots`, `--mirror-check`, `<piece.mid> --window-snapshot <file.png> [seconds] [--window-size
+WxH]` (the main window with the piece playing silently: README's docs/images; run with a scratch HOME and
+`PIANOFORGE_AUDIO_FEED` set so that the real settings and the OBS feed stay untouched).
 
 Python tools (three editable packages, one venv at the repo root, Python ≥ 3.11):
 

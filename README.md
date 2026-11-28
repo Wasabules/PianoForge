@@ -10,6 +10,40 @@ Status: proof of concept. The modal engine plays modes measured on a reference c
 grand piano (unison strings and their beating, the soundboard body, a short attack residual); the listening lab
 switches between that reference and the modal engine while playing.
 
+## In pictures
+
+**The application** (Windows, Linux, macOS), playing a piece of its MIDI library, Debussy's *Clair de lune*: the
+keys it plays, the sustain pedal down and 86 free strings ringing with it, the audio load, the piece's level along
+its length.
+
+![The application playing Clair de lune](docs/images/app.png)
+
+<table>
+  <tr>
+    <td width="56%"><img src="docs/images/app-tone.png" alt="Settings: tone and dynamics"><br>
+      <sub>Settings: the touch, the sustain and the dampers, the lid, the output tone, a convolution reverb, and a
+      compressor for what goes to a stream.</sub></td>
+    <td width="44%"><img src="docs/images/app-room.png" alt="The room and the listening position"><br>
+      <sub>The room around the piano (its volume, decay, brightness, width) and where it is heard from, on speakers
+      or headphones.</sub></td>
+  </tr>
+</table>
+
+**The plugin** (VST3; AU on macOS, LV2 on Linux): the same engine, room and settings in a host.
+
+![The plugin's editor](docs/images/plugin.png)
+
+**In a browser**, at <https://geoffrey-lecoq.fr/PianoForge/>: the engine compiled to WebAssembly. Three steps lead to
+the first note (a piano, the engine, the keys); the MIDI gallery gives each piece's facts and its credit.
+
+![The web page, before the first note](docs/images/web-start.png)
+
+![The web page's MIDI gallery](docs/images/web-gallery.png)
+
+The pictures come from the programs themselves: `PianoForge <piece.mid> --window-snapshot <file.png> [seconds]`
+(the window, the piece playing silently), `PianoForge --ui-snapshots <folder>` (the panels), the web page driven in
+a headless browser.
+
 ## Layout
 
 | Folder | Content |
