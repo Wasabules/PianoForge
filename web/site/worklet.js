@@ -83,9 +83,10 @@ class PianoForgeProcessor extends AudioWorkletProcessor {
   command(c) {
     const { pf } = this;
     switch (c.type) {
-      case 'profile': {
+      case 'profile': { // decoded here, on the audio thread: the sound pauses meanwhile (the page says so)
+        const started = Date.now();
         const result = this.loadProfile(c.bytes);
-        this.port.postMessage({ type: 'profile', ...result });
+        this.port.postMessage({ type: 'profile', ms: Date.now() - started, ...result });
         break;
       }
       case 'midi': pf.pf_event(c.status, c.data1, c.data2, c.curved ? 1 : 0); break;

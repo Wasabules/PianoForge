@@ -80,6 +80,33 @@ function message(text, kind = '') {
   $('message').className = 'message ' + kind;
 }
 
+// ---- What the page is doing: the header's line, a bar filling as a download goes, moving while the size is unknown ----
+const tasks = new Map(); // name -> { text, fraction }: the last one started is shown
+
+function task(name, text, fraction = null) {
+  tasks.delete(name);
+  tasks.set(name, { text, fraction });
+  showTasks();
+}
+
+function taskDone(name) {
+  tasks.delete(name);
+  showTasks();
+}
+
+function showTasks() {
+  const shown = [...tasks.values()].pop();
+  $('busy').hidden = !shown;
+  if (!shown) return;
+  $('busyText').textContent = shown.text + (tasks.size > 1 ? ` (and ${tasks.size - 1} more)` : '');
+  $('busyText').title = [...tasks.values()].map((t) => t.text).join('\n');
+  const bar = $('busyBar');
+  if (shown.fraction === null) bar.removeAttribute('value'); // indeterminate: it moves
+  else bar.value = Math.min(1, Math.max(0, shown.fraction));
+}
+
+const MB = (bytes) => (bytes / 1e6).toFixed(0);
+
 function send(command, transfer) {
   if (node) node.port.postMessage(command, transfer ?? []);
 }
@@ -295,8 +322,9 @@ function showPlayer() {
   $('midiTime').textContent = timeText(at, midiFile.length, speedFactor());
 }
 
-function openMidiBytes(name, bytes) {
+function openMidiBytes(name, bytes, credit = '') {
   midiFile = { name, bytes };
+  $('midiCredit').textContent = credit; // a library piece's (its licence asks for it where it plays)
   if (node) send({ type: 'midiFile', bytes: bytes.slice(0) });
   else message(`${midiFile.name}: it goes to the engine once started (Start).`);
 }
@@ -336,9 +364,9 @@ $('libraryOpen').addEventListener('click', async () => {
   try {
     const response = await fetch('midi/' + piece.file);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    openMidiBytes(`${piece.composer}: ${piece.title}`, await response.arrayBuffer());
-    const collection = library.collections?.[piece.collection]; // its licence asks for its credit where it plays
-    if (collection) message(`MIDI: ${collection.credit} (${collection.license}, ${collection.license_url})`, 'good');
+    const collection = library.collections?.[piece.collection];
+    openMidiBytes(`${piece.composer}: ${piece.title}`, await response.arrayBuffer(),
+                  collection ? `MIDI: ${collection.credit} (${collection.license})` : '');
   } catch (error) {
     message(`Cannot open ${piece.title}: ${error.message}`, 'bad');
   }
@@ -664,13 +692,15 @@ function describeProfile() {
 async function useProfile(name, bytes, credit = '') {
   profile = { name, size: bytes.byteLength, bytes, credit };
   describeProfile();
+  sendProfile(); // the engine first; keeping it in the browser takes a while for tens of MB
+  task('save', `Keeping ${name} in this browser (${MB(bytes.byteLength)} MB)...`);
   try { await profileDb.put({ name, bytes, credit }); } catch { message('Kept for this session only (the browser refused to store it).'); }
-  sendProfile();
+  taskDone('save');
 }
 
 function sendProfile() {
   if (!node || !profile) return;
-  message('Loading the profile into the engine...');
+  task('engine', `Loading ${profile.name} into the engine (the sound pauses a moment)...`);
   const copy = profile.bytes.slice(0); // the page keeps its own
   send({ type: 'profile', bytes: copy }, [copy]);
 }
@@ -705,6 +735,32 @@ async function listPublished() {
   showPublishedCredit();
 }
 
+/// Downloads `url` (`size` bytes, when known), its progress in the header.
+async function download(url, size, label) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const total = size || Number(response.headers.get('Content-Length')) || 0;
+  if (!response.body || !total) {
+    task('download', `Downloading ${label}...`);
+    return response.arrayBuffer();
+  }
+  let bytes = new Uint8Array(total), at = 0;
+  const reader = response.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (at + value.length > bytes.length) { // longer than said (a compressed length): room for the rest
+      const larger = new Uint8Array(Math.max(bytes.length * 2, at + value.length));
+      larger.set(bytes.subarray(0, at));
+      bytes = larger;
+    }
+    bytes.set(value, at);
+    at += value.length;
+    task('download', `Downloading ${label}: ${Math.round(100 * at / total)} % (${MB(at)} of ${MB(total)} MB)`, at / total);
+  }
+  return at === bytes.length ? bytes.buffer : bytes.buffer.slice(0, at);
+}
+
 async function sha256(bytes) {
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -716,14 +772,15 @@ $('loadPublished').addEventListener('click', async () => {
   if (!entry) return;
   $('loadPublished').disabled = true;
   try {
-    message(`Downloading ${entry.name} (${(entry.size / 1e6).toFixed(0)} MB)...`);
-    const response = await fetch(entry.file);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const bytes = await response.arrayBuffer();
+    message('');
+    const bytes = await download(entry.file, entry.size, entry.name);
+    task('download', `Checking ${entry.name} (SHA-256)...`);
     if (entry.sha256 && (await sha256(bytes)) !== entry.sha256) throw new Error('its SHA-256 is not the one published');
+    taskDone('download');
+    if (!node) message(`${entry.name}: ready, it plays once the engine is started (Start).`, 'good');
     await useProfile(entry.name, bytes, entry.credit);
-    message(`${entry.name}: kept in this browser` + (node ? '.' : ', played once the engine is started (Start).'), 'good');
   } catch (error) {
+    taskDone('download');
     message(`Cannot load ${entry.name}: ${error.message}`, 'bad');
   } finally {
     $('loadPublished').disabled = false;
@@ -743,10 +800,14 @@ $('start').addEventListener('click', async () => {
     send({ type: 'allSoundOff' });
     await context.close();
     context = node = null;
+    taskDone('engine');
     $('start').textContent = 'Start';
     $('engineLine').textContent = 'Stopped';
     return;
   }
+  $('start').disabled = true;
+  $('engineLine').textContent = 'Starting...';
+  task('start', 'Starting the audio...');
   try {
     // At the profile's rate (44.1 kHz): the attack residual plays as recorded, and the engine does not work for a
     // device set to 96 or 192 kHz (the browser converts to the device's rate). Otherwise, the browser's own rate.
@@ -756,6 +817,7 @@ $('start').addEventListener('click', async () => {
       context = new AudioContext({ latencyHint: 'interactive' });
     }
     await context.audioWorklet.addModule('worklet.js');
+    task('start', 'Starting the engine (WebAssembly)...');
     const wasm = await (await fetch('pianoforge.wasm')).arrayBuffer();
     node = new AudioWorkletNode(context, 'pianoforge', {
       numberOfInputs: 0,
@@ -767,14 +829,19 @@ $('start').addEventListener('click', async () => {
     $('start').textContent = 'Stop';
     connectMidi();
   } catch (error) {
+    taskDone('start');
+    $('engineLine').textContent = 'Stopped';
     message('Cannot start the audio: ' + error.message, 'bad');
     context = node = null;
+  } finally {
+    $('start').disabled = false;
   }
 });
 
 function received(data) {
   switch (data.type) {
     case 'ready': {
+      taskDone('start');
       $('engineLine').textContent = 'Modal engine running';
       const latency = (context.baseLatency || 0) + (context.outputLatency || 0);
       $('audioLine').textContent = `${(data.sampleRate / 1000).toFixed(1)} kHz, blocks of 128 (the browser converts to the device's rate)`;
@@ -788,11 +855,12 @@ function received(data) {
       break;
     }
     case 'profile':
+      taskDone('engine');
       if (data.ok) {
         profile.notes = data.notes;
         profile.layers = data.layers;
         describeProfile();
-        message('Ready: play the keyboard, the mouse, the computer keyboard or a MIDI keyboard.', 'good');
+        message(`Ready (the piano loaded in ${(data.ms / 1000).toFixed(1)} s): play the keyboard, the mouse, the computer keyboard or a MIDI keyboard.`, 'good');
       } else {
         message('The profile did not load: ' + data.error, 'bad');
       }
@@ -832,6 +900,8 @@ function received(data) {
       showPlayer();
       break;
     case 'error':
+      taskDone('start');
+      taskDone('engine');
       message('The engine did not start: ' + data.message, 'bad');
       break;
     default:
@@ -845,8 +915,12 @@ buildSettings();
 buildPlayer();
 listPublished();
 loadLibrary();
+task('stored', 'Reading the piano kept in this browser...');
 profileDb.get().then((entry) => {
-  if (entry) profile = { name: entry.name, size: entry.bytes.byteLength, bytes: entry.bytes, credit: entry.credit || '' };
+  taskDone('stored');
+  if (entry && !profile) { // (unless one was loaded meanwhile)
+    profile = { name: entry.name, size: entry.bytes.byteLength, bytes: entry.bytes, credit: entry.credit || '' };
+    sendProfile(); // when the engine was started meanwhile
+  }
   describeProfile();
-  $('start').disabled = false;
 });

@@ -98,6 +98,11 @@ code { color: var(--text); }
 details summary { cursor: pointer; color: var(--dim); }
 
 .message { min-height: 1.4em; color: var(--busy); margin: 10px 0 4px; }
+/* What the page is doing (a download, the engine starting or loading a piano): in the header, always in sight. */
+.busy { display: inline-flex; align-items: center; gap: 8px; color: var(--busy); font-size: 13px; max-width: 420px; }
+.busy[hidden] { display: none; }
+.busy progress { width: 120px; height: 8px; accent-color: var(--busy); flex: none; }
+#busyText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message.good { color: var(--good); }
 .message.bad { color: var(--bad); }
 .hint { color: var(--dim); font-size: 12.5px; margin: 4px 0 8px; }
