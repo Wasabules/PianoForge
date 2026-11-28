@@ -22,6 +22,7 @@ target_sources(PianoForgeApp PRIVATE
     src/SingleInstance.cpp
     src/ObsFlatpak.cpp
     src/ui/DesktopPanel.cpp
+    src/MidiLibrary.cpp
     src/AudioExport.cpp
     src/Mp3Encoder.cpp
     src/MirrorOutput.cpp
@@ -60,6 +61,14 @@ target_compile_definitions(PianoForgeApp PRIVATE
     PIANOFORGE_VERSION="${PROJECT_VERSION}")
 
 target_compile_options(PianoForgeApp PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+# macOS: the MIDI library in the bundle (Contents/Resources/midi, where MidiLibrary.cpp looks), so that the .app carries
+# it wherever it is copied. (Windows: the installer puts it beside the executable; Linux: the install rules below.)
+if(APPLE)
+    add_custom_command(TARGET PianoForgeApp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/media/midi"
+                "$<TARGET_BUNDLE_CONTENT_DIR:PianoForgeApp>/Resources/midi")
+endif()
 
 # ASIO (Windows): Steinberg's SDK is fetched at configure time and checked against its hash. Since October
 # 2025 it is dual-licensed, proprietary or GPLv3; the GPLv3 option is compatible with JUCE's AGPLv3.
@@ -173,6 +182,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # The licence and the third-party notices where a distribution keeps them (Debian: the copyright file).
     install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/pianoforge" RENAME copyright COMPONENT pianoforge)
     install(FILES "${PROJECT_SOURCE_DIR}/NOTICE.md" DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/pianoforge" COMPONENT pianoforge)
+    # The MIDI library (Player > Library, MidiLibrary.cpp finds it in <prefix>/share/pianoforge/midi).
+    install(DIRECTORY "${PROJECT_SOURCE_DIR}/media/midi/" DESTINATION "${CMAKE_INSTALL_DATADIR}/pianoforge/midi" COMPONENT pianoforge)
     # The menus' MIME cache ("Open with PianoForge" on MIDI files), where the tool is; a desktop also notices later.
     # Not into a staging folder (DESTDIR: a package being made), whose system's own triggers make the cache.
     install(CODE "

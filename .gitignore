@@ -11,6 +11,7 @@ corpus/
 
 # Compiled WebAssembly module (web/: emcmake build, copied next to the page)
 web/site/pianoforge.wasm
+web/site/midi/
 
 # Local tools and systems
 CMakeUserPresets.json

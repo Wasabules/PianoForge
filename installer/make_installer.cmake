@@ -24,6 +24,9 @@ endforeach()
 file(COPY_FILE "${SOURCE}/LICENSE" "${STAGE}/LICENSE.txt")
 file(COPY_FILE "${SOURCE}/NOTICE.md" "${STAGE}/NOTICE.md")
 
+# The MIDI library (Player > Library), beside the application: its index, the files, their credits.
+file(COPY "${SOURCE}/media/midi/" DESTINATION "${STAGE}/midi")
+
 # The OBS plugin, when it is built.
 set(with_obs 0)
 if(OBS_DLL AND EXISTS "${OBS_DLL}")
@@ -60,7 +63,8 @@ set(allowed PianoForge.exe LICENSE.txt NOTICE.md msvcp140.dll vcruntime140.dll v
     vst3/PianoForge.vst3/desktop.ini vst3/PianoForge.vst3/Plugin.ico)
 file(GLOB_RECURSE staged RELATIVE "${STAGE}" "${STAGE}/*")
 foreach(file IN LISTS staged)
-    if(NOT file IN_LIST allowed OR file MATCHES "corpus|profile|\\.bin$|\\.flac$|\\.wav$")
+    if(NOT (file IN_LIST allowed OR file MATCHES "^midi/([^/]+/)?[^/]+\\.(mid|json|md)$")
+       OR file MATCHES "corpus|profile|\\.bin$|\\.flac$|\\.wav$")
         message(FATAL_ERROR "Not for the installer: ${file}")
     endif()
 endforeach()

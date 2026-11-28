@@ -11,7 +11,8 @@ WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A 
 Affero General Public License for more details: [LICENSE](LICENSE).
 
 This covers the whole repository (the engine, the application, the plugins, the OBS plugin, the web build, the Python
-tools, the studies, the build files and the documentation) and its whole history: every version is under the same
+tools, the studies, the build files and the documentation), but for the MIDI library's files (below), and its whole
+history: every version is under the same
 licence, and the LICENSE file is in every commit from the first one (it was put into each of them on 2026-11-27, when
 the licence was chosen; nothing else in them changed).
 
@@ -57,6 +58,14 @@ adaptation of that bank and follows the bank's licence, not this one. The reposi
   any profile or data set made from it, is in this repository or in PianoForge's releases: the figures quoted in the
   code and the documents describe what was measured on it, they are not material from it. Any profile PianoForge
   publishes is measured from a free bank (the Salamander Grand Piano).
+
+## The MIDI library
+
+`media/midi/piano-midi.de/`: 22 piano pieces by Bernd Krueger (Name: Bernd Krueger, Source: http://www.piano-midi.de),
+licensed under the [Creative Commons Attribution-ShareAlike 3.0 Germany License](https://creativecommons.org/licenses/by-sa/3.0/de/deed.en)
+(CC BY-SA 3.0 DE), not under the AGPL. They are his files unchanged (only their names in lower case); an adaptation
+of them is shared under the same licence. The application (Player > Library > Credits and licence) and the web page
+show their credit where they play; `media/midi/library.json` lists them.
 
 ## Trademarks
 

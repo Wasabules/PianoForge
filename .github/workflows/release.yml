@@ -139,7 +139,7 @@ jobs:
           cd build/linux-gcc
           cpack -G "DEB;RPM"
           ls -l *.deb *.rpm
-          dpkg-deb -c pianoforge_*_amd64.deb | grep -E "usr/bin/pianoforge|doc/pianoforge/copyright"
+          dpkg-deb -c pianoforge_*_amd64.deb | grep -E "usr/bin/pianoforge|doc/pianoforge/copyright|pianoforge/midi/library.json"
 
       - uses: actions/upload-artifact@v4
         with:

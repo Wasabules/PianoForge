@@ -295,14 +295,54 @@ function showPlayer() {
   $('midiTime').textContent = timeText(at, midiFile.length, speedFactor());
 }
 
+function openMidiBytes(name, bytes) {
+  midiFile = { name, bytes };
+  if (node) send({ type: 'midiFile', bytes: bytes.slice(0) });
+  else message(`${midiFile.name}: it goes to the engine once started (Start).`);
+}
+
 function openMidi(file) {
   if (!file) return;
-  file.arrayBuffer().then((bytes) => {
-    midiFile = { name: file.name.replace(/\.(mid|midi|smf|kar)$/i, ''), bytes };
-    if (node) send({ type: 'midiFile', bytes: bytes.slice(0) });
-    else message(`${midiFile.name}: it goes to the engine once started (Start).`);
-  });
+  file.arrayBuffer().then((bytes) => openMidiBytes(file.name.replace(/\.(mid|midi|smf|kar)$/i, ''), bytes));
 }
+
+// ---- The MIDI library: media/midi (library.json and its files), copied next to the page by its build ----
+let library = null;
+
+async function loadLibrary() {
+  try {
+    const response = await fetch('midi/library.json', { cache: 'no-cache' });
+    if (!response.ok) return;
+    library = await response.json();
+  } catch { return; } // a page served without it: only one's own files
+  const list = $('libraryList');
+  const groups = new Map();
+  library.pieces.forEach((piece, i) => {
+    if (!groups.has(piece.composer)) {
+      const group = document.createElement('optgroup');
+      group.label = piece.composer;
+      groups.set(piece.composer, group);
+      list.append(group);
+    }
+    const length = `${Math.floor(piece.seconds / 60)}:${String(piece.seconds % 60).padStart(2, '0')}`;
+    groups.get(piece.composer).append(new Option(`${piece.title} (${length})`, String(i)));
+  });
+  $('library').hidden = !library.pieces.length;
+}
+
+$('libraryOpen').addEventListener('click', async () => {
+  const piece = library?.pieces[Number($('libraryList').value)];
+  if (!piece) return;
+  try {
+    const response = await fetch('midi/' + piece.file);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    openMidiBytes(`${piece.composer}: ${piece.title}`, await response.arrayBuffer());
+    const collection = library.collections?.[piece.collection]; // its licence asks for its credit where it plays
+    if (collection) message(`MIDI: ${collection.credit} (${collection.license}, ${collection.license_url})`, 'good');
+  } catch (error) {
+    message(`Cannot open ${piece.title}: ${error.message}`, 'bad');
+  }
+});
 
 function showParts() {
   const parts = midiFile?.parts ?? [];
@@ -804,6 +844,7 @@ buildKeyboard();
 buildSettings();
 buildPlayer();
 listPublished();
+loadLibrary();
 profileDb.get().then((entry) => {
   if (entry) profile = { name: entry.name, size: entry.bytes.byteLength, bytes: entry.bytes, credit: entry.credit || '' };
   describeProfile();

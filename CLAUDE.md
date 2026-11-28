@@ -139,6 +139,10 @@ setting usually has to be mirrored in several places:
   `tools/forge/forge/native.py`; on a mismatch the forge silently falls back to the (much slower) Python code.
   The Python implementation is the reference; tests compare the two. `PIANOFORGE_FORGE_NATIVE=0` forces Python.
 
+**`media/midi/`** is the MIDI library (`library.json` and 22 files from piano-midi.de, CC BY-SA 3.0 DE, not AGPL):
+the app finds it beside its executable, in `<prefix>/share/pianoforge/midi` or its bundle's Resources
+(`MidiLibrary.cpp`, Player > Library); the wasm build copies it to `web/site/midi`; the self-test reads every piece.
+
 **`studies/`** are standalone scripts behind design decisions (precision, CPU budget, fits), not part of any
 package. The design rationale lives in the French documents at the root; `Pré-analyse - Concept, forme et choix
 techniques.md` is the "analysis document" that code comments refer to.

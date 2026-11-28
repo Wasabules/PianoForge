@@ -2,6 +2,8 @@
 
 #include "MainComponent.h"
 
+#include "MidiLibrary.h"
+
 #include <cstring>
 
 #include "CurveText.h"
@@ -36,6 +38,8 @@ enum MenuId {
     // Presets: the instrument presets (apply, then delete), save, export, import
     kInstrumentBase = 400, kInstrumentDeleteBase = 500, kInstrumentSave = 390, kExportSettings, kImportSettings, kSettings,
     kFactoryBase = 600,
+    // Player > Library: one per piece of the MIDI library (MidiLibrary), then its credits
+    kLibraryBase = 700, kLibraryCredits = 799,
     // File > Record formats (one per sound format)
     kRecordFormat = 200,
 };
@@ -468,6 +472,24 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
     }
     case 1: {
         menu.addItem(item(kOpenMidi, "Open MIDI file...", "Ctrl+O"));
+        if (const auto& pieces = MidiLibrary::pieces(); !pieces.empty()) {
+            // The library, by composer (in the index's order), each piece with its length.
+            juce::PopupMenu library;
+            juce::StringArray composers;
+            for (const auto& p : pieces)
+                composers.addIfNotAlreadyThere(p.composer);
+            for (const auto& composer : composers) {
+                juce::PopupMenu works;
+                for (int i = 0; i < (int) pieces.size() && i < kLibraryCredits - kLibraryBase; ++i)
+                    if (pieces[(size_t) i].composer == composer)
+                        works.addItem(item(kLibraryBase + i, pieces[(size_t) i].title + "  (" + juce::String(pieces[(size_t) i].seconds / 60)
+                                                                 + ":" + juce::String(pieces[(size_t) i].seconds % 60).paddedLeft('0', 2) + ")"));
+                library.addSubMenu(composer, works);
+            }
+            library.addSeparator();
+            library.addItem(item(kLibraryCredits, "Credits and licence..."));
+            menu.addSubMenu("Library", library);
+        }
         menu.addSeparator();
         menu.addItem(item(kPlayPause, host.filePlayer.wantsToPlay() ? "Pause" : "Play", "Ctrl+Space", false, fileLoaded));
         menu.addItem(item(kStopPlayer, "Stop (back to the start)", "Ctrl+Home", false, fileLoaded));
@@ -590,6 +612,14 @@ void MainComponent::menuItemSelected(int id, int)
     }
     if (id >= kFactoryBase && id < kFactoryBase + 100) {
         applyFactory(id - kFactoryBase);
+        return;
+    }
+    if (id >= kLibraryBase && id < kLibraryCredits) {
+        openLibraryPiece(id - kLibraryBase);
+        return;
+    }
+    if (id == kLibraryCredits) {
+        showLibraryCredits();
         return;
     }
     if (id == kSettings) {
@@ -1995,6 +2025,34 @@ void MainComponent::openMidiFile(const juce::File& file, std::vector<juce::File>
     playerBar->setPlaylist(std::move(list), file);
     if (playerBar->autoPlays() && !host.filePlayer.wantsToPlay())
         playerBar->togglePlay();
+}
+
+void MainComponent::openLibraryPiece(int index)
+{
+    const auto& pieces = MidiLibrary::pieces();
+    if (index < 0 || index >= (int) pieces.size())
+        return;
+    // The playlist is the library itself, in its order: previous and next go from piece to piece.
+    std::vector<juce::File> list;
+    for (const auto& p : pieces)
+        list.push_back(p.file);
+    const auto& piece = pieces[(size_t) index];
+    openMidiFile(piece.file, std::move(list));
+    if (piece.credit.isNotEmpty()) // the collection's licence asks for its credit where it plays
+        showMessage(piece.composer + ", " + piece.title + " (MIDI: " + piece.credit + ", " + piece.license + ")", theme::good);
+}
+
+void MainComponent::showLibraryCredits()
+{
+    juce::StringArray credits;
+    for (const auto& p : MidiLibrary::pieces())
+        credits.addIfNotAlreadyThere(p.credit + " (" + p.license + ")");
+    juce::AlertWindow::showMessageBoxAsync(
+        juce::MessageBoxIconType::NoIcon, "MIDI library",
+        "The MIDI files of Player > Library are not under PianoForge's licence:\n\n" + credits.joinIntoString("\n")
+            + "\n\nCC-BY-SA-3.0-DE: Creative Commons Attribution-ShareAlike 3.0 Germany, "
+              "https://creativecommons.org/licenses/by-sa/3.0/de/deed.en\n\nThe files and their list: "
+            + MidiLibrary::folder().getFullPathName());
 }
 
 bool MainComponent::loadMidi(const juce::File& file)

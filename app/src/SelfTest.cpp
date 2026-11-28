@@ -9,6 +9,7 @@
 #include <memory>
 #include "KeyboardInput.h"
 #include "MidiFilePlayer.h"
+#include "MidiLibrary.h"
 #include "OfflineRender.h"
 #include "ui/EnginePanel.h"
 #include "ui/RoomPanel.h"
@@ -26,6 +27,7 @@
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
+#include <algorithm>
 #include <cmath>
 #include <thread>
 
@@ -1549,6 +1551,33 @@ int runSelfTest(const juce::StringArray& arguments)
                     + "; wrong SHA-256 " + (refusedSum ? "refused" : "ACCEPTED") + ", wrong size " + (refusedSize ? "refused" : "ACCEPTED")
                     + "; GitHub release " + (githubOk ? "read" : github.error) + "; plain http " + (httpRefused ? "refused" : "ACCEPTED"));
         dir.deleteRecursively();
+    }
+
+    // The MIDI library (Player > Library): found, and each piece read by the player, with its notes, its sustain pedal
+    // (a dry fugue aside) and the length its index says.
+    {
+        const auto& pieces = MidiLibrary::pieces();
+        int read = 0, pedalled = 0, lengthsAgree = 0;
+        juce::StringArray problems;
+        for (const auto& p : pieces) {
+            juce::String error;
+            const auto sequence = MidiFilePlayer::read(p.file, error);
+            if (sequence == nullptr || sequence->notes == 0) {
+                problems.add(p.file.getFileName() + (error.isNotEmpty() ? ": " + error : juce::String(": no note")));
+                continue;
+            }
+            ++read;
+            pedalled += std::any_of(sequence->events.begin(), sequence->events.end(), [](const auto& e) {
+                return (e.status & 0xF0) == 0xB0 && e.data1 == 64 && e.data2 >= 64;
+            }) ? 1 : 0;
+            lengthsAgree += std::abs(sequence->length - p.seconds) < 3.0 ? 1 : 0;
+        }
+        const int n = (int) pieces.size();
+        r.check(n >= 20 && read == n && pedalled >= n - 1 && lengthsAgree == n && pieces.front().credit.isNotEmpty(),
+                "MIDI library: " + juce::String(n) + " pieces in " + MidiLibrary::folder().getFullPathName() + ", " + juce::String(read)
+                    + " read, " + juce::String(pedalled) + " with the sustain pedal, " + juce::String(lengthsAgree)
+                    + " as long as listed; credit \"" + (n > 0 ? pieces.front().credit : juce::String()) + "\""
+                    + (problems.isEmpty() ? juce::String() : "; " + problems.joinIntoString(", ")));
     }
 
     // 9. Modal engine, when the corpus state has a modal profile (forge export).

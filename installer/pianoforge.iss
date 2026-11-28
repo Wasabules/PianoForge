@@ -70,6 +70,7 @@ Name: "obsplugin"; Description: "The OBS Studio plugin (the PianoForge sound, ke
 Source: "{#StageDir}\PianoForge.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\midi\*"; DestDir: "{app}\midi"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StageDir}\msvcp140.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\vcruntime140_1.dll"; DestDir: "{app}"; Flags: ignoreversion

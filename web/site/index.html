@@ -65,6 +65,7 @@
       <label class="button" title="Open a MIDI file (or drop one on the page)">Open MIDI... <input id="midiFile" type="file" accept=".mid,.midi,.smf,.kar" hidden></label>
       <button id="midiPlay" class="transport" title="Play / pause (Ctrl+Space)" disabled>&#9654;</button>
       <button id="midiStop" class="transport" title="Stop, back to the start (Ctrl+Home)" disabled>&#9632;</button>
+      <span id="library" hidden><select id="libraryList" aria-label="MIDI library"></select> <button id="libraryOpen" title="Open the piece chosen in the library">Open</button></span>
       <span id="midiName" class="name dim">No MIDI file: open one, or drop a .mid file on the page</span>
       <details id="midiParts" class="parts">
         <summary id="midiPartsSummary" title="The parts of the file (its instruments) to play: every one but the drums at first">Tracks</summary>

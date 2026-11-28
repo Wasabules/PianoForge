@@ -6,7 +6,8 @@ lab's own sequence player, to the sample in the audio worklet; open or drop a .m
 
 - `src/exports.cpp`: the engine's C interface (`pf_*`), a standalone module with no Emscripten JavaScript.
 - `site/`: the page (`index.html`, `app.js`, `style.css`) and the audio worklet (`worklet.js`), which instantiates
-  `pianoforge.wasm` on the browser's audio thread.
+  `pianoforge.wasm` on the browser's audio thread. The build copies the module and the MIDI library (`media/midi`,
+  as `site/midi/`) next to it: the player's library, each piece with its credit.
 - `check.mjs`: runs the module under Node as the worklet does: imports, the real profile, the same sound as the
   native engine (level per window), the cost (dry, with the room, on headphones).
 

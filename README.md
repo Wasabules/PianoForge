@@ -23,6 +23,7 @@ switches between that reference and the modal engine while playing.
 | `studies/` | Standalone computations and spikes behind design decisions (resonator precision, CPU budget, resynthesis). |
 | `plugin/` | The VST3 instrument (JUCE): the same engine, room, headphones, output tone and limiter in a host. |
 | `obs/` | OBS Studio plugin: the PianoForge sound (on speakers, as heard or dry, its own level), keyboard (lit keys and pedals, rounded notes, lights and sparkles, with the sound) and text sources, and chapter markers in OBS's recordings; fed by the application through shared memory. |
+| `media/midi/` | The MIDI library: 22 piano pieces by Bernd Krueger (piano-midi.de, CC BY-SA 3.0 DE), from Bach to Debussy, in Player > Library and on the web page. |
 | `web/` | The modal engine and the room in WebAssembly, played from a browser page: <https://wasabules.github.io/PianoForge/> (it asks for a modal profile, kept in the browser). |
 | `installer/` | The Windows installer (Inno Setup 6) and the update manifest it comes with. |
 | `corpus/` | Rendered takes and plugin states. Local only, never committed (commercial sample library licences). |
@@ -133,7 +134,9 @@ The timing checks of the tests (the room, the upsampler) are informative where `
 shared machine: the CI).
 
 Play a MIDI file live: File > Open MIDI file (Ctrl+O), drop it on the window, or pass it on the command line
-(`PianoForge.exe song.mid`). It plays to the sample with what the keyboards play, and is recorded with it.
+(`PianoForge.exe song.mid`); or one of the library's 22 pieces, Player > Library (Bach, Mozart, Beethoven, Schubert,
+Chopin, Schumann, Liszt, Tchaikovsky, Grieg, Debussy: Bernd Krueger's performances from piano-midi.de, CC BY-SA 3.0
+DE, each with the sustain pedal as played; previous and next go through the library). It plays to the sample with what the keyboards play, and is recorded with it.
 Tracks... picks the parts to play (a part is a track's channel; drums off by default); -oct, -, +, +oct
 transpose the file by semitones or octaves.
 

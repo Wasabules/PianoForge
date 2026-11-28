@@ -73,7 +73,9 @@ public:
     void handleArguments(const juce::StringArray& arguments, bool fromAnotherStart);
     /// Whether this PianoForge answers later starts (shown in Settings > Desktop).
     void setInstanceAnswering(bool answering);
-    bool loadMidi(const juce::File& file); // the file into the player (the list as it is)
+    bool loadMidi(const juce::File& file);
+    void openLibraryPiece(int index);
+    void showLibraryCredits(); // the file into the player (the list as it is)
 
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
     void filesDropped(const juce::StringArray& files, int, int) override;

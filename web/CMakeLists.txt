@@ -20,6 +20,7 @@ target_link_options(pianoforge_web PRIVATE
     --no-entry -O3 -sSTANDALONE_WASM -sFILESYSTEM=0 -sMALLOC=dlmalloc -sALLOW_MEMORY_GROWTH=1
     -sINITIAL_MEMORY=320MB -sMAXIMUM_MEMORY=2GB -sSTACK_SIZE=1MB
     "-sEXPORTED_FUNCTIONS=${pianoforge_exports_list}")
-# Next to the page.
+# Next to the page: the module, and the MIDI library (media/midi: library.json and its files) for the page's library.
 add_custom_command(TARGET pianoforge_web POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:pianoforge_web> ${CMAKE_CURRENT_SOURCE_DIR}/site/pianoforge.wasm)
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:pianoforge_web> ${CMAKE_CURRENT_SOURCE_DIR}/site/pianoforge.wasm
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${PROJECT_SOURCE_DIR}/media/midi ${CMAKE_CURRENT_SOURCE_DIR}/site/midi)
