@@ -6,7 +6,7 @@
 // on a failure.
 //   PianoForgePluginTest <PianoForge.vst3> [<modal-profile.bin>]   (compared against when the application's corpus
 //                                                                    has no profile; else the corpus's is)
-//   PianoForgePluginTest <PianoForge.vst3> --show-editor <seconds>   (the editor in a window, for a screenshot)
+//   PianoForgePluginTest <PianoForge.vst3> --show-editor <seconds> [<file.png>]   (the editor in a window, saved)
 #include <pianoforge/limiter.hpp>
 #include <pianoforge/modal_engine.hpp>
 #include <pianoforge/modal_profile.hpp>
@@ -238,6 +238,14 @@ int main(int argc, char* argv[])
         window.setContentNonOwned(p->createEditorAndMakeActive(), true);
         window.setVisible(true);
         juce::MessageManager::getInstance()->runDispatchLoopUntil((int) (1000.0 * juce::String(argv[3]).getDoubleValue()));
+        if (argc >= 5) { // the editor as a picture (the README's screenshots)
+            auto* editor = window.getContentComponent();
+            const auto image = editor->createComponentSnapshot(editor->getLocalBounds(), true, 1.0f);
+            const auto file = juce::File::getCurrentWorkingDirectory().getChildFile(juce::String::fromUTF8(argv[4]));
+            file.deleteFile();
+            juce::FileOutputStream out(file);
+            juce::PNGImageFormat().writeImageToStream(image, out);
+        }
         delete window.getContentComponent();
         return 0;
     }

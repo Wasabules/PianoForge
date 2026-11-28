@@ -2413,6 +2413,14 @@ void MainComponent::handleArguments(const juce::StringArray& arguments, bool fro
         raiseWindow();
 }
 
+void MainComponent::playForSnapshot()
+{
+    host.volume = 0.0f; // nothing heard: the picture only
+    performancePanel.onReset(); // the dropouts of the start (the profile decoded meanwhile) are not the picture's
+    if (host.filePlayer.sequence() != nullptr && !host.filePlayer.wantsToPlay())
+        playerBar->togglePlay();
+}
+
 void MainComponent::setInstanceAnswering(bool answering)
 {
     if (desktop != nullptr)

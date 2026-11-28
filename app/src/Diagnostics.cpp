@@ -9,6 +9,8 @@
 #include "DesktopIntegration.h"
 #include "ui/AudioPanel.h"
 #include "ui/DesktopPanel.h"
+#include "ui/StreamLookPanel.h"
+#include "StreamLook.h"
 #include "ui/GalleryPanel.h"
 #include "ui/NamingDialog.h"
 #include "ui/RecordingPanel.h"
@@ -576,6 +578,9 @@ int runUiSnapshots(const juce::StringArray& arguments)
         DesktopIntegration integration(settings, {});
         DesktopPanel desktopSettings(settings, integration);
         save(desktopSettings, "desktop-settings");
+        StreamLook look(settings);
+        StreamLookPanel lookPanel(look);
+        save(lookPanel, "stream-look");
         TonePanel tone(modal, host, settings);
         save(tone, "tone-and-dynamics");
         {

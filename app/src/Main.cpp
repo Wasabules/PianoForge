@@ -114,6 +114,34 @@ public:
         }
 #endif
         window->content().handleArguments(arguments, false); // a MIDI file ("Open with PianoForge"), --record, --gallery
+
+        // --window-snapshot <file.png> [seconds] [--window-size WxH]: the window as it is after `seconds` (8 by default:
+        // the profile loaded), a MIDI file given playing silently from the third second (its keys lit), saved as a PNG,
+        // then quit. The README's screenshots (docs/images); with HOME pointed at a scratch folder.
+        if (const int at = arguments.indexOf("--window-snapshot"); at >= 0) {
+            const juce::File file = juce::File::getCurrentWorkingDirectory().getChildFile(arguments[at + 1]);
+            const double seconds = arguments[at + 2].getDoubleValue() > 0.0 ? arguments[at + 2].getDoubleValue() : 8.0;
+            if (const int size = arguments.indexOf("--window-size"); size >= 0)
+                window->centreWithSize(arguments[size + 1].upToFirstOccurrenceOf("x", false, false).getIntValue(),
+                                       arguments[size + 1].fromFirstOccurrenceOf("x", false, false).getIntValue());
+            juce::Timer::callAfterDelay(3000, [this] {
+                if (window != nullptr)
+                    window->content().playForSnapshot();
+            });
+            juce::Timer::callAfterDelay((int) (1000.0 * seconds) - 1000, [this] { // the counters again, just before
+                if (window != nullptr)
+                    window->content().playForSnapshot();
+            });
+            juce::Timer::callAfterDelay((int) (1000.0 * seconds), [this, file] {
+                if (window != nullptr) {
+                    const auto image = window->createComponentSnapshot(window->getLocalBounds(), true, 1.0f);
+                    file.deleteFile();
+                    juce::FileOutputStream out(file);
+                    juce::PNGImageFormat().writeImageToStream(image, out);
+                }
+                quit();
+            });
+        }
     }
 
     void shutdown() override

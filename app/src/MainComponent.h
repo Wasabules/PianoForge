@@ -71,6 +71,8 @@ public:
     void openMidiFile(const juce::File& file, std::vector<juce::File> list = {});
     /// The command line's arguments, at start or from a later start (SingleInstance.h): MIDI files, --record, --gallery.
     void handleArguments(const juce::StringArray& arguments, bool fromAnotherStart);
+    /// --window-snapshot: the sound off (silence on the output), the MIDI file opened playing, so that its keys light.
+    void playForSnapshot();
     /// Whether this PianoForge answers later starts (shown in Settings > Desktop).
     void setInstanceAnswering(bool answering);
     bool loadMidi(const juce::File& file);
