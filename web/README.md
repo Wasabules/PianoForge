@@ -45,4 +45,6 @@ then <http://localhost:8080>: choose `corpus/reference/noire-dry/modal-profile.b
 
 Measured (Node 22, 48 kHz, render quanta of 128): the profile parses in about 0.1 s; 64 voices with the pedal down
 and the sympathetic strings take about 55 % of the audio thread (the native engine, AVX2: 17 to 20 %). The output
-latency is the browser's and the system's (10 to 40 ms), not ASIO's. Web MIDI: Chrome, Edge, Firefox; not Safari.
+latency is the browser's and the system's (10 to 40 ms), not ASIO's. Web MIDI: Chrome, Edge, Firefox; not Safari. The page
+asks for it only on "Connect a MIDI keyboard" (Firefox's question is a dialog over the page, installing a permission
+add-on for the site; asked at Start, it held the page still); once allowed, the keyboards connect by themselves.

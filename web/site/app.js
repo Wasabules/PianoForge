@@ -258,17 +258,37 @@ window.addEventListener('blur', () => { // keys released while the page was not 
 });
 
 // ---- MIDI keyboards (Web MIDI) ----
-async function connectMidi() {
+// The MIDI keyboards, asked for only when the visitor clicks "Connect a MIDI keyboard": the browser asks first, and
+// Firefox's question is a dialog over the page (installing a permission add-on for the site) that waits for an
+// answer; asked at Start, it held the page still. Once allowed, the keyboards connect by themselves at Start.
+async function midiPermission() {
+  try { return (await navigator.permissions.query({ name: 'midi' })).state; } catch { return 'unknown'; }
+}
+
+async function connectMidiIfAllowed() {
   if (!navigator.requestMIDIAccess) {
     $('midiLine').textContent = 'MIDI: this browser has no Web MIDI (Chrome, Edge and Firefox do)';
+    $('midiConnect').hidden = true;
     return;
   }
+  if (!midi && (await midiPermission()) === 'granted') connectMidi();
+}
+
+async function connectMidi() {
+  if (!navigator.requestMIDIAccess) return connectMidiIfAllowed();
+  // (the button stays: a question closed without an answer may leave the browser's promise waiting for good)
+  task('midi', /firefox/i.test(navigator.userAgent)
+    ? 'Waiting for Firefox: allow MIDI for this site (it installs a small permission add-on)...'
+    : 'Waiting for the browser: allow MIDI for this site...');
   try {
     midi = await navigator.requestMIDIAccess({ sysex: false });
   } catch (error) {
     $('midiLine').textContent = 'MIDI: not allowed (' + error.message + ')';
     return;
+  } finally {
+    taskDone('midi');
   }
+  $('midiConnect').hidden = true;
   const attach = () => {
     const names = [];
     for (const input of midi.inputs.values()) {
@@ -357,6 +377,8 @@ async function loadLibrary() {
   });
   $('library').hidden = !library.pieces.length;
 }
+
+$('midiConnect').addEventListener('click', () => connectMidi());
 
 $('libraryOpen').addEventListener('click', async () => {
   const piece = library?.pieces[Number($('libraryList').value)];
@@ -827,7 +849,7 @@ $('start').addEventListener('click', async () => {
     node.connect(context.destination);
     node.port.onmessage = ({ data }) => received(data);
     $('start').textContent = 'Stop';
-    connectMidi();
+    connectMidiIfAllowed(); // (asking would put the browser's MIDI question over the page: a button asks)
   } catch (error) {
     taskDone('start');
     $('engineLine').textContent = 'Stopped';
@@ -915,6 +937,7 @@ buildSettings();
 buildPlayer();
 listPublished();
 loadLibrary();
+connectMidiIfAllowed(); // keyboards already allowed (no question asked); else the button
 task('stored', 'Reading the piano kept in this browser...');
 profileDb.get().then((entry) => {
   taskDone('stored');
