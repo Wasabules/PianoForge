@@ -14,6 +14,12 @@ lab's own sequence player, to the sample in the audio worklet; open or drop a .m
 Online: <https://wasabules.github.io/PianoForge/>, published by `.github/workflows/pages.yml` (the module built and
 its tests run, then `site/` as it is) at every push to main that changes `web/` or the engine, or by hand.
 
+The page leads in three steps: choose a piano (the bar's Piano chip and the first step open the pianos: a list,
+each one's card with its credit, licence and sources, Load), start the engine (Start is there once a piano is), play.
+The MIDI gallery (the player's Gallery..., or the third step) lists the library's pieces by composer with a search;
+each one's card gives the composer's dates, the length, the notes, how long the pedal is down, the range, and the
+file's author, source and licence, with Play (which starts the engine first when it is not running) and Open.
+
 The page offers the pianos published with the releases (a `<name>.modal-profile.bin` asset with its
 `<name>.modal-profile.json`: name, piano, credit, licence, source). A page cannot download a release asset from GitHub
 (no CORS header), so the deployment copies them next to it and lists them in `profiles.json` with their size and

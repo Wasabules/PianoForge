@@ -95,6 +95,8 @@ function taskDone(name) {
 }
 
 function showTasks() {
+  showTaskViews();
+  if (typeof showSteps === 'function' && document.getElementById('steps')) showSteps();
   const shown = [...tasks.values()].pop();
   $('busy').hidden = !shown;
   if (!shown) return;
@@ -103,6 +105,19 @@ function showTasks() {
   const bar = $('busyBar');
   if (shown.fraction === null) bar.removeAttribute('value'); // indeterminate: it moves
   else bar.value = Math.min(1, Math.max(0, shown.fraction));
+}
+
+/// The same tasks where they concern what is in sight: a piano's download, in its card.
+function showTaskViews() {
+  const view = document.getElementById('pianoProgress');
+  if (!view) return;
+  const running = tasks.get('download') || tasks.get('save');
+  view.hidden = !running;
+  if (!running) return;
+  view.querySelector('span').textContent = running.text;
+  const bar = view.querySelector('progress');
+  if (running.fraction === null) bar.removeAttribute('value');
+  else bar.value = running.fraction;
 }
 
 const MB = (bytes) => (bytes / 1e6).toFixed(0);
@@ -209,7 +224,7 @@ function typing(event) {
 }
 
 window.addEventListener('keydown', (event) => {
-  if ($('settings').open) return; // the settings dialog keeps its keys (Esc closes it); releases still pass
+  if (document.querySelector('dialog[open]')) return; // a dialog keeps its keys (a search, Esc); releases still pass
   if (event.ctrlKey && !event.altKey && !typing(event)) { // the MIDI file player
     if (event.code === 'Space') { event.preventDefault(); togglePlay(); }
     else if (event.code === 'Home') { event.preventDefault(); stopFile(); }
@@ -354,43 +369,138 @@ function openMidi(file) {
   file.arrayBuffer().then((bytes) => openMidiBytes(file.name.replace(/\.(mid|midi|smf|kar)$/i, ''), bytes));
 }
 
-// ---- The MIDI library: media/midi (library.json and its files), copied next to the page by its build ----
+// ---- The MIDI gallery: media/midi (library.json and its files), copied next to the page by its build ----
 let library = null;
+let galleryChoice = 0;
+let pendingPlay = false; // a piece asked to play before the engine had it
 
 async function loadLibrary() {
   try {
     const response = await fetch('midi/library.json', { cache: 'no-cache' });
     if (!response.ok) return;
     library = await response.json();
-  } catch { return; } // a page served without it: only one's own files
-  const list = $('libraryList');
-  const groups = new Map();
-  library.pieces.forEach((piece, i) => {
-    if (!groups.has(piece.composer)) {
-      const group = document.createElement('optgroup');
-      group.label = piece.composer;
-      groups.set(piece.composer, group);
-      list.append(group);
-    }
-    const length = `${Math.floor(piece.seconds / 60)}:${String(piece.seconds % 60).padStart(2, '0')}`;
-    groups.get(piece.composer).append(new Option(`${piece.title} (${length})`, String(i)));
-  });
-  $('library').hidden = !library.pieces.length;
+  } catch { /* a page served without it: only one's own files */ }
+  for (const id of ['openGallery', 'stepGallery']) $(id).hidden = !library?.pieces?.length;
 }
 
-$('midiConnect').addEventListener('click', () => connectMidi());
+const fold = (text) => text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); // "Frederic" finds Frédéric
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const noteName = (n) => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1);
 
-$('libraryOpen').addEventListener('click', async () => {
-  const piece = library?.pieces[Number($('libraryList').value)];
-  if (!piece) return;
+function openGallery() {
+  if (!library?.pieces?.length) return;
+  if (midiFile?.piece !== undefined) galleryChoice = midiFile.piece;
+  renderGallery();
+  $('gallery').showModal();
+  $('gallerySearch').focus();
+}
+
+function shownPieces() {
+  const query = fold($('gallerySearch').value.trim());
+  return library.pieces.map((piece, index) => ({ piece, index }))
+    .filter(({ piece }) => !query || fold(`${piece.composer} ${piece.title}`).includes(query));
+}
+
+function renderGallery() {
+  const shown = shownPieces();
+  if (shown.length && !shown.some(({ index }) => index === galleryChoice)) galleryChoice = shown[0].index;
+  const items = [];
+  let composer = null;
+  for (const { piece, index } of shown) {
+    if (piece.composer !== composer) {
+      composer = piece.composer;
+      items.push(el('li', { className: 'group', role: 'presentation' }, composer, library.composers?.[composer] && el('small', { textContent: library.composers[composer] })));
+    }
+    const playing = midiFile?.piece === index;
+    const item = el('li', { className: 'item', role: 'option' },
+      el('span', { className: 'title', textContent: piece.title }),
+      el('span', { className: 'meta' }, el('span', { textContent: clock(piece.seconds) }),
+        el('span', { className: 'badge', textContent: playing ? (filePlaying ? 'playing' : 'opened') : '' })));
+    item.setAttribute('aria-selected', String(index === galleryChoice));
+    item.addEventListener('click', () => { galleryChoice = index; renderGallery(); });
+    item.addEventListener('dblclick', () => openPiece(index, true));
+    items.push(item);
+  }
+  if (!shown.length) items.push(el('li', { className: 'empty', textContent: 'No piece matches.' }));
+  $('galleryList').replaceChildren(...items);
+  $('galleryList').querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  renderPiece(shown.length ? library.pieces[galleryChoice] : null);
+  const credits = Object.values(library.collections ?? {});
+  $('galleryFoot').replaceChildren(...credits.flatMap((c) => [
+    `${library.pieces.length} pieces. MIDI files by ${c.author} (`, link(c.url, c.url.replace(/^https?:\/\/(www\.)?/, '')),
+    '), under ', link(c.license_url, c.license_name || c.license), '. Enter plays the piece chosen, the arrows move.']));
+}
+
+function renderPiece(piece) {
+  if (!piece) { $('galleryDetail').replaceChildren(el('p', { className: 'dim', textContent: 'Choose a piece on the left.' })); return; }
+  const index = library.pieces.indexOf(piece);
+  const collection = library.collections?.[piece.collection] ?? {};
+  const years = library.composers?.[piece.composer];
+  const play = el('button', { className: 'primary', textContent: '▶  Play' });
+  play.addEventListener('click', () => openPiece(index, true));
+  const open = el('button', { textContent: 'Open without playing' });
+  open.addEventListener('click', () => openPiece(index, false));
+  const before = !profile ? 'Play asks for a piano first: the engine needs one.' : !node ? 'Play starts the engine first.' : '';
+  $('galleryDetail').replaceChildren(
+    el('p', { className: 'eyebrow', textContent: years ? `${piece.composer}, ${years}` : piece.composer }),
+    el('h3', { textContent: piece.title }),
+    el('p', { className: 'by', textContent: `Played by ${collection.author ?? 'its author'}: a performance recorded as MIDI, with its touch and its pedal.` }),
+    el('div', { className: 'actions' }, play, open),
+    before && el('p', { className: 'dim before', textContent: before }),
+    el('dl', { className: 'facts' },
+      fact('Duration', clock(piece.seconds)),
+      piece.notes && fact('Notes', piece.notes.toLocaleString('en')),
+      piece.pedal !== undefined && fact('Pedal down', piece.pedal > 0 ? `${Math.round(piece.pedal * 100)} %` : 'never (dry)'),
+      piece.low !== undefined && fact('Range', `${noteName(piece.low)} to ${noteName(piece.high)}`)),
+    el('div', { className: 'credit' },
+      el('p', {}, 'MIDI file by ', el('strong', { textContent: collection.author ?? '' }), ', source: ', link(collection.url, collection.url ?? '')),
+      el('p', {}, 'Licence: ', link(collection.license_url, collection.license_name || collection.license),
+        ` (${collection.license}). The file is his, unchanged: `, el('code', { textContent: piece.file })),
+      el('p', { className: 'dim', textContent: `Credit as the licence asks: ${collection.credit}` })));
+}
+
+/// Opens a piece of the gallery in the player; with `play`, plays it, starting the engine first when needed.
+async function openPiece(index, play) {
+  const piece = library.pieces[index];
+  if (play && !node) {
+    if (!profile) {
+      $('gallery').close();
+      message(`${piece.title}: choose a piano first, then Play again.`, 'bad');
+      openPianos();
+      return;
+    }
+    if (!context) $('start').click(); // within the click: the browser lets the audio start
+  }
+  $('gallery').close();
+  pendingPlay = play;
   try {
     const response = await fetch('midi/' + piece.file);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const collection = library.collections?.[piece.collection];
     openMidiBytes(`${piece.composer}: ${piece.title}`, await response.arrayBuffer(),
                   collection ? `MIDI: ${collection.credit} (${collection.license})` : '');
+    midiFile.piece = index;
   } catch (error) {
+    pendingPlay = false;
     message(`Cannot open ${piece.title}: ${error.message}`, 'bad');
+  }
+}
+
+$('gallerySearch').addEventListener('input', renderGallery);
+$('midiConnect').addEventListener('click', () => connectMidi());
+for (const id of ['pianoChip', 'stepChoose', 'changePiano']) $(id).addEventListener('click', openPianos);
+for (const id of ['openGallery', 'stepGallery']) $(id).addEventListener('click', openGallery);
+$('stepStart').addEventListener('click', () => { if (!context) $('start').click(); });
+$('gallery').addEventListener('keydown', (event) => {
+  const shown = shownPieces().map(({ index }) => index);
+  const at = shown.indexOf(galleryChoice);
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    galleryChoice = shown[Math.max(0, Math.min(shown.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)))] ?? galleryChoice;
+    renderGallery();
+  } else if (event.key === 'Enter' && shown.length) {
+    event.preventDefault();
+    openPiece(galleryChoice, true);
   }
 });
 
@@ -701,13 +811,42 @@ function buildSettings() {
   $('velocityOut').textContent = velocity;
 }
 
-// ---- The profile ----
+// ---- The piano (the modal profile): the bar's chip, the steps before playing, the Piano card ----
 function describeProfile() {
   $('profileLine').textContent = profile
     ? `${profile.name}, ${(profile.size / 1e6).toFixed(1)} MB` + (profile.notes ? ` (${profile.notes} notes x ${profile.layers} layers)` : '')
-    : 'No profile: load a published piano or choose modal-profile.bin';
+    : 'No piano yet';
   $('profileCredit').textContent = profile?.credit || ''; // a published profile's credit (CC-BY: shown where it plays)
-  $('forget').disabled = !profile;
+  $('pianoName').textContent = profile ? profile.name : 'none yet';
+  $('pianoChip').classList.toggle('missing', !profile);
+  $('changePiano').textContent = profile ? 'Change the piano...' : 'Choose a piano...';
+  showSteps();
+  if ($('pianos').open) renderPianos();
+}
+
+/// The three steps before playing (a piano, the engine, the keys), and Start: usable once there is a piano, to stop
+/// once running; the steps leave the page while the engine runs.
+function showSteps() {
+  const running = !!node, starting = tasks.has('start');
+  const state = (id, value) => {
+    for (const name of ['done', 'current', 'waiting']) $(id).classList.toggle(name, value === name);
+  };
+  state('step1', profile ? 'done' : 'current');
+  state('step2', running ? 'done' : profile ? 'current' : 'waiting');
+  state('step3', running ? 'current' : 'waiting');
+  $('step1Text').textContent = profile
+    ? `${profile.name}, kept in this browser.`
+    : 'The piano the engine plays: a modal profile, measured from a sampled grand. It stays in this browser.';
+  $('stepChoose').textContent = profile ? 'Change the piano...' : 'Choose a piano...';
+  $('stepChoose').classList.toggle('primary', !profile);
+  $('step2Text').textContent = starting ? 'Starting...'
+    : profile ? 'The browser opens its audio output and the engine takes the piano.' : 'Once a piano is chosen.';
+  const usable = running || (!!profile && !starting);
+  $('start').disabled = !usable;
+  $('stepStart').disabled = !usable;
+  $('start').title = running ? 'Stop the engine' : profile ? 'Start the engine' : 'Choose a piano first';
+  $('stepStart').classList.toggle('primary', !!profile && !running);
+  $('steps').hidden = running;
 }
 
 /// A profile to play from now on: kept in this browser (IndexedDB) with its name and credit, sent to the engine.
@@ -729,9 +868,18 @@ function sendProfile() {
 
 $('profileFile').addEventListener('change', async (event) => {
   const file = event.target.files?.[0];
+  event.target.value = ''; // the same file may be chosen again
   if (!file) return;
   await useProfile(file.name, await file.arrayBuffer());
+  message(`${file.name}: ${node ? 'in the engine' : 'ready, Start plays it'}.`, 'good');
 });
+
+async function forgetProfile() {
+  await profileDb.remove();
+  profile = null;
+  describeProfile();
+  message('The piano is no longer kept in this browser.', 'good');
+}
 
 // ---- Published pianos: the profiles attached to PianoForge's releases ----
 // A page cannot download a release asset from GitHub (no CORS header on it): the deployment
@@ -739,22 +887,14 @@ $('profileFile').addEventListener('change', async (event) => {
 // profiles.json, each with its credit, size and SHA-256, checked here before the engine gets it.
 let published = [];
 
-function showPublishedCredit() {
-  const entry = published[Number($('publishedList').value)];
-  $('publishedCredit').textContent = entry ? entry.credit : '';
-}
-
 async function listPublished() {
   try {
     const response = await fetch('profiles.json', { cache: 'no-cache' });
     if (!response.ok) return;
-    published = await response.json();
-  } catch { return; } // a local server without it: only one's own file
-  if (!Array.isArray(published) || !published.length) return;
-  $('publishedList').replaceChildren(...published.map((entry, i) =>
-    new Option(`${entry.name} (${entry.piano}), ${(entry.size / 1e6).toFixed(0)} MB, ${entry.release}`, String(i))));
-  $('published').hidden = false;
-  showPublishedCredit();
+    const list = await response.json();
+    if (Array.isArray(list)) published = list;
+  } catch { /* a local server without it: only one's own file */ }
+  if ($('pianos').open) renderPianos();
 }
 
 /// Downloads `url` (`size` bytes, when known), its progress in the header.
@@ -788,36 +928,107 @@ async function sha256(bytes) {
   return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-$('publishedList').addEventListener('change', showPublishedCredit);
-$('loadPublished').addEventListener('click', async () => {
-  const entry = published[Number($('publishedList').value)];
-  if (!entry) return;
-  $('loadPublished').disabled = true;
+async function loadPublished(entry) {
+  if ($('pianos').open) setTimeout(renderPianos); // its buttons, while it loads
   try {
     message('');
     const bytes = await download(entry.file, entry.size, entry.name);
     task('download', `Checking ${entry.name} (SHA-256)...`);
     if (entry.sha256 && (await sha256(bytes)) !== entry.sha256) throw new Error('its SHA-256 is not the one published');
     taskDone('download');
-    if (!node) message(`${entry.name}: ready, it plays once the engine is started (Start).`, 'good');
     await useProfile(entry.name, bytes, entry.credit);
+    message(`${entry.name}: ${node ? 'in the engine' : 'ready, Start plays it'}.`, 'good');
   } catch (error) {
     taskDone('download');
     message(`Cannot load ${entry.name}: ${error.message}`, 'bad');
-  } finally {
-    $('loadPublished').disabled = false;
   }
-});
+  if ($('pianos').open) renderPianos();
+}
 
-$('forget').addEventListener('click', async () => {
-  await profileDb.remove();
-  profile = null;
-  describeProfile();
-  message('The profile is no longer kept in this browser.', 'good');
-});
+// ---- The browsers (the pianos, the MIDI gallery): a list on the left, the chosen item's card on the right ----
+/// An element: el('p', { className: 'dim' }, 'text', child...); text is set as text, never as markup.
+function el(tag, props = {}, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  for (const child of children) if (child !== null && child !== undefined && child !== false) node.append(child);
+  return node;
+}
+const link = (href, text) => el('a', { href, target: '_blank', rel: 'noopener', textContent: text });
+const fact = (label, value) => el('div', { className: 'fact' }, el('dt', { textContent: label }), el('dd', { textContent: value }));
+
+for (const dialog of document.querySelectorAll('dialog.modal')) {
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); }); // the backdrop
+  dialog.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => dialog.close()));
+}
+
+let pianoChoice = 0;
+const pianoEntries = () => [...published.map((entry) => ({ kind: 'published', ...entry })), { kind: 'own' }];
+
+function openPianos() {
+  const entries = pianoEntries();
+  const inUse = entries.findIndex((e) => e.kind === 'published' && profile?.name === e.name);
+  pianoChoice = inUse >= 0 ? inUse : 0;
+  renderPianos();
+  $('pianos').showModal();
+}
+
+function renderPianos() {
+  const entries = pianoEntries();
+  pianoChoice = Math.min(pianoChoice, entries.length - 1);
+  const ownInUse = !!profile && !published.some((p) => p.name === profile.name);
+  $('pianoList').replaceChildren(...entries.map((entry, i) => {
+    const inUse = entry.kind === 'published' ? profile?.name === entry.name : ownInUse;
+    const item = el('li', { className: 'item', role: 'option', tabIndex: -1 },
+      el('span', { className: 'title', textContent: entry.kind === 'published' ? entry.name : 'A profile of your own' }),
+      el('span', { className: 'meta' },
+        el('span', { textContent: entry.kind === 'published' ? `${entry.piano}, ${MB(entry.size)} MB` : 'modal-profile.bin, from forge export' }),
+        el('span', { className: 'badge', textContent: inUse ? 'in use' : '' })));
+    item.setAttribute('aria-selected', String(i === pianoChoice));
+    item.addEventListener('click', () => { pianoChoice = i; renderPianos(); });
+    return item;
+  }));
+  const entry = entries[pianoChoice];
+  const loading = tasks.has('download') || tasks.has('save');
+  const progress = el('div', { id: 'pianoProgress', className: 'progress', hidden: true }, el('progress', { max: 1 }), el('span'));
+  const startButton = !node && profile && el('button', { className: 'primary', textContent: 'Start the engine' });
+  if (startButton) startButton.addEventListener('click', () => { $('pianos').close(); if (!context) $('start').click(); });
+  let card;
+  if (entry.kind === 'published') {
+    const inUse = profile?.name === entry.name;
+    const load = el('button', { className: inUse ? '' : 'primary', textContent: inUse ? 'Load it again' : 'Load this piano', disabled: loading });
+    load.addEventListener('click', () => loadPublished(entry));
+    card = [
+      el('p', { className: 'eyebrow', textContent: `Published with PianoForge ${entry.release}` }),
+      el('h3', { textContent: entry.name }),
+      el('p', { className: 'by', textContent: entry.piano }),
+      el('dl', { className: 'facts' }, fact('Size', `${MB(entry.size)} MB`), fact('Release', entry.release),
+        fact('Licence', (entry.license || '').replace(/-/g, ' '))),
+      progress,
+      el('div', { className: 'actions' }, load, inUse && startButton),
+      el('div', { className: 'credit' }, el('p', { textContent: entry.credit }),
+        el('p', {}, 'Licence: ', link(entry.license_url, entry.license), entry.source ? ', sources: ' : '', entry.source && link(entry.source, entry.source.replace(/^https?:\/\//, '')))),
+    ];
+  } else {
+    const choose = el('button', { className: ownInUse ? '' : 'primary', textContent: 'Choose a file...' });
+    choose.addEventListener('click', () => $('profileFile').click());
+    const forget = profile && el('button', { textContent: 'Forget the piano kept here' });
+    if (forget) forget.addEventListener('click', forgetProfile);
+    card = [
+      el('p', { className: 'eyebrow', textContent: 'Your own' }),
+      el('h3', { textContent: 'A profile of your own' }),
+      el('p', { className: 'by', textContent: ownInUse ? `In use: ${profile.name}` : 'A modal-profile.bin, measured from a sample bank' }),
+      el('div', { className: 'actions' }, choose, forget, ownInUse && startButton),
+      el('div', { className: 'credit' },
+        el('p', { textContent: 'pianoforge-profile build measures one from any SFZ bank (docs/building-a-profile.md); forge export writes it.' }),
+        el('p', { textContent: 'It stays in this browser: it is never uploaded. A profile follows the licence of the bank it was measured from.' })),
+    ];
+  }
+  $('pianoDetail').replaceChildren(...card.filter(Boolean));
+  showTasks(); // the progress, if a download runs
+}
 
 // ---- Start: the audio context, the worklet, the module ----
 $('start').addEventListener('click', async () => {
+  if (!context && !profile) { openPianos(); return; } // (disabled then; a click that gets here asks for a piano)
   if (context) { // a second click: stop
     send({ type: 'allSoundOff' });
     await context.close();
@@ -825,6 +1036,7 @@ $('start').addEventListener('click', async () => {
     taskDone('engine');
     $('start').textContent = 'Start';
     $('engineLine').textContent = 'Stopped';
+    showSteps();
     return;
   }
   $('start').disabled = true;
@@ -856,7 +1068,7 @@ $('start').addEventListener('click', async () => {
     message('Cannot start the audio: ' + error.message, 'bad');
     context = node = null;
   } finally {
-    $('start').disabled = false;
+    showSteps();
   }
 });
 
@@ -912,7 +1124,13 @@ function received(data) {
         showTranspose();
         showParts();
         $('midiName').classList.remove('dim');
-        message(`Opened ${midiFile.name}: Ctrl+Space plays it, with its own velocities.`, 'good');
+        if (pendingPlay) { // asked from the gallery: it plays now
+          pendingPlay = false;
+          togglePlay();
+          message(`Playing ${midiFile.name} (Ctrl+Space pauses, the gallery chooses another).`, 'good');
+        } else {
+          message(`Opened ${midiFile.name}: Ctrl+Space plays it, with its own velocities.`, 'good');
+        }
       } else {
         midiFile = null;
         message('Cannot open the MIDI file: ' + data.error, 'bad');

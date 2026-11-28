@@ -3,8 +3,23 @@
   "piano-midi.de": {
    "credit": "Bernd Krueger, Source: http://www.piano-midi.de",
    "license": "CC-BY-SA-3.0-DE",
-   "license_url": "https://creativecommons.org/licenses/by-sa/3.0/de/deed.en"
+   "license_url": "https://creativecommons.org/licenses/by-sa/3.0/de/deed.en",
+   "author": "Bernd Krueger",
+   "url": "http://www.piano-midi.de",
+   "license_name": "Creative Commons Attribution-ShareAlike 3.0 Germany"
   }
+ },
+ "composers": {
+  "Johann Sebastian Bach": "1685–1750",
+  "Wolfgang Amadeus Mozart": "1756–1791",
+  "Ludwig van Beethoven": "1770–1827",
+  "Franz Schubert": "1797–1828",
+  "Frédéric Chopin": "1810–1849",
+  "Robert Schumann": "1810–1856",
+  "Franz Liszt": "1811–1886",
+  "Pyotr Ilyich Tchaikovsky": "1840–1893",
+  "Edvard Grieg": "1843–1907",
+  "Claude Debussy": "1862–1918"
  },
  "pieces": [
   {
@@ -12,154 +27,242 @@
    "composer": "Johann Sebastian Bach",
    "title": "The Well-Tempered Clavier I: Prelude and Fugue in C major, BWV 846",
    "seconds": 226,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 1284,
+   "pedal": 0.49,
+   "low": 36,
+   "high": 84
   },
   {
    "file": "piano-midi.de/bach_847.mid",
    "composer": "Johann Sebastian Bach",
    "title": "The Well-Tempered Clavier I: Prelude and Fugue in C minor, BWV 847",
    "seconds": 190,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 1845,
+   "pedal": 0.0,
+   "low": 36,
+   "high": 84
   },
   {
    "file": "piano-midi.de/mz_545_1.mid",
    "composer": "Wolfgang Amadeus Mozart",
    "title": "Piano Sonata No. 16 in C major, K. 545: I. Allegro",
    "seconds": 261,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 2714,
+   "pedal": 0.39,
+   "low": 36,
+   "high": 89
   },
   {
    "file": "piano-midi.de/mz_331_3.mid",
    "composer": "Wolfgang Amadeus Mozart",
    "title": "Piano Sonata No. 11 in A major, K. 331: III. Rondo alla turca",
    "seconds": 190,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 2819,
+   "pedal": 0.4,
+   "low": 38,
+   "high": 88
   },
   {
    "file": "piano-midi.de/elise.mid",
    "composer": "Ludwig van Beethoven",
    "title": "Für Elise",
    "seconds": 166,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 1041,
+   "pedal": 0.52,
+   "low": 33,
+   "high": 100
   },
   {
    "file": "piano-midi.de/mond_1.mid",
    "composer": "Ludwig van Beethoven",
    "title": "Piano Sonata No. 14 \"Moonlight\": I. Adagio sostenuto",
    "seconds": 367,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 1144,
+   "pedal": 0.92,
+   "low": 29,
+   "high": 87
   },
   {
    "file": "piano-midi.de/mond_3.mid",
    "composer": "Ludwig van Beethoven",
    "title": "Piano Sonata No. 14 \"Moonlight\": III. Presto agitato",
    "seconds": 410,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 6538,
+   "pedal": 0.49,
+   "low": 29,
+   "high": 88
   },
   {
    "file": "piano-midi.de/pathetique_2.mid",
    "composer": "Ludwig van Beethoven",
    "title": "Piano Sonata No. 8 \"Pathétique\": II. Adagio cantabile",
    "seconds": 308,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 1641,
+   "pedal": 0.48,
+   "low": 29,
+   "high": 89
   },
   {
    "file": "piano-midi.de/schuim-3.mid",
    "composer": "Franz Schubert",
    "title": "Impromptu in G-flat major, Op. 90 No. 3, D. 899",
    "seconds": 347,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 2601,
+   "pedal": 0.93,
+   "low": 29,
+   "high": 79
   },
   {
    "file": "piano-midi.de/chpn_op27_2.mid",
    "composer": "Frédéric Chopin",
    "title": "Nocturne in D-flat major, Op. 27 No. 2",
    "seconds": 310,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 1831,
+   "pedal": 0.95,
+   "low": 32,
+   "high": 101
   },
   {
    "file": "piano-midi.de/chpn_op66.mid",
    "composer": "Frédéric Chopin",
    "title": "Fantaisie-Impromptu in C-sharp minor, Op. 66",
    "seconds": 274,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 3050,
+   "pedal": 0.89,
+   "low": 31,
+   "high": 100
   },
   {
    "file": "piano-midi.de/chpn_op23.mid",
    "composer": "Frédéric Chopin",
    "title": "Ballade No. 1 in G minor, Op. 23",
    "seconds": 540,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 5028,
+   "pedal": 0.66,
+   "low": 26,
+   "high": 101
   },
   {
    "file": "piano-midi.de/chpn_op10_e12.mid",
    "composer": "Frédéric Chopin",
    "title": "Étude in C minor, Op. 10 No. 12 \"Revolutionary\"",
    "seconds": 139,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 2088,
+   "pedal": 0.51,
+   "low": 24,
+   "high": 92
   },
   {
    "file": "piano-midi.de/chpn-p15.mid",
    "composer": "Frédéric Chopin",
    "title": "Prelude in D-flat major, Op. 28 No. 15 \"Raindrop\"",
    "seconds": 272,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 1518,
+   "pedal": 0.76,
+   "low": 28,
+   "high": 82
   },
   {
    "file": "piano-midi.de/chpn_op35_3.mid",
    "composer": "Frédéric Chopin",
    "title": "Piano Sonata No. 2: III. Funeral March",
    "seconds": 450,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 2327,
+   "pedal": 0.84,
+   "low": 25,
+   "high": 89
   },
   {
    "file": "piano-midi.de/scn15_7.mid",
    "composer": "Robert Schumann",
    "title": "Kinderszenen, Op. 15: Träumerei",
    "seconds": 137,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 456,
+   "pedal": 0.55,
+   "low": 34,
+   "high": 82
   },
   {
    "file": "piano-midi.de/liz_liebestraum.mid",
    "composer": "Franz Liszt",
    "title": "Liebestraum No. 3 in A-flat major",
    "seconds": 249,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 1888,
+   "pedal": 0.76,
+   "low": 32,
+   "high": 103
   },
   {
    "file": "piano-midi.de/liz_et3.mid",
    "composer": "Franz Liszt",
    "title": "Grandes études de Paganini No. 3 \"La Campanella\"",
    "seconds": 248,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 4144,
+   "pedal": 0.34,
+   "low": 27,
+   "high": 102
   },
   {
    "file": "piano-midi.de/ty_juni.mid",
    "composer": "Pyotr Ilyich Tchaikovsky",
    "title": "The Seasons, Op. 37a: June (Barcarolle)",
    "seconds": 235,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 1502,
+   "pedal": 0.82,
+   "low": 31,
+   "high": 103
   },
   {
    "file": "piano-midi.de/grieg_wedding.mid",
    "composer": "Edvard Grieg",
    "title": "Wedding Day at Troldhaugen, Op. 65 No. 6",
    "seconds": 330,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 3842,
+   "pedal": 0.58,
+   "low": 26,
+   "high": 95
   },
   {
    "file": "piano-midi.de/deb_clai.mid",
    "composer": "Claude Debussy",
    "title": "Suite bergamasque: Clair de lune",
    "seconds": 249,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 1491,
+   "pedal": 0.76,
+   "low": 27,
+   "high": 97
   },
   {
    "file": "piano-midi.de/debussy_cc_6.mid",
    "composer": "Claude Debussy",
    "title": "Children's Corner: Golliwogg's Cakewalk",
    "seconds": 143,
-   "collection": "piano-midi.de"
+   "collection": "piano-midi.de",
+   "notes": 1307,
+   "pedal": 0.28,
+   "low": 22,
+   "high": 94
   }
  ]
 }
