@@ -8,7 +8,9 @@
 #
 # The pianos: each published release's <name>.modal-profile.bin, with its <name>.modal-profile.json (name, piano,
 # credit, licence, source), is copied next to the page and listed in profiles.json with its size and SHA-256: a page
-# cannot download a release asset itself (GitHub sends no CORS header on it). Published again whenever a release is.
+# cannot download a release asset itself (GitHub sends no CORS header on it). Published again whenever a release is:
+# the release event runs on its tag, which the github-pages environment does not let deploy (only main may), so it
+# only asks for a run on main (a workflow_dispatch, which GitHub lets the workflow's own token start).
 # A visitor may also give the page their own modal-profile.bin, kept in their browser, never uploaded.
 name: pages
 
@@ -28,14 +30,25 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: write # (the release event's run starts the one on main)
 
 concurrency: # one deployment at a time; a newer one waits rather than cutting the running one short
   group: pages
   cancel-in-progress: false
 
 jobs:
+  relay:
+    name: "A release changed: publish from main"
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --ref main -R "$GITHUB_REPOSITORY"
+
   build:
     name: Build the page
+    if: github.event_name != 'release'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
